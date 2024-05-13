@@ -1,0 +1,61 @@
+use crate::error::Result;
+use crate::refine::RefineCtxt;
+use crate::rty::{self, RefinedType};
+use rustc_middle::ty::TyCtxt;
+use rustc_span::def_id::DefId;
+
+mod function;
+pub use function::FunctionAnalyzer;
+
+#[derive(Clone)]
+pub struct Analyzer<'tcx> {
+    tcx: TyCtxt<'tcx>,
+
+    // currently contains only local-def templates,
+    // but will be extended to contain externally known def's refinement types
+    // (at least for every defs referenced by local def bodies)
+    rcx: RefineCtxt,
+}
+
+impl<'tcx> Analyzer<'tcx> {
+    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+        let rcx = RefineCtxt::default();
+        Self { tcx, rcx }
+    }
+
+    fn refine_local_defs(&mut self) {
+        for local_def_id in self.tcx.mir_keys(()) {
+            self.refine_def(local_def_id.to_def_id());
+        }
+    }
+
+    fn refine_def(&mut self, def_id: DefId) {
+        let sig = self.tcx.fn_sig(def_id);
+        let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
+        let rty = self.rcx.mir_function_ty(sig);
+        let rty = RefinedType::unrefined(rty.into());
+        self.rcx.register_def(def_id, rty);
+    }
+
+    pub fn run(&mut self) -> Result<()> {
+        self.refine_local_defs();
+
+        for local_def_id in self.tcx.mir_keys(()) {
+            let body = self.tcx.optimized_mir(local_def_id.to_def_id());
+            let expected = self.rcx.def_ty(local_def_id.to_def_id()).unwrap().clone();
+            let _span = tracing::span!(
+                tracing::Level::INFO, "def",
+                def = %self.tcx.def_path_str(local_def_id.to_def_id()),
+            )
+            .entered();
+            if let rty::Type::Function(expected) = expected.ty {
+                FunctionAnalyzer::new(self.tcx, &mut self.rcx, body).run(&expected)?;
+            } else {
+                unimplemented!()
+            }
+        }
+
+        self.rcx.system().solve()?;
+        Ok(())
+    }
+}

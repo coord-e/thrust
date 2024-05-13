@@ -1,0 +1,12 @@
+[package]
+name = "refinement-analyzer"
+version = "0.1.0"
+authors = ["coord_e <me@coord-e.com>"]
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.80"
+pretty = { version = "0.12.1", features = ["termcolor"] }
+thiserror = "1.0.57"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
