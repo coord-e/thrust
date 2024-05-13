@@ -1,0 +1,45 @@
+// vim: set ft=rust :
+
+// () → { int | p0 ν }
+fn f() -> i64 {
+    let mut _0: i64;
+
+    // () → { int | p0 ν }
+    bb0: {
+        // _0 = box 1
+        _0 = const 1_i64;
+        // subtype got: { int | u = *<_0*, _0^> } expected: { int | p0 v }
+        return;
+    }
+
+    // call bb0 with bty.locals in context of expected
+}
+
+fn main() -> () {
+    let mut _0: ();
+    let _1: i64;
+    let mut _2: !;
+    scope 1 {
+        debug a => _1;
+    }
+
+    // (_0) -> ()
+    bb0: {
+        _1 = f() -> [return: bb1, unwind continue];
+    }
+
+    // (_0) -> ()
+    bb1: {
+        switchInt(_1) -> [1: bb2, otherwise: bb3];
+    }
+
+    // (_0) -> ()
+    bb2: {
+        return;
+    }
+
+    // () -> ()
+    bb3: {
+        _2 = core::panicking::panic(const "assertion failed: a == 1") -> unwind continue;
+    }
+}
