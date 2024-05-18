@@ -49,8 +49,8 @@ impl AsRef<rty::FunctionType> for BasicBlockType {
 }
 
 impl BasicBlockType {
-    pub fn local_of_param(&self, idx: rty::FunctionParamIdx) -> Local {
-        self.locals[idx]
+    pub fn local_of_param(&self, idx: rty::FunctionParamIdx) -> Option<Local> {
+        self.locals.get(idx).copied()
     }
 
     pub fn to_function_ty(&self) -> rty::FunctionType {
@@ -91,19 +91,23 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     // TODO: reconsider API
     pub fn bind_locals(&mut self, ty: &BasicBlockType) -> rty::RefinedType<Var> {
         for (param_idx, param_ty) in ty.as_ref().params.iter_enumerated() {
-            let local = ty.local_of_param(param_idx);
             // TODO: reconsider clone()
-            self.env.bind(
-                local,
-                param_ty
-                    .clone()
-                    .map_var(|idx| Var::Local(ty.local_of_param(idx))),
-            );
+            let param_ty = param_ty
+                .clone()
+                .map_var(|idx| Var::Local(ty.local_of_param(idx).unwrap()));
+            if let Some(local) = ty.local_of_param(param_idx) {
+                self.env.bind(local, param_ty);
+            } else {
+                let param_refinement = param_ty.to_free_refinement(|| {
+                    panic!("non-local basic block function param must not use value var")
+                });
+                self.env.assume(param_refinement);
+            }
         }
         ty.as_ref()
             .ret
             .clone()
-            .map_var(|idx| Var::Local(ty.local_of_param(idx)))
+            .map_var(|idx| Var::Local(ty.local_of_param(idx).unwrap()))
     }
 
     // TODO: reconsider API
@@ -205,9 +209,13 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     fn relate_fn_sub_type(
         &mut self,
         got: rty::FunctionType,
-        expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
+        mut expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
         expected_ret: rty::RefinedType<Var>,
     ) {
+        if expected_args.is_empty() {
+            // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
+            expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
+        }
         tracing::debug!(
             got = %got.display(),
             expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
@@ -279,7 +287,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             .map(|(param_idx, rty)| {
                 // TODO: should we cover "to_sort" ness in relate_* methods or here?
                 if rty.ty.to_sort().is_some() {
-                    let arg_local = bty.local_of_param(param_idx);
+                    let arg_local = bty.local_of_param(param_idx).unwrap();
                     let (sty, term) = self.env.local_type(arg_local);
                     rty::RefinedType::refined_with_term(sty, term)
                 } else {

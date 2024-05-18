@@ -371,12 +371,13 @@ impl<FV> RefinedType<FV> {
         }
     }
 
-    pub fn to_free_refinement(&self, value_var: FV) -> chc::Atom<FV>
+    pub fn to_free_refinement<F>(&self, value_var_fn: F) -> chc::Atom<FV>
     where
         FV: Clone,
+        F: Fn() -> FV,
     {
         self.refinement.clone().map_var(|v| match v {
-            RefinedTypeVar::Value => value_var.clone(),
+            RefinedTypeVar::Value => value_var_fn(),
             RefinedTypeVar::Free(v) => v,
         })
     }

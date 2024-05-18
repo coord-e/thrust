@@ -78,6 +78,12 @@ impl RefineCtxt {
                 builder.add_dependency(param_idx.into(), param_sort);
             }
         }
+        if param_rtys.is_empty() {
+            // elaboration: we need at least one predicate variable in parameter
+            let tmpl = builder.clone().build(rty::Type::unit());
+            let param_rty = self.register_template(tmpl);
+            param_rtys.push(param_rty);
+        }
 
         let tmpl = builder.build(ret_ty);
         let ret_rty = self.register_template(tmpl);

@@ -125,6 +125,11 @@ impl Env {
         }
     }
 
+    pub fn assume(&mut self, assumption: chc::Atom<Var>) {
+        tracing::debug!(assumption = %assumption.display(), "assume");
+        self.unbound_assumptions.push(assumption);
+    }
+
     pub fn dependencies(&self) -> impl Iterator<Item = (Var, chc::Sort)> + '_ {
         // TODO: consider cloning here again
         self.locals
@@ -143,7 +148,7 @@ impl Env {
             .iter()
             .filter_map(|(local, rty)| {
                 rty.is_refined()
-                    .then(|| rty.to_free_refinement(Var::Local(*local)))
+                    .then(|| rty.to_free_refinement(|| Var::Local(*local)))
             })
             .chain(self.unbound_assumptions.iter().cloned())
     }

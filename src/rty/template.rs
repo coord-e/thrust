@@ -16,15 +16,6 @@ impl<FV> Template<FV> {
     where
         F: FnOnce(chc::PredSig) -> chc::PredVarId,
     {
-        // TODO: ad-hoc?
-        /* if self.atom_args.is_empty() {
-            // TODO: use RefinedType::unrefined
-            return RefinedType {
-                ty: self.ty,
-                refinement: chc::Atom::top(),
-            };
-        } */
-
         let pred_var = pred_var_generator(self.pred_sig);
         RefinedType {
             ty: self.ty,
