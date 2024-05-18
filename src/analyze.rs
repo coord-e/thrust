@@ -1,3 +1,4 @@
+use crate::chc;
 use crate::error::Result;
 use crate::refine::RefineCtxt;
 use crate::rty::{self, RefinedType};
@@ -52,6 +53,30 @@ impl<'tcx> Analyzer<'tcx> {
                 FunctionAnalyzer::new(self.tcx, &mut self.rcx, body).run(&expected)?;
             } else {
                 unimplemented!()
+            }
+        }
+
+        if let Some((def_id, _)) = self.tcx.entry_fn(()) {
+            // we want to assert entry function is safe to execute without any assumption
+            // TODO: replace code here with relate_* in Env + Refine context (created with empty env)
+            let entry_ty = self
+                .rcx
+                .def_ty(def_id)
+                .unwrap()
+                .ty
+                .as_function()
+                .unwrap()
+                .clone();
+            let mut builder = chc::ClauseBuilder::default();
+            for (param_idx, param_ty) in entry_ty.params.iter_enumerated() {
+                if let Some(sort) = param_ty.ty.to_sort() {
+                    builder.add_dependency(param_idx, sort);
+                }
+            }
+            builder.add_body(chc::Atom::<rty::Closed>::top());
+            for param_ty in entry_ty.params {
+                let clause = builder.clone().build(param_ty.refinement);
+                self.rcx.add_clause(clause);
             }
         }
 
