@@ -1,10 +1,10 @@
 use rustc_hir::lang_items::LangItem;
 use rustc_middle::mir::{self, BasicBlock, Body};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{TyCtxt, TypeAndMut};
 
 use crate::error::Result;
 use crate::refine::{BasicBlockType, RefineBodyCtxt, RefineCtxt};
-use crate::rty::FunctionType;
+use crate::rty::{FunctionType, PointerType};
 
 pub struct FunctionAnalyzer<'rcx, 'tcx, 'mir> {
     tcx: TyCtxt<'tcx>,
@@ -40,7 +40,14 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
 
             let live_locals: Vec<_> = bb_ins
                 .iter()
-                .map(|in_local| (in_local, self.body.local_decls[in_local].ty))
+                .map(|in_local| {
+                    let decl = &self.body.local_decls[in_local];
+                    let type_and_mut = TypeAndMut {
+                        ty: decl.ty,
+                        mutbl: decl.mutability,
+                    };
+                    (in_local, type_and_mut)
+                })
                 .collect();
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
@@ -55,23 +62,49 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
         let expected_ret = ecx.bind_locals(&expected);
 
         let data = &self.body.basic_blocks[bb];
-        use rustc_middle::mir::{Rvalue, StatementKind, TerminatorKind};
-        for stmt in &data.statements {
-            tracing::debug!(stmt = ?stmt);
-            match &stmt.kind {
-                StatementKind::Assign(d) => {
-                    let (local, operand) = match &**d {
-                        (p, Rvalue::Use(op)) if p.projection.len() == 0 => (p.local, op),
-                        _ => unimplemented!(),
-                    };
-                    if ecx.is_known_local(local) {
-                        unimplemented!()
-                    }
+        use rustc_middle::mir::{BorrowKind, PlaceElem, Rvalue, TerminatorKind};
 
-                    let rty = ecx.mir_refined_ty(self.body.local_decls[local].ty);
+        for (stmt_idx, stmt) in data.statements.iter().enumerate() {
+            if let Some((p, Rvalue::Ref(_, BorrowKind::Mut { .. }, _))) = stmt.kind.as_assign() {
+                if p.projection.len() != 0 {
+                    unimplemented!();
+                }
+                // TODO: is it appropriate to use builtin_deref here... maybe we should handle dereferencing logic in `refine`
+                let inner_ty = self.body.local_decls[p.local]
+                    .ty
+                    .builtin_deref(true)
+                    .unwrap()
+                    .ty;
+                ecx.add_prophecy_var(stmt_idx, inner_ty);
+            }
+        }
+
+        for (stmt_idx, stmt) in data.statements.iter().enumerate() {
+            tracing::debug!(%stmt_idx, stmt = ?stmt);
+            match stmt.kind.as_assign() {
+                Some((p, Rvalue::Use(operand)))
+                    if p.projection.len() == 0 && !ecx.is_known_local(p.local) =>
+                {
+                    // new binding
+                    let decl = &self.body.local_decls[p.local];
+                    let rty = ecx.mir_refined_ty(decl.ty);
                     // TODO: maybe we should tie them together in ecx
                     ecx.type_operand(operand.clone(), &rty);
-                    ecx.bind_local(local, rty);
+                    ecx.bind_local(p.local, rty, decl.mutability);
+                }
+                Some((p, Rvalue::Use(operand)))
+                    if p.projection.as_slice() == &[PlaceElem::Deref] =>
+                {
+                    // assignment
+                    ecx.assign_to_local(p.local, operand.clone());
+                }
+                Some((p, Rvalue::Ref(_, BorrowKind::Mut { .. }, referent)))
+                    if p.projection.len() == 0 && referent.projection.len() == 0 =>
+                {
+                    // mutable borrow
+                    let decl = &self.body.local_decls[p.local];
+                    let rty = ecx.borrow_local(stmt_idx, referent.local);
+                    ecx.bind_local(p.local, rty, decl.mutability);
                 }
                 _ => {
                     tracing::warn!(stmt = ?stmt, "skipped");
@@ -113,9 +146,10 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
                 if matches!(func.const_fn_def(), Some((def_id, _)) if def_id == panic_def_id) {
                     ecx.type_panic();
                 } else {
-                    let rty = ecx.mir_refined_ty(self.body.local_decls[destination].ty);
+                    let decl = &self.body.local_decls[destination];
+                    let rty = ecx.mir_refined_ty(decl.ty);
                     ecx.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
-                    ecx.bind_local(destination, rty);
+                    ecx.bind_local(destination, rty, decl.mutability);
                     if let Some(target) = target {
                         ecx.type_goto(*target, &expected_ret);
                     } else {

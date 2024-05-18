@@ -365,6 +365,19 @@ impl<FV> RefinedType<FV> {
         RefinedType::new(ty, refinement)
     }
 
+    pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>
+    where
+        F: FnMut(FV) -> chc::Term<W>,
+    {
+        RefinedType {
+            ty: self.ty,
+            refinement: self.refinement.subst_var(|v| match v {
+                RefinedTypeVar::Value => chc::Term::var(RefinedTypeVar::Value),
+                RefinedTypeVar::Free(v) => f(v).map_var(RefinedTypeVar::Free),
+            }),
+        }
+    }
+
     pub fn map_var<F, W>(self, mut f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> W,

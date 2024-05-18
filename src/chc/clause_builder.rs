@@ -78,15 +78,20 @@ impl ClauseBuilder {
 
     fn subst_var<T>(&self, v: T) -> TermVarIdx
     where
-        T: Hash + Eq + 'static,
+        T: Hash + Eq + 'static + std::fmt::Debug,
     {
+        tracing::debug!(?v, "subst_var");
         let k: &dyn Key = &v;
-        *self.var_indices.get(k).expect("unbound var")
+        let t_name = std::any::type_name::<T>();
+        *self
+            .var_indices
+            .get(k)
+            .unwrap_or_else(|| panic!("unbound var ({t_name})"))
     }
 
     pub fn add_body<T>(&mut self, atom: Atom<T>) -> &mut Self
     where
-        T: Hash + Eq + 'static,
+        T: Hash + Eq + 'static + std::fmt::Debug,
     {
         let atom = atom.map_var(|v| self.subst_var(v));
         self.body.push(atom);
@@ -95,7 +100,7 @@ impl ClauseBuilder {
 
     pub fn build<T>(&self, head: Atom<T>) -> Clause
     where
-        T: Hash + Eq + 'static,
+        T: Hash + Eq + 'static + std::fmt::Debug,
     {
         let vars = self.vars.clone();
         let head = head.map_var(|v| self.subst_var(v));

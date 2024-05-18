@@ -13,6 +13,10 @@ mod analyze;
 // all logics that works provided all knowledge of MIR
 mod refine;
 
+// TODO: so where should the elaboration happens?
+// currently they resides in refine and analyze...
+// maybe we should add a layer to implement relatively pure type system logic with MIR primitives
+
 // pure logic
 mod chc;
 mod rty;

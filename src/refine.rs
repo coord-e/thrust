@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use rustc_index::IndexVec;
-use rustc_middle::mir::Local;
+use rustc_middle::mir::{Local, Mutability};
 use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
@@ -13,7 +13,7 @@ mod basic_block;
 pub use basic_block::{BasicBlockType, RefineBasicBlockCtxt};
 
 mod env;
-pub use env::{Env, Var};
+pub use env::{Env, TempVarIdx, Var};
 
 mod body;
 pub use body::RefineBodyCtxt;
@@ -64,12 +64,17 @@ impl RefineCtxt {
 
     fn mir_function_ty_impl<'tcx, I>(&mut self, params: I, ret_ty: rty::Type) -> rty::FunctionType
     where
-        I: IntoIterator<Item = mir_ty::Ty<'tcx>>,
+        I: IntoIterator<Item = mir_ty::TypeAndMut<'tcx>>,
     {
         let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
         let mut builder = rty::TemplateBuilder::default();
         for param_ty in params.into_iter() {
-            let param_ty = self.mir_ty(param_ty);
+            // elaboration: treat mutabully declared variables as own
+            let param_ty = if param_ty.mutbl.is_mut() {
+                rty::PointerType::own(self.mir_ty(param_ty.ty)).into()
+            } else {
+                self.mir_ty(param_ty.ty)
+            };
             let tmpl = builder.clone().build(param_ty.clone());
             let param_rty = self.register_template(tmpl);
             let param_idx = param_rtys.push(param_rty);
@@ -96,7 +101,7 @@ impl RefineCtxt {
         ret_ty: mir_ty::Ty<'tcx>,
     ) -> BasicBlockType
     where
-        I: IntoIterator<Item = (Local, mir_ty::Ty<'tcx>)>,
+        I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
     {
         let mut locals = IndexVec::<rty::FunctionParamIdx, _>::new();
         let mut tys = Vec::new();
@@ -112,7 +117,13 @@ impl RefineCtxt {
 
     pub fn mir_function_ty(&mut self, sig: mir_ty::FnSig<'_>) -> rty::FunctionType {
         let ret_ty = self.mir_ty(sig.output());
-        self.mir_function_ty_impl(sig.inputs().iter().copied(), ret_ty)
+        self.mir_function_ty_impl(
+            sig.inputs().iter().map(|ty| mir_ty::TypeAndMut {
+                ty: *ty,
+                mutbl: Mutability::Not,
+            }),
+            ret_ty,
+        )
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {

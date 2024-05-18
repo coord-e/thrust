@@ -89,8 +89,12 @@ impl Env {
         env
     }
 
+    pub fn push_temp_var(&mut self, ty: rty::Type) -> TempVarIdx {
+        self.tmp_vars.push(ty)
+    }
+
     fn bind_own(&mut self, local: Local, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
-        let current = self.tmp_vars.push(*ty.elem);
+        let current = self.push_temp_var(*ty.elem);
         let assumption = refinement.subst_var(|v| match v {
             rty::RefinedTypeVar::Value => chc::Term::box_(chc::Term::var(current.into())),
             rty::RefinedTypeVar::Free(v) => chc::Term::var(v),
@@ -100,8 +104,8 @@ impl Env {
     }
 
     fn bind_mut(&mut self, local: Local, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
-        let current = self.tmp_vars.push(*ty.elem.clone());
-        let final_ = self.tmp_vars.push(*ty.elem);
+        let current = self.push_temp_var(*ty.elem.clone());
+        let final_ = self.push_temp_var(*ty.elem);
         let assumption = refinement.subst_var(|v| match v {
             rty::RefinedTypeVar::Value => chc::Term::pair(
                 chc::Term::var(current.into()),
@@ -216,6 +220,34 @@ impl Env {
                 };
                 (rty::Type::Int, chc::Term::int(val.try_to_i64().unwrap()))
             }
+        }
+    }
+
+    pub fn assign_to_local<'tcx>(&mut self, local: Local, operand: Operand<'tcx>) {
+        let (_local_ty, local_term) = self.local_type(local);
+        let (_operand_ty, operand_term) = self.operand_type(operand);
+        self.assume(local_term.proj(1).equal_to(operand_term))
+    }
+
+    pub fn borrow_local(
+        &mut self,
+        local: Local,
+        prophecy_var: TempVarIdx,
+    ) -> (rty::Type, chc::Term<Var>) {
+        match self.mut_locals[&local] {
+            MutLocalBinding::Box(x) => {
+                self.mut_locals
+                    .insert(local, MutLocalBinding::Box(prophecy_var));
+                let term = chc::Term::pair(
+                    chc::Term::var(x.into()),
+                    chc::Term::var(prophecy_var.into()),
+                );
+                (
+                    rty::PointerType::mut_to(self.tmp_vars[x].clone()).into(),
+                    term,
+                )
+            }
+            MutLocalBinding::Mut { .. } => unimplemented!("reborrow"),
         }
     }
 }

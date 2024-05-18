@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 use rustc_middle::mir::{self, interpret::Scalar, BasicBlock, Const, ConstValue, Local, Operand};
@@ -7,7 +9,7 @@ use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::rty;
 
-use super::{Env, RefineBodyCtxt, RefineCtxt, Var};
+use super::{Env, RefineBodyCtxt, RefineCtxt, TempVarIdx, Var};
 
 /// `BasicBlockType` is a special case of `FunctionType` whose parameters are
 /// associated with `Local`s.
@@ -62,12 +64,19 @@ impl BasicBlockType {
 pub struct RefineBasicBlockCtxt<'rcx, 'bcx> {
     bcx: &'bcx mut RefineBodyCtxt<'rcx>,
     env: Env,
+    // statement index -> TempVarIdx in env
+    prophecy_vars: HashMap<usize, TempVarIdx>,
 }
 
 impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     pub fn new(bcx: &'bcx mut RefineBodyCtxt<'rcx>) -> Self {
         let env = Default::default();
-        Self { bcx, env }
+        let prophecy_vars = Default::default();
+        Self {
+            bcx,
+            env,
+            prophecy_vars,
+        }
     }
 
     pub fn rcx(&self) -> &RefineCtxt {
@@ -90,11 +99,16 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
 
     // TODO: reconsider API
     pub fn bind_locals(&mut self, ty: &BasicBlockType) -> rty::RefinedType<Var> {
+        let subst_var_fn = |env: &Env, idx| {
+            // TODO: this would be broken when we turned args mutually-referenced...
+            let (_, term) = env.local_type(ty.local_of_param(idx).unwrap());
+            term
+        };
         for (param_idx, param_ty) in ty.as_ref().params.iter_enumerated() {
             // TODO: reconsider clone()
             let param_ty = param_ty
                 .clone()
-                .map_var(|idx| Var::Local(ty.local_of_param(idx).unwrap()));
+                .subst_var(|idx| subst_var_fn(&self.env, idx));
             if let Some(local) = ty.local_of_param(param_idx) {
                 self.env.bind(local, param_ty);
             } else {
@@ -107,23 +121,38 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         ty.as_ref()
             .ret
             .clone()
-            .map_var(|idx| Var::Local(ty.local_of_param(idx).unwrap()))
+            .subst_var(|idx| subst_var_fn(&self.env, idx))
     }
 
     // TODO: reconsider API
     pub fn bind_params(&mut self, ty: rty::FunctionType) -> rty::RefinedType<Var> {
+        let subst_var_fn = |env: &Env, idx| {
+            // TODO: this would be broken when we turned args mutually-referenced...
+            let (_, term) = env.local_type(super::local_of_function_param(idx));
+            term
+        };
         for (param_idx, param_rty) in ty.params.into_iter_enumerated() {
             self.env.bind(
                 super::local_of_function_param(param_idx),
-                param_rty.map_var(|idx| Var::Local(super::local_of_function_param(idx))),
+                param_rty.subst_var(|idx| subst_var_fn(&self.env, idx)),
             );
         }
-        ty.ret
-            .map_var(|idx| Var::Local(super::local_of_function_param(idx)))
+        ty.ret.subst_var(|idx| subst_var_fn(&self.env, idx))
     }
 
-    pub fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>) {
-        self.env.bind(local, rty);
+    pub fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>, mutbl: mir::Mutability) {
+        // elaboration:
+        let elaborated_rty = if mutbl.is_mut() {
+            let refinement = rty.refinement.subst_var(|v| match v {
+                rty::RefinedTypeVar::Value => chc::Term::var(rty::RefinedTypeVar::Value).proj(0),
+                v => chc::Term::var(v),
+            });
+            let ty = rty::PointerType::own(rty.ty).into();
+            rty::RefinedType::new(ty, refinement)
+        } else {
+            rty
+        };
+        self.env.bind(local, elaborated_rty);
     }
 
     pub fn is_known_local(&self, local: Local) -> bool {
@@ -274,8 +303,14 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     }
 
     pub fn type_return(&mut self, expected: &rty::RefinedType<Var>) {
-        // TODO: deref
-        self.type_operand(Operand::Move(mir::RETURN_PLACE.into()), expected);
+        // TODO: unity with elaboration in bind_local
+        let ty = rty::PointerType::own(expected.ty.clone()).into();
+        let refinement = expected.refinement.clone().subst_var(|v| match v {
+            rty::RefinedTypeVar::Value => chc::Term::var(rty::RefinedTypeVar::Value).proj(0),
+            v => chc::Term::var(v),
+        });
+        let expected = rty::RefinedType::new(ty, refinement);
+        self.type_operand(Operand::Move(mir::RETURN_PLACE.into()), &expected);
     }
 
     pub fn type_goto(&mut self, bb: BasicBlock, expected_ret: &rty::RefinedType<Var>) {
@@ -305,6 +340,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         RefineBasicBlockCtxt {
             bcx: self.bcx,
             env: self.env.clone_with_assumptions(assumptions),
+            prophecy_vars: self.prophecy_vars.clone(),
         }
     }
 
@@ -315,6 +351,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         RefineBasicBlockCtxt {
             bcx: self.bcx,
             env: self.env.clone_with_assumption(assumption),
+            prophecy_vars: self.prophecy_vars.clone(),
         }
     }
 
@@ -366,5 +403,22 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             .build_clause()
             .build(chc::Atom::<rty::Closed>::bottom());
         self.rcx_mut().add_clause(clause);
+    }
+
+    pub fn assign_to_local<'tcx>(&mut self, local: Local, operand: Operand<'tcx>) {
+        self.env.assign_to_local(local, operand);
+    }
+
+    pub fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'_>) {
+        let ty = self.rcx_mut().mir_ty(ty);
+        let temp_var = self.env.push_temp_var(ty);
+        self.prophecy_vars.insert(statement_index, temp_var);
+        tracing::debug!(stmt_idx = %statement_index, temp_var = ?temp_var, "add_prophecy_var");
+    }
+
+    pub fn borrow_local(&mut self, statement_index: usize, local: Local) -> rty::RefinedType<Var> {
+        let temp_var = self.prophecy_vars[&statement_index];
+        let (ty, term) = self.env.borrow_local(local, temp_var);
+        rty::RefinedType::refined_with_term(ty, term)
     }
 }
