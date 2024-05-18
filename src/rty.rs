@@ -244,6 +244,13 @@ impl Type {
         }
     }
 
+    pub fn as_function(&self) -> Option<&FunctionType> {
+        match self {
+            Type::Function(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
     // XXX: this is something like 'logically meaningful to reason about'
     // and better naming is needed
     pub fn to_sort(&self) -> Option<chc::Sort> {
