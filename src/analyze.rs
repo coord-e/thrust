@@ -1,7 +1,7 @@
 use crate::chc;
 use crate::error::Result;
 use crate::refine::RefineCtxt;
-use crate::rty::{self, RefinedType};
+use crate::rty::{self, ClauseBuilderExt as _, RefinedType};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 
@@ -70,12 +70,15 @@ impl<'tcx> Analyzer<'tcx> {
             let mut builder = chc::ClauseBuilder::default();
             for (param_idx, param_ty) in entry_ty.params.iter_enumerated() {
                 if let Some(sort) = param_ty.ty.to_sort() {
-                    builder.add_dependency(param_idx, sort);
+                    builder.add_mapped_var(param_idx, sort);
                 }
             }
-            builder.add_body(chc::Atom::<rty::Closed>::top());
+            builder.add_body(chc::Atom::top());
             for param_ty in entry_ty.params {
-                let clause = builder.clone().build(param_ty.refinement);
+                let clause = builder
+                    .clone()
+                    .with_value_var(&param_ty.ty)
+                    .head(param_ty.refinement);
                 self.rcx.add_clause(clause);
             }
         }

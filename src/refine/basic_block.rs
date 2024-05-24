@@ -7,7 +7,7 @@ use rustc_middle::ty as mir_ty;
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::rty;
+use crate::rty::{self, ClauseBuilderExt as _};
 
 use super::{Env, RefineBodyCtxt, RefineCtxt, TempVarIdx, Var};
 
@@ -184,19 +184,21 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                 let mut builder = chc::ClauseBuilder::default();
                 for (param_idx, param_rty) in got.params.iter_enumerated() {
                     if let Some(sort) = param_rty.ty.to_sort() {
-                        builder.add_dependency(rty::RefinedTypeVar::Free(param_idx), sort);
+                        builder.add_mapped_var(param_idx, sort);
                     }
                 }
                 for (got_ty, expected_ty) in got.params.iter().zip(expected.params.clone()) {
                     let clause = builder
                         .clone()
+                        .with_value_var(&got_ty.ty)
                         .add_body(expected_ty.refinement)
-                        .build(got_ty.refinement.clone());
+                        .head(got_ty.refinement.clone());
                     self.rcx_mut().add_clause(clause);
                 }
                 let clause = builder
+                    .with_value_var(&got.ret.ty)
                     .add_body(got.ret.refinement.clone())
-                    .build(expected.ret.refinement.clone());
+                    .head(expected.ret.refinement.clone());
                 self.rcx_mut().add_clause(clause);
             }
             _ => panic!(
@@ -223,14 +225,12 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
 
         self.relate_sub_type(&got.ty, &expected.ty);
 
-        let mut builder = self.env.build_clause();
-        if let Some(sort) = got.ty.to_sort() {
-            builder.add_dependency(rty::RefinedTypeVar::<Var>::Value, sort);
-        }
-
-        let clause = builder
+        let clause = self
+            .env
+            .build_clause()
+            .with_value_var(&got.ty)
             .add_body(got.refinement.clone())
-            .build(expected.refinement.clone());
+            .head(expected.refinement.clone());
         self.rcx_mut().add_clause(clause);
     }
 
@@ -255,34 +255,28 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         let mut builder = self.env.build_clause();
         for (param_idx, param_rty) in got.params.iter_enumerated() {
             if let Some(sort) = param_rty.ty.to_sort() {
-                builder.add_dependency(rty::RefinedTypeVar::Free(param_idx), sort);
+                builder.add_mapped_var(param_idx, sort);
             }
         }
-        for (got_ty, expected_ty) in got.params.iter().zip(expected_args) {
-            let mut builder = builder.clone();
-            if let Some(sort) = got_ty.ty.to_sort() {
-                // TODO: API here is bad
-                builder.add_dependency(rty::RefinedTypeVar::<Var>::Value, sort);
-                builder.add_alias(
-                    rty::RefinedTypeVar::<Var>::Value,
-                    rty::RefinedTypeVar::<rty::FunctionParamIdx>::Value,
-                );
-            }
+        for (got_ty, expected_ty) in got.params.iter().zip(&expected_args) {
+            // TODO we can use relate_sub_refined_type here when we implemenented builder-aware relate_*
             let clause = builder
-                .add_body(expected_ty.refinement)
-                .build(got_ty.refinement.clone());
+                .clone()
+                .with_value_var(&got_ty.ty)
+                .add_body(expected_ty.refinement.clone())
+                .head(got_ty.refinement.clone());
             self.rcx_mut().add_clause(clause);
         }
-        if let Some(sort) = got.ret.ty.to_sort() {
-            builder.add_dependency(rty::RefinedTypeVar::<Var>::Value, sort);
-            builder.add_alias(
-                rty::RefinedTypeVar::<Var>::Value,
-                rty::RefinedTypeVar::<rty::FunctionParamIdx>::Value,
-            );
+
+        for (param_idx, expected_ty) in expected_args.iter_enumerated() {
+            builder
+                .with_mapped_value_var(param_idx)
+                .add_body(expected_ty.refinement.clone());
         }
         let clause = builder
-            .add_body(got.ret.refinement.clone())
-            .build(expected_ret.refinement.clone());
+            .with_value_var(&got.ret.ty)
+            .add_body(got.ret.refinement)
+            .head(expected_ret.refinement);
         self.rcx_mut().add_clause(clause);
     }
 
@@ -398,10 +392,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     }
 
     pub fn type_panic(&mut self) {
-        let clause = self
-            .env
-            .build_clause()
-            .build(chc::Atom::<rty::Closed>::bottom());
+        let clause = self.env.build_clause().head(chc::Atom::bottom());
         self.rcx_mut().add_clause(clause);
     }
 

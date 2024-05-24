@@ -1,5 +1,6 @@
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -53,57 +54,49 @@ impl Hash for dyn Key {
 #[derive(Clone, Default)]
 pub struct ClauseBuilder {
     vars: IndexVec<TermVarIdx, Sort>,
-    var_indices: HashMap<Rc<dyn Key>, TermVarIdx>,
+    mapped_var_indices: HashMap<Rc<dyn Key>, TermVarIdx>,
     body: Vec<Atom<TermVarIdx>>,
 }
 
 impl ClauseBuilder {
-    pub fn add_dependency<T>(&mut self, v: T, sort: Sort)
+    pub fn add_mapped_var<T>(&mut self, v: T, sort: Sort)
     where
         T: Hash + Eq + 'static,
     {
         let idx = self.vars.push(sort);
-        self.var_indices.insert(Rc::new(v), idx);
+        self.mapped_var_indices.insert(Rc::new(v), idx);
     }
 
-    pub fn add_alias<T, U>(&mut self, v1: T, v2: U)
+    pub fn add_var(&mut self, sort: Sort) -> TermVarIdx {
+        self.vars.push(sort)
+    }
+
+    pub fn find_mapped_var<T>(&self, v: T) -> Option<TermVarIdx>
     where
         T: Hash + Eq + 'static,
-        U: Hash + Eq + 'static,
     {
-        let k: &dyn Key = &v1;
-        let idx = *self.var_indices.get(k).expect("unbound var");
-        self.var_indices.insert(Rc::new(v2), idx);
-    }
-
-    fn subst_var<T>(&self, v: T) -> TermVarIdx
-    where
-        T: Hash + Eq + 'static + std::fmt::Debug,
-    {
-        tracing::debug!(?v, "subst_var");
         let k: &dyn Key = &v;
-        let t_name = std::any::type_name::<T>();
-        *self
-            .var_indices
-            .get(k)
-            .unwrap_or_else(|| panic!("unbound var ({t_name})"))
+        self.mapped_var_indices.get(k).copied()
     }
 
-    pub fn add_body<T>(&mut self, atom: Atom<T>) -> &mut Self
+    pub fn mapped_var<T>(&self, v: T) -> TermVarIdx
     where
-        T: Hash + Eq + 'static + std::fmt::Debug,
+        T: Hash + Eq + Debug + 'static,
     {
-        let atom = atom.map_var(|v| self.subst_var(v));
+        let k: &dyn Key = &v;
+        self.mapped_var_indices
+            .get(k)
+            .copied()
+            .unwrap_or_else(|| panic!("unbound var {:?}", v))
+    }
+
+    pub fn add_body(&mut self, atom: Atom<TermVarIdx>) -> &mut Self {
         self.body.push(atom);
         self
     }
 
-    pub fn build<T>(&self, head: Atom<T>) -> Clause
-    where
-        T: Hash + Eq + 'static + std::fmt::Debug,
-    {
+    pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
         let vars = self.vars.clone();
-        let head = head.map_var(|v| self.subst_var(v));
         let body = self.body.clone();
         Clause { vars, head, body }
     }

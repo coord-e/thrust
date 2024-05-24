@@ -160,12 +160,10 @@ impl Env {
     pub fn build_clause(&self) -> chc::ClauseBuilder {
         let mut builder = chc::ClauseBuilder::default();
         for (v, sort) in self.dependencies() {
-            builder.add_dependency(rty::RefinedTypeVar::Free(v), sort);
+            builder.add_mapped_var(v, sort);
         }
         for assumption in self.assumptions() {
-            // TODO: can't we remove this map_var?
-            let assumption = assumption.map_var(|v| rty::RefinedTypeVar::Free(v));
-            builder.add_body(assumption);
+            builder.add_body(assumption.map_var(|v| builder.mapped_var(v)));
         }
         builder
     }
