@@ -1,13 +1,12 @@
-fn f(x: &mut i32, y: i32) -> i32 {
+fn f(x: &mut i64, y: i64) {
     *x = y;
-    1
 }
 
 fn main() {
     let mut a = 1;
-    let m = &mut a;
-    f(m, 2);
-    assert!(a == 2);
+    let b = 2;
+    f(&mut a, b);
+    assert!(a == b);
 }
 
 /*

@@ -1,0 +1,27 @@
+# test
+
+- full compilation support
+- report diag on unsat
+
+# fundamentals
+
+- elaborations such as:
+  - native assignment: let mut a = 1; a = 2;
+  - assign twice: *m = 1; *m = 2;
+  - call-assign: let m = &mut a; f(m); *m = 2;
+  - insert drop when nothing happened
+    - the one way to handle them, is that, to handle all &mut operations with implicit reborrow, and insert drop automatically
+- std::box::Box
+
+# features
+
+- BinOp support e.g. Eq
+- datatype support -> CheckedAdd
+- UI
+  - Language Server
+  - nice error reporting
+
+# fixes
+
+- API......
+- intrinsic function signatures e.g. panic
