@@ -221,12 +221,6 @@ impl Env {
         }
     }
 
-    pub fn assign_to_local<'tcx>(&mut self, local: Local, operand: Operand<'tcx>) {
-        let (_local_ty, local_term) = self.local_type(local);
-        let (_operand_ty, operand_term) = self.operand_type(operand);
-        self.assume(local_term.proj(1).equal_to(operand_term))
-    }
-
     pub fn borrow_local(
         &mut self,
         local: Local,

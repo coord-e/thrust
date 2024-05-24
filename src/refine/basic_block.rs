@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
@@ -17,7 +17,7 @@ use super::{Env, RefineBodyCtxt, RefineCtxt, TempVarIdx, Var};
 pub struct BasicBlockType {
     // TODO: make this completely private by exposing appropriate ctor
     pub(super) ty: rty::FunctionType,
-    pub(super) locals: IndexVec<rty::FunctionParamIdx, Local>,
+    pub(super) locals: IndexVec<rty::FunctionParamIdx, (Local, mir_ty::Mutability)>,
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b BasicBlockType
@@ -27,12 +27,17 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         let separator = allocator.text(",").append(allocator.line());
-        let params = self.ty.params.iter().zip(&self.locals).map(|(ty, local)| {
-            allocator
-                .text(format!("{:?}:", local))
-                .append(allocator.space())
-                .append(ty.pretty(allocator))
-        });
+        let params = self
+            .ty
+            .params
+            .iter()
+            .zip(&self.locals)
+            .map(|(ty, (local, mutbl))| {
+                allocator
+                    .text(format!("{}{:?}:", mutbl.prefix_str(), local))
+                    .append(allocator.space())
+                    .append(ty.pretty(allocator))
+            });
         allocator
             .intersperse(params, separator)
             .parens()
@@ -52,7 +57,11 @@ impl AsRef<rty::FunctionType> for BasicBlockType {
 
 impl BasicBlockType {
     pub fn local_of_param(&self, idx: rty::FunctionParamIdx) -> Option<Local> {
-        self.locals.get(idx).copied()
+        self.locals.get(idx).map(|(local, _)| *local)
+    }
+
+    pub fn mutbl_of_param(&self, idx: rty::FunctionParamIdx) -> Option<mir_ty::Mutability> {
+        self.locals.get(idx).map(|(_, mutbl)| *mutbl)
     }
 
     pub fn to_function_ty(&self) -> rty::FunctionType {
@@ -66,16 +75,20 @@ pub struct RefineBasicBlockCtxt<'rcx, 'bcx> {
     env: Env,
     // statement index -> TempVarIdx in env
     prophecy_vars: HashMap<usize, TempVarIdx>,
+    // locals which are treated as `own` due to mutability
+    mut_locals: HashSet<Local>,
 }
 
 impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     pub fn new(bcx: &'bcx mut RefineBodyCtxt<'rcx>) -> Self {
         let env = Default::default();
         let prophecy_vars = Default::default();
+        let mut_locals = Default::default();
         Self {
             bcx,
             env,
             prophecy_vars,
+            mut_locals,
         }
     }
 
@@ -110,10 +123,13 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                 .clone()
                 .subst_var(|idx| subst_var_fn(&self.env, idx));
             if let Some(local) = ty.local_of_param(param_idx) {
+                if ty.mutbl_of_param(param_idx).unwrap().is_mut() {
+                    self.mut_locals.insert(local);
+                }
                 self.env.bind(local, param_ty);
             } else {
                 let param_refinement = param_ty.to_free_refinement(|| {
-                    panic!("non-local basic block function param must not use value var")
+                    panic!("non-local basic block function param must not mention value var")
                 });
                 self.env.assume(param_refinement);
             }
@@ -143,6 +159,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     pub fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>, mutbl: mir::Mutability) {
         // elaboration:
         let elaborated_rty = if mutbl.is_mut() {
+            self.mut_locals.insert(local);
             let refinement = rty.refinement.subst_var(|v| match v {
                 rty::RefinedTypeVar::Value => chc::Term::var(rty::RefinedTypeVar::Value).proj(0),
                 v => chc::Term::var(v),
@@ -280,8 +297,19 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         self.rcx_mut().add_clause(clause);
     }
 
+    fn operand_type(&self, operand: Operand<'_>) -> (rty::Type, chc::Term<Var>) {
+        let (sty, term) = self.env.operand_type(operand.clone());
+        tracing::debug!(operand = ?operand, locals = ?self.mut_locals, "operand_type");
+        if matches!(operand, Operand::Copy(p) | Operand::Move(p) if self.mut_locals.contains(&p.local))
+        {
+            (sty.deref(), term.proj(0))
+        } else {
+            (sty, term)
+        }
+    }
+
     fn operand_refined_type(&self, operand: Operand<'_>) -> rty::RefinedType<Var> {
-        let (sty, term) = self.env.operand_type(operand);
+        let (sty, term) = self.operand_type(operand);
 
         // TODO: should we cover "to_sort" ness in relate_* methods or here?
         if !sty.to_sort().is_some() {
@@ -292,19 +320,12 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     }
 
     pub fn type_operand(&mut self, operand: Operand, expected: &rty::RefinedType<Var>) {
-        let got = self.operand_refined_type(operand);
+        let got = self.operand_refined_type(operand.clone());
         self.relate_sub_refined_type(&got, expected);
     }
 
     pub fn type_return(&mut self, expected: &rty::RefinedType<Var>) {
-        // TODO: unity with elaboration in bind_local
-        let ty = rty::PointerType::own(expected.ty.clone()).into();
-        let refinement = expected.refinement.clone().subst_var(|v| match v {
-            rty::RefinedTypeVar::Value => chc::Term::var(rty::RefinedTypeVar::Value).proj(0),
-            v => chc::Term::var(v),
-        });
-        let expected = rty::RefinedType::new(ty, refinement);
-        self.type_operand(Operand::Move(mir::RETURN_PLACE.into()), &expected);
+        self.type_operand(Operand::Move(mir::RETURN_PLACE.into()), expected);
     }
 
     pub fn type_goto(&mut self, bb: BasicBlock, expected_ret: &rty::RefinedType<Var>) {
@@ -335,6 +356,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             bcx: self.bcx,
             env: self.env.clone_with_assumptions(assumptions),
             prophecy_vars: self.prophecy_vars.clone(),
+            mut_locals: self.mut_locals.clone(),
         }
     }
 
@@ -346,6 +368,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             bcx: self.bcx,
             env: self.env.clone_with_assumption(assumption),
             prophecy_vars: self.prophecy_vars.clone(),
+            mut_locals: self.mut_locals.clone(),
         }
     }
 
@@ -355,7 +378,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         targets: mir::SwitchTargets,
         expected_ret: &rty::RefinedType<Var>,
     ) {
-        let (_, discr_term) = self.env.operand_type(discr);
+        let (_, discr_term) = self.operand_type(discr);
         let mut negations = Vec::new();
         for (val, bb) in targets.iter() {
             let val: i64 = val.try_into().unwrap();
@@ -396,8 +419,11 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         self.rcx_mut().add_clause(clause);
     }
 
+    // TODO: move most of this to Env
     pub fn assign_to_local<'tcx>(&mut self, local: Local, operand: Operand<'tcx>) {
-        self.env.assign_to_local(local, operand);
+        let (_local_ty, local_term) = self.env.local_type(local);
+        let (_operand_ty, operand_term) = self.operand_type(operand);
+        self.env.assume(local_term.proj(1).equal_to(operand_term))
     }
 
     pub fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'_>) {

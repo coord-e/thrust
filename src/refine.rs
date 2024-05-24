@@ -107,7 +107,7 @@ impl RefineCtxt {
         let mut tys = Vec::new();
         // TODO: avoid two iteration and assumption of FunctionParamIdx match between locals and ty
         for (local, ty) in live_locals {
-            locals.push(local);
+            locals.push((local, ty.mutbl));
             tys.push(ty);
         }
         let ret_ty = self.mir_ty(ret_ty);
