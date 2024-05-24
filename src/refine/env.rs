@@ -107,7 +107,7 @@ impl Env {
         let current = self.push_temp_var(*ty.elem.clone());
         let final_ = self.push_temp_var(*ty.elem);
         let assumption = refinement.subst_var(|v| match v {
-            rty::RefinedTypeVar::Value => chc::Term::pair(
+            rty::RefinedTypeVar::Value => chc::Term::mut_(
                 chc::Term::var(current.into()),
                 chc::Term::var(final_.into()),
             ),
@@ -177,7 +177,7 @@ impl Env {
         match self.mut_locals.get(&local).copied() {
             Some(MutLocalBinding::Mut(current, final_)) => {
                 let inner_ty = self.tmp_vars[current].clone();
-                let term = chc::Term::pair(
+                let term = chc::Term::mut_(
                     chc::Term::var(current.into()),
                     chc::Term::var(final_.into()),
                 );
@@ -204,7 +204,8 @@ impl Env {
                 if !matches!(proj, PlaceElem::Deref) {
                     unimplemented!();
                 }
-                (ty.deref(), term.proj(0))
+                let ty = ty.into_pointer().unwrap();
+                (*ty.elem, ty.kind.deref_term(term))
             })
     }
 
@@ -230,7 +231,7 @@ impl Env {
             MutLocalBinding::Box(x) => {
                 self.mut_locals
                     .insert(local, MutLocalBinding::Box(prophecy_var));
-                let term = chc::Term::pair(
+                let term = chc::Term::mut_(
                     chc::Term::var(x.into()),
                     chc::Term::var(prophecy_var.into()),
                 );

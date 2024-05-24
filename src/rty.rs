@@ -119,6 +119,15 @@ impl From<RefKind> for PointerKind {
     }
 }
 
+impl PointerKind {
+    pub fn deref_term<V>(self, term: chc::Term<V>) -> chc::Term<V> {
+        match self {
+            PointerKind::Own | PointerKind::Ref(RefKind::Immut) => term.box_current(),
+            PointerKind::Ref(RefKind::Mut) => term.mut_current(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PointerType {
     pub kind: PointerKind,
@@ -254,6 +263,13 @@ impl Type {
         }
     }
 
+    pub fn into_pointer(self) -> Option<PointerType> {
+        match self {
+            Type::Pointer(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
     // XXX: this is something like 'logically meaningful to reason about'
     // and better naming is needed
     pub fn to_sort(&self) -> Option<chc::Sort> {
@@ -267,7 +283,7 @@ impl Type {
                     PointerKind::Ref(RefKind::Immut) | PointerKind::Own => {
                         chc::Sort::box_(elem_sort)
                     }
-                    PointerKind::Ref(RefKind::Mut) => chc::Sort::pair(elem_sort.clone(), elem_sort),
+                    PointerKind::Ref(RefKind::Mut) => chc::Sort::mut_(elem_sort),
                 };
                 Some(sort)
             }

@@ -161,7 +161,9 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         let elaborated_rty = if mutbl.is_mut() {
             self.mut_locals.insert(local);
             let refinement = rty.refinement.subst_var(|v| match v {
-                rty::RefinedTypeVar::Value => chc::Term::var(rty::RefinedTypeVar::Value).proj(0),
+                rty::RefinedTypeVar::Value => {
+                    chc::Term::var(rty::RefinedTypeVar::Value).box_current()
+                }
                 v => chc::Term::var(v),
             });
             let ty = rty::PointerType::own(rty.ty).into();
@@ -302,7 +304,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         tracing::debug!(operand = ?operand, locals = ?self.mut_locals, "operand_type");
         if matches!(operand, Operand::Copy(p) | Operand::Move(p) if self.mut_locals.contains(&p.local))
         {
-            (sty.deref(), term.proj(0))
+            (sty.deref(), term.box_current())
         } else {
             (sty, term)
         }
@@ -423,7 +425,8 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     pub fn assign_to_local<'tcx>(&mut self, local: Local, operand: Operand<'tcx>) {
         let (_local_ty, local_term) = self.env.local_type(local);
         let (_operand_ty, operand_term) = self.operand_type(operand);
-        self.env.assume(local_term.proj(1).equal_to(operand_term))
+        self.env
+            .assume(local_term.mut_final().equal_to(operand_term))
     }
 
     pub fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'_>) {

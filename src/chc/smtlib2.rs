@@ -1,8 +1,5 @@
 use crate::chc;
 
-mod convention;
-use convention::*;
-
 #[derive(Debug, Clone)]
 struct List<T> {
     closed: bool,
@@ -62,12 +59,8 @@ impl<'a> std::fmt::Display for Sort<'a> {
         match self.inner {
             chc::Sort::Int => write!(f, "Int"),
             chc::Sort::Bool => write!(f, "Bool"),
-            chc::Sort::Tuple(ts) => write!(
-                f,
-                "({} {})",
-                TupleTypeName::new(ts.len()),
-                List::open(ts.iter().map(Sort::new))
-            ),
+            chc::Sort::Box(s) => write!(f, "(Box {})", Sort::new(s)),
+            chc::Sort::Mut(s) => write!(f, "(Mut {})", Sort::new(s)),
         }
     }
 }
@@ -89,19 +82,11 @@ impl<'a> std::fmt::Display for Term<'a> {
             chc::Term::Var(v) => write!(f, "{}", v),
             chc::Term::Int(i) => write!(f, "{}", i),
             chc::Term::Bool(b) => write!(f, "{}", b),
-            chc::Term::Tuple(ts) => {
-                if ts.is_empty() {
-                    write!(f, "{}", TupleCtor::new(ts.len()))
-                } else {
-                    write!(
-                        f,
-                        "({} {})",
-                        TupleCtor::new(ts.len()),
-                        List::open(ts.iter().map(Term::new))
-                    )
-                }
-            }
-            chc::Term::Proj(t, i) => write!(f, "({} {})", TupleProj::new(*i), Term::new(t)),
+            chc::Term::Box(t) => write!(f, "(box {})", Term::new(t)),
+            chc::Term::Mut(t1, t2) => write!(f, "(mut {} {})", Term::new(t1), Term::new(t2)),
+            chc::Term::BoxCurrent(t) => write!(f, "(box_current {})", Term::new(t)),
+            chc::Term::MutCurrent(t) => write!(f, "(mut_current {})", Term::new(t)),
+            chc::Term::MutFinal(t) => write!(f, "(mut_final {})", Term::new(t)),
             chc::Term::App(fn_, args) => {
                 write!(f, "({} {})", fn_, List::open(args.iter().map(Term::new)))
             }
@@ -175,16 +160,11 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)")?;
         writeln!(f, "(define-fun != ((x Int) (y Int)) Bool (not (= x y)))")?;
-        for n in 0..=self.inner.max_tuple_size() {
-            let type_vars = List::closed((0..n).map(|i| format!("P{}", i)));
-            let type_name = TupleTypeName::new(n);
-            let ctor_name = TupleCtor::new(n);
-            let projs = List::open((0..n).map(|i| format!("({} P{})", TupleProj::new(i), i)));
-            writeln!(
-                f,
-                "(declare-datatypes {type_vars} (({type_name} ({ctor_name} {projs}))))"
-            )?;
-        }
+        writeln!(f, "(declare-datatypes (T) ((Box (box (box_current T)))))")?;
+        writeln!(
+            f,
+            "(declare-datatypes (T) ((Mut (mut (mut_current T) (mut_final T)))))"
+        )?;
         for (p, sorts) in self.inner.pred_vars.iter_enumerated() {
             writeln!(
                 f,

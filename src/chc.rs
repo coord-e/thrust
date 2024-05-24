@@ -13,7 +13,8 @@ pub use z3::CheckSatError;
 pub enum Sort {
     Int,
     Bool,
-    Tuple(Vec<Sort>),
+    Box(Box<Sort>),
+    Mut(Box<Sort>),
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Sort
@@ -25,23 +26,35 @@ where
         match self {
             Sort::Int => allocator.text("int"),
             Sort::Bool => allocator.text("bool"),
-            Sort::Tuple(ss) => {
-                let separator = allocator.text(",").append(allocator.line());
-                let inner =
-                    allocator.intersperse(ss.iter().map(|s| s.pretty(allocator)), separator);
-                allocator
-                    .line_()
-                    .append(inner)
-                    .nest(2)
-                    .append(allocator.line_())
-                    .parens()
-                    .group()
-            }
+            Sort::Box(s) => allocator
+                .text("box")
+                .append(allocator.line())
+                .append(s.pretty_atom(allocator))
+                .group(),
+            Sort::Mut(s) => allocator
+                .text("mut")
+                .append(allocator.line())
+                .append(s.pretty_atom(allocator))
+                .group(),
         }
     }
 }
 
 impl Sort {
+    fn pretty_atom<'b, 'a, D>(
+        &'b self,
+        allocator: &'a D,
+    ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
+    where
+        D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+        D::Doc: Clone,
+    {
+        match &self {
+            Sort::Box(_) | Sort::Mut(_) => self.pretty(allocator).parens(),
+            _ => self.pretty(allocator),
+        }
+    }
+
     pub fn int() -> Self {
         Sort::Int
     }
@@ -51,18 +64,11 @@ impl Sort {
     }
 
     pub fn box_(sort: Sort) -> Self {
-        Sort::Tuple(vec![sort])
+        Sort::Box(Box::new(sort))
     }
 
-    pub fn pair(s1: Sort, s2: Sort) -> Self {
-        Sort::Tuple(vec![s1, s2])
-    }
-
-    pub fn as_tuple(&self) -> Option<&Vec<Sort>> {
-        match self {
-            Sort::Tuple(ts) => Some(ts),
-            _ => None,
-        }
+    pub fn mut_(sort: Sort) -> Self {
+        Sort::Mut(Box::new(sort))
     }
 }
 
@@ -142,8 +148,11 @@ pub enum Term<V = TermVarIdx> {
     Var(V),
     Bool(bool),
     Int(i64),
-    Tuple(Vec<Term<V>>),
-    Proj(Box<Term<V>>, usize),
+    Box(Box<Term<V>>),
+    Mut(Box<Term<V>>, Box<Term<V>>),
+    BoxCurrent(Box<Term<V>>),
+    MutCurrent(Box<Term<V>>),
+    MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
 }
 
@@ -158,22 +167,17 @@ where
             Term::Var(var) => var.pretty(allocator),
             Term::Int(n) => allocator.as_string(n),
             Term::Bool(b) => allocator.as_string(b),
-            Term::Tuple(ts) => {
-                let separator = allocator.text(",").append(allocator.line());
-                let inner =
-                    allocator.intersperse(ts.iter().map(|s| s.pretty(allocator)), separator);
-                allocator
-                    .line_()
-                    .append(inner)
-                    .nest(2)
-                    .append(allocator.line_())
-                    .parens()
-                    .group()
+            Term::Box(t) => t.pretty(allocator).angles(),
+            Term::Mut(t1, t2) => t1
+                .pretty(allocator)
+                .append(allocator.text(","))
+                .append(allocator.line())
+                .append(t2.pretty(allocator))
+                .angles(),
+            Term::BoxCurrent(t) | Term::MutCurrent(t) => {
+                allocator.text("*").append(t.pretty(allocator))
             }
-            Term::Proj(t, i) => t
-                .pretty_atom(allocator)
-                .append(".")
-                .append(allocator.as_string(i)),
+            Term::MutFinal(t) => allocator.text("°").append(t.pretty(allocator)),
             Term::App(f, args) if f.is_infix() => args[0]
                 .pretty_atom(allocator)
                 .append(allocator.line())
@@ -219,8 +223,13 @@ impl<V> Term<V> {
             Term::Var(v) => f(v),
             Term::Bool(b) => Term::Bool(b),
             Term::Int(n) => Term::Int(n),
-            Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
-            Term::Proj(t, i) => Term::Proj(Box::new(t.subst_var(f)), i),
+            Term::Box(t) => Term::Box(Box::new(t.subst_var(f))),
+            Term::Mut(t1, t2) => {
+                Term::Mut(Box::new(t1.subst_var(&mut f)), Box::new(t2.subst_var(f)))
+            }
+            Term::BoxCurrent(t) => Term::BoxCurrent(Box::new(t.subst_var(f))),
+            Term::MutCurrent(t) => Term::MutCurrent(Box::new(t.subst_var(f))),
+            Term::MutFinal(t) => Term::MutFinal(Box::new(t.subst_var(f))),
             Term::App(fun, args) => {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
@@ -250,15 +259,23 @@ impl<V> Term<V> {
     }
 
     pub fn box_(t: Term<V>) -> Self {
-        Term::Tuple(vec![t])
+        Term::Box(Box::new(t))
     }
 
-    pub fn pair(fst: Term<V>, snd: Term<V>) -> Self {
-        Term::Tuple(vec![fst, snd])
+    pub fn mut_(t1: Term<V>, t2: Term<V>) -> Self {
+        Term::Mut(Box::new(t1), Box::new(t2))
     }
 
-    pub fn proj(self, i: usize) -> Self {
-        Term::Proj(Box::new(self), i)
+    pub fn box_current(self) -> Self {
+        Term::BoxCurrent(Box::new(self))
+    }
+
+    pub fn mut_current(self) -> Self {
+        Term::MutCurrent(Box::new(self))
+    }
+
+    pub fn mut_final(self) -> Self {
+        Term::MutFinal(Box::new(self))
     }
 
     pub fn equal_to(self, other: Self) -> Atom<V> {
@@ -551,16 +568,6 @@ pub struct System {
 }
 
 impl System {
-    pub fn max_tuple_size(&self) -> usize {
-        self.pred_vars
-            .iter()
-            .flatten()
-            .chain(self.clauses.iter().flat_map(|c| &c.vars))
-            .filter_map(|s| s.as_tuple().map(|ts| ts.len()))
-            .max()
-            .unwrap_or(0)
-    }
-
     pub fn new_pred_var(&mut self, sig: PredSig) -> PredVarId {
         self.pred_vars.push(sig)
     }
