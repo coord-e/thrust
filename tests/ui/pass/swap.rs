@@ -1,6 +1,6 @@
 //@check-pass
 
-fn swap(x: &mut i64, y: &mut i64) { 
+fn swap(x: &mut i64, y: &mut i64) {
     let v = *x;
     *x = *y;
     *y = v;
