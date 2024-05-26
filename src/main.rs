@@ -17,7 +17,9 @@ impl Callbacks for CompilerCalls {
         queries: &'tcx Queries<'tcx>,
     ) -> Compilation {
         queries.global_ctxt().unwrap().enter(|tcx| {
-            refinement_analyzer::Analyzer::new(tcx).run().unwrap();
+            if let Err(err) = refinement_analyzer::Analyzer::new(tcx).run() {
+                tcx.dcx().err(format!("verification error: {:?}", err));
+            }
         });
         Compilation::Stop
     }
@@ -45,5 +47,6 @@ pub fn main() {
         )
         .init();
 
-    let _ = RunCompiler::new(&args, &mut CompilerCalls {}).run();
+    let code = rustc_driver::catch_with_exit_code(|| RunCompiler::new(&args, &mut CompilerCalls {}).run());
+    std::process::exit(code);
 }
