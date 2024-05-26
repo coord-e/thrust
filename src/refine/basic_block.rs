@@ -401,7 +401,12 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         I: IntoIterator<Item = Operand<'tcx>>,
     {
         let def_id = match func.const_fn_def() {
-            Some((def_id, gs)) if gs.is_empty() => def_id,
+            Some((def_id, args)) => {
+                if !args.is_empty() {
+                    tracing::warn!(?args, ?def_id, "generic args ignored");
+                }
+                def_id
+            }
             _ => unimplemented!(),
         };
         let func_ty = self.rcx().def_ty(def_id).expect("unknown def");

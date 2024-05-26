@@ -1,9 +1,11 @@
+use rustc_hir::lang_items::LangItem;
+use rustc_middle::ty::TyCtxt;
+use rustc_span::def_id::DefId;
+
 use crate::chc;
 use crate::error::Result;
 use crate::refine::RefineCtxt;
 use crate::rty::{self, ClauseBuilderExt as _, RefinedType};
-use rustc_middle::ty::TyCtxt;
-use rustc_span::def_id::DefId;
 
 mod function;
 pub use function::FunctionAnalyzer;
@@ -30,6 +32,18 @@ impl<'tcx> Analyzer<'tcx> {
         }
     }
 
+    fn register_known_defs(&mut self) {
+        let param = RefinedType::new(
+            rty::PointerType::immut_to(rty::Type::string()).into(),
+            rty::Refinement::bottom(),
+        );
+        let ret = RefinedType::new(rty::Type::never(), rty::Refinement::bottom());
+        let ty = rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret);
+        let panic_def_id = self.tcx.require_lang_item(LangItem::Panic, None);
+        self.rcx
+            .register_def(panic_def_id, RefinedType::unrefined(ty.into()));
+    }
+
     fn refine_def(&mut self, def_id: DefId) {
         let sig = self.tcx.fn_sig(def_id);
         let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
@@ -40,6 +54,7 @@ impl<'tcx> Analyzer<'tcx> {
 
     pub fn run(&mut self) -> Result<()> {
         self.refine_local_defs();
+        self.register_known_defs();
 
         for local_def_id in self.tcx.mir_keys(()) {
             let body = self.tcx.optimized_mir(local_def_id.to_def_id());

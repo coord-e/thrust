@@ -13,6 +13,7 @@ pub use z3::CheckSatError;
 pub enum Sort {
     Int,
     Bool,
+    String,
     Box(Box<Sort>),
     Mut(Box<Sort>),
 }
@@ -26,6 +27,7 @@ where
         match self {
             Sort::Int => allocator.text("int"),
             Sort::Bool => allocator.text("bool"),
+            Sort::String => allocator.text("string"),
             Sort::Box(s) => allocator
                 .text("box")
                 .append(allocator.line())
@@ -57,6 +59,10 @@ impl Sort {
 
     pub fn int() -> Self {
         Sort::Int
+    }
+
+    pub fn string() -> Self {
+        Sort::String
     }
 
     pub fn bool() -> Self {
@@ -148,6 +154,7 @@ pub enum Term<V = TermVarIdx> {
     Var(V),
     Bool(bool),
     Int(i64),
+    String(String),
     Box(Box<Term<V>>),
     Mut(Box<Term<V>>, Box<Term<V>>),
     BoxCurrent(Box<Term<V>>),
@@ -167,6 +174,7 @@ where
             Term::Var(var) => var.pretty(allocator),
             Term::Int(n) => allocator.as_string(n),
             Term::Bool(b) => allocator.as_string(b),
+            Term::String(s) => allocator.text(s.clone()).double_quotes(),
             Term::Box(t) => t.pretty(allocator).angles(),
             Term::Mut(t1, t2) => t1
                 .pretty(allocator)
@@ -223,6 +231,7 @@ impl<V> Term<V> {
             Term::Var(v) => f(v),
             Term::Bool(b) => Term::Bool(b),
             Term::Int(n) => Term::Int(n),
+            Term::String(s) => Term::String(s),
             Term::Box(t) => Term::Box(Box::new(t.subst_var(f))),
             Term::Mut(t1, t2) => {
                 Term::Mut(Box::new(t1.subst_var(&mut f)), Box::new(t2.subst_var(f)))
@@ -256,6 +265,10 @@ impl<V> Term<V> {
 
     pub fn int(n: i64) -> Self {
         Term::Int(n)
+    }
+
+    pub fn string(s: String) -> Self {
+        Term::String(s)
     }
 
     pub fn box_(t: Term<V>) -> Self {

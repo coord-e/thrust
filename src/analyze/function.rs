@@ -141,21 +141,12 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
                     unimplemented!()
                 }
 
-                let panic_def_id = self.tcx.require_lang_item(LangItem::Panic, None);
-                // TODO: ad-hoc. should be implemented by inserting panic into rcx.defs
-                if matches!(func.const_fn_def(), Some((def_id, _)) if def_id == panic_def_id) {
-                    ecx.type_panic();
-                } else {
-                    let decl = &self.body.local_decls[destination];
-                    let rty = ecx.mir_refined_ty(decl.ty);
-                    ecx.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
-                    ecx.bind_local(destination, rty, decl.mutability);
-                    if let Some(target) = target {
-                        ecx.type_goto(*target, &expected_ret);
-                    } else {
-                        // TODO: what
-                        unimplemented!();
-                    }
+                let decl = &self.body.local_decls[destination];
+                let rty = ecx.mir_refined_ty(decl.ty);
+                ecx.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
+                ecx.bind_local(destination, rty, decl.mutability);
+                if let Some(target) = target {
+                    ecx.type_goto(*target, &expected_ret);
                 }
             }
             _ => {

@@ -59,6 +59,7 @@ impl<'a> std::fmt::Display for Sort<'a> {
         match self.inner {
             chc::Sort::Int => write!(f, "Int"),
             chc::Sort::Bool => write!(f, "Bool"),
+            chc::Sort::String => write!(f, "String"),
             chc::Sort::Box(s) => write!(f, "(Box {})", Sort::new(s)),
             chc::Sort::Mut(s) => write!(f, "(Mut {})", Sort::new(s)),
         }
@@ -82,6 +83,7 @@ impl<'a> std::fmt::Display for Term<'a> {
             chc::Term::Var(v) => write!(f, "{}", v),
             chc::Term::Int(i) => write!(f, "{}", i),
             chc::Term::Bool(b) => write!(f, "{}", b),
+            chc::Term::String(s) => write!(f, "\"{}\"", s.escape_default()),
             chc::Term::Box(t) => write!(f, "(box {})", Term::new(t)),
             chc::Term::Mut(t1, t2) => write!(f, "(mut {} {})", Term::new(t1), Term::new(t2)),
             chc::Term::BoxCurrent(t) => write!(f, "(box_current {})", Term::new(t)),

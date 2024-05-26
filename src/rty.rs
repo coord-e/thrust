@@ -189,6 +189,8 @@ pub enum Type {
     Unit,
     Int,
     Bool,
+    String,
+    Never,
     Pointer(PointerType),
     Function(FunctionType),
 }
@@ -215,6 +217,8 @@ where
             Type::Unit => allocator.text("()"),
             Type::Int => allocator.text("int"),
             Type::Bool => allocator.text("bool"),
+            Type::String => allocator.text("string"),
+            Type::Never => allocator.text("!"),
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
         }
@@ -248,6 +252,14 @@ impl Type {
         Type::Bool
     }
 
+    pub fn string() -> Self {
+        Type::String
+    }
+
+    pub fn never() -> Self {
+        Type::Never
+    }
+
     pub fn deref(self) -> Type {
         if let Type::Pointer(ty) = self {
             *ty.elem
@@ -277,6 +289,10 @@ impl Type {
             Type::Unit => None,
             Type::Int => Some(chc::Sort::int()),
             Type::Bool => Some(chc::Sort::bool()),
+            // TODO: enable string reasoning
+            //       currently String sort seems not available in HORN logic of Z3
+            Type::String => None,
+            Type::Never => None,
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.to_sort()?;
                 let sort = match ty.kind {

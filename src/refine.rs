@@ -45,6 +45,7 @@ impl RefineCtxt {
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
             mir_ty::TyKind::Int(_) => rty::Type::int(),
+            mir_ty::TyKind::Str => rty::Type::string(),
             mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
                 let elem_ty = self.mir_ty(*elem_ty);
                 match mutbl {
@@ -53,7 +54,7 @@ impl RefineCtxt {
                 }
             }
             mir_ty::TyKind::Tuple(ts) if ts.is_empty() => rty::Type::unit(),
-            // mir_ty::TyKind::Never => rty::Type::unit(), // TODO: this is not good
+            mir_ty::TyKind::Never => rty::Type::never(),
             kind => unimplemented!("mir_ty: {:?}", kind),
         }
     }

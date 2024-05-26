@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 use rustc_middle::mir::{self, Local, Operand, Place, PlaceElem};
+use rustc_middle::ty as mir_ty;
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
@@ -210,14 +211,33 @@ impl Env {
     }
 
     pub fn operand_type(&self, operand: Operand<'_>) -> (rty::Type, chc::Term<Var>) {
-        use mir::{interpret::Scalar, Const, ConstValue};
+        use mir::{interpret::Scalar, Const, ConstValue, Mutability};
         match operand {
             Operand::Copy(place) | Operand::Move(place) => self.place_type(place),
             Operand::Constant(operand) => {
-                let Const::Val(ConstValue::Scalar(Scalar::Int(val)), _) = operand.const_ else {
-                    unimplemented!();
+                let Const::Val(val, ty) = operand.const_ else {
+                    unimplemented!("const: {:?}", operand.const_);
                 };
-                (rty::Type::Int, chc::Term::int(val.try_to_i64().unwrap()))
+                match (ty.kind(), val) {
+                    (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
+                        (rty::Type::int(), chc::Term::int(val.try_to_i64().unwrap()))
+                    }
+                    (
+                        mir_ty::TyKind::Ref(_, elem, Mutability::Not),
+                        ConstValue::Slice { data, meta },
+                    ) if matches!(elem.kind(), mir_ty::TyKind::Str) => {
+                        let end = meta.try_into().unwrap();
+                        let content = data
+                            .inner()
+                            .inspect_with_uninit_and_ptr_outside_interpreter(0..end);
+                        let content = std::str::from_utf8(content).unwrap();
+                        (
+                            rty::PointerType::immut_to(rty::Type::string()).into(),
+                            chc::Term::box_(chc::Term::string(content.to_owned())),
+                        )
+                    }
+                    _ => unimplemented!("const: {:?}, ty: {:?}", val, ty),
+                }
             }
         }
     }
