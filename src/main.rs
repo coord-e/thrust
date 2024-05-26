@@ -47,6 +47,7 @@ pub fn main() {
         )
         .init();
 
-    let code = rustc_driver::catch_with_exit_code(|| RunCompiler::new(&args, &mut CompilerCalls {}).run());
+    let code =
+        rustc_driver::catch_with_exit_code(|| RunCompiler::new(&args, &mut CompilerCalls {}).run());
     std::process::exit(code);
 }
