@@ -11,4 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-z3
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test

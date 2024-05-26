@@ -2,7 +2,12 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
-  "extensions": [
-    "rust-lang.rust-analyzer"
-  ]
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer"
+      ]
+    }
+  },
+  "postCreateCommand": "rustup show"
 }
