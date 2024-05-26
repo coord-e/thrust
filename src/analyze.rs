@@ -33,15 +33,17 @@ impl<'tcx> Analyzer<'tcx> {
     }
 
     fn register_known_defs(&mut self) {
-        let param = RefinedType::new(
-            rty::PointerType::immut_to(rty::Type::string()).into(),
-            rty::Refinement::bottom(),
-        );
-        let ret = RefinedType::new(rty::Type::never(), rty::Refinement::bottom());
-        let ty = rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret);
+        let panic_ty = {
+            let param = RefinedType::new(
+                rty::PointerType::immut_to(rty::Type::string()).into(),
+                rty::Refinement::bottom(),
+            );
+            let ret = RefinedType::new(rty::Type::never(), rty::Refinement::bottom());
+            rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret)
+        };
         let panic_def_id = self.tcx.require_lang_item(LangItem::Panic, None);
         self.rcx
-            .register_def(panic_def_id, RefinedType::unrefined(ty.into()));
+            .register_def(panic_def_id, RefinedType::unrefined(panic_ty.into()));
     }
 
     fn refine_def(&mut self, def_id: DefId) {

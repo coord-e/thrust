@@ -421,11 +421,6 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         }
     }
 
-    pub fn type_panic(&mut self) {
-        let clause = self.env.build_clause().head(chc::Atom::bottom());
-        self.rcx_mut().add_clause(clause);
-    }
-
     // TODO: move most of this to Env
     pub fn assign_to_local<'tcx>(&mut self, local: Local, operand: Operand<'tcx>) {
         let (_local_ty, local_term) = self.env.local_type(local);
