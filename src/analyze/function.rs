@@ -82,22 +82,6 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
         for (stmt_idx, stmt) in data.statements.iter().enumerate() {
             tracing::debug!(%stmt_idx, stmt = ?stmt);
             match stmt.kind.as_assign() {
-                Some((p, Rvalue::Use(operand)))
-                    if p.projection.len() == 0 && !ecx.is_known_local(p.local) =>
-                {
-                    // new binding
-                    let decl = &self.body.local_decls[p.local];
-                    let rty = ecx.mir_refined_ty(decl.ty);
-                    // TODO: maybe we should tie them together in ecx
-                    ecx.type_operand(operand.clone(), &rty);
-                    ecx.bind_local(p.local, rty, decl.mutability);
-                }
-                Some((p, Rvalue::Use(operand)))
-                    if p.projection.as_slice() == &[PlaceElem::Deref] =>
-                {
-                    // assignment
-                    ecx.assign_to_local(p.local, operand.clone());
-                }
                 Some((p, Rvalue::Ref(_, BorrowKind::Mut { .. }, referent)))
                     if p.projection.len() == 0 && referent.projection.len() == 0 =>
                 {
@@ -105,6 +89,20 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
                     let decl = &self.body.local_decls[p.local];
                     let rty = ecx.borrow_local(stmt_idx, referent.local);
                     ecx.bind_local(p.local, rty, decl.mutability);
+                }
+                Some((p, rvalue)) if p.projection.len() == 0 && !ecx.is_known_local(p.local) => {
+                    // new binding
+                    let decl = &self.body.local_decls[p.local];
+                    let rty = ecx.mir_refined_ty(decl.ty);
+                    // TODO: maybe we should tie them together in ecx
+                    ecx.type_rvalue(rvalue.clone(), &rty);
+                    ecx.bind_local(p.local, rty, decl.mutability);
+                }
+                Some((p, Rvalue::Use(operand)))
+                    if p.projection.as_slice() == &[PlaceElem::Deref] =>
+                {
+                    // assignment
+                    ecx.assign_to_local(p.local, operand.clone());
                 }
                 _ => {
                     tracing::warn!(stmt = ?stmt, "skipped");

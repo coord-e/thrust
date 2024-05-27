@@ -130,6 +130,13 @@ impl Function {
         termcolor::ColorSpec::new()
     }
 
+    const fn new(name: &'static str) -> Self {
+        Function {
+            name,
+            is_infix: false,
+        }
+    }
+
     const fn infix(name: &'static str) -> Self {
         Function {
             name,
@@ -147,6 +154,12 @@ impl Function {
 
     pub const ADD: Function = Function::infix("+");
     pub const SUB: Function = Function::infix("-");
+    pub const EQ: Function = Function::infix("=");
+    pub const GE: Function = Function::infix(">=");
+    pub const GT: Function = Function::infix(">");
+    pub const LE: Function = Function::infix("<=");
+    pub const LT: Function = Function::infix("<");
+    pub const NOT: Function = Function::new("not");
 }
 
 #[derive(Debug, Clone)]
@@ -267,6 +280,10 @@ impl<V> Term<V> {
         Term::Int(n)
     }
 
+    pub fn bool(b: bool) -> Self {
+        Term::Bool(b)
+    }
+
     pub fn string(s: String) -> Self {
         Term::String(s)
     }
@@ -289,6 +306,41 @@ impl<V> Term<V> {
 
     pub fn mut_final(self) -> Self {
         Term::MutFinal(Box::new(self))
+    }
+
+    pub fn add(self, other: Self) -> Self {
+        Term::App(Function::ADD, vec![self, other])
+    }
+
+    pub fn sub(self, other: Self) -> Self {
+        Term::App(Function::SUB, vec![self, other])
+    }
+
+    pub fn eq(self, other: Self) -> Self {
+        Term::App(Function::EQ, vec![self, other])
+    }
+
+    pub fn ne(self, other: Self) -> Self {
+        Term::App(
+            Function::NOT,
+            vec![Term::App(Function::EQ, vec![self, other])],
+        )
+    }
+
+    pub fn ge(self, other: Self) -> Self {
+        Term::App(Function::GE, vec![self, other])
+    }
+
+    pub fn gt(self, other: Self) -> Self {
+        Term::App(Function::GT, vec![self, other])
+    }
+
+    pub fn le(self, other: Self) -> Self {
+        Term::App(Function::LE, vec![self, other])
+    }
+
+    pub fn lt(self, other: Self) -> Self {
+        Term::App(Function::LT, vec![self, other])
     }
 
     pub fn equal_to(self, other: Self) -> Atom<V> {
@@ -331,6 +383,7 @@ impl PredVarId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KnownPred {
     name: &'static str,
+    is_negative: bool,
     is_infix: bool,
 }
 
@@ -359,6 +412,7 @@ impl KnownPred {
     const fn new(name: &'static str) -> Self {
         KnownPred {
             name,
+            is_negative: false,
             is_infix: false,
         }
     }
@@ -366,12 +420,22 @@ impl KnownPred {
     const fn infix(name: &'static str) -> Self {
         KnownPred {
             name,
+            is_negative: false,
             is_infix: true,
         }
     }
 
-    pub fn name(&self) -> &str {
+    const fn negated(mut self) -> Self {
+        self.is_negative = true;
+        self
+    }
+
+    pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    pub fn is_negative(&self) -> bool {
+        self.is_negative
     }
 
     pub fn is_infix(&self) -> bool {
@@ -385,7 +449,7 @@ impl KnownPred {
     pub const TOP: KnownPred = KnownPred::new("true");
     pub const BOTTOM: KnownPred = KnownPred::new("false");
     pub const EQUAL: KnownPred = KnownPred::infix("=");
-    pub const NOT_EQUAL: KnownPred = KnownPred::infix("!=");
+    pub const NOT_EQUAL: KnownPred = KnownPred::infix("=").negated();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -428,6 +492,20 @@ impl From<PredVarId> for Pred {
 }
 
 impl Pred {
+    pub fn name(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Pred::Known(p) => p.name().into(),
+            Pred::Var(p) => p.to_string().into(),
+        }
+    }
+
+    pub fn is_negative(&self) -> bool {
+        match self {
+            Pred::Known(p) => p.is_negative(),
+            Pred::Var(_) => false,
+        }
+    }
+
     pub fn is_infix(&self) -> bool {
         match self {
             Pred::Known(p) => p.is_infix(),

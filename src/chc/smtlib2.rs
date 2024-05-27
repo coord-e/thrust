@@ -109,12 +109,19 @@ pub struct Atom<'a> {
 
 impl<'a> std::fmt::Display for Atom<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.inner.pred.is_negative() {
+            write!(f, "(not ")?;
+        }
         if self.inner.args.is_empty() {
-            write!(f, "{}", self.inner.pred)
+            write!(f, "{}", self.inner.pred.name())?;
         } else {
             let args = List::open(self.inner.args.iter().map(Term::new));
-            write!(f, "({} {})", self.inner.pred, args)
+            write!(f, "({} {})", self.inner.pred.name(), args)?;
         }
+        if self.inner.pred.is_negative() {
+            write!(f, ")")?;
+        }
+        Ok(())
     }
 }
 

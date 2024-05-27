@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
-use rustc_middle::mir::{self, interpret::Scalar, BasicBlock, Const, ConstValue, Local, Operand};
+use rustc_middle::mir::{self, BasicBlock, Const, ConstValue, Local, Operand, Rvalue};
 use rustc_middle::ty as mir_ty;
 
 use crate::chc;
@@ -310,8 +310,46 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         }
     }
 
-    fn operand_refined_type(&self, operand: Operand<'_>) -> rty::RefinedType<Var> {
-        let (sty, term) = self.operand_type(operand);
+    fn rvalue_type(&mut self, rvalue: Rvalue<'_>) -> (rty::Type, chc::Term<Var>) {
+        match rvalue {
+            Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::BinaryOp(op, operands) => {
+                let (lhs, rhs) = *operands;
+                let (lhs_ty, lhs_term) = self.operand_type(lhs);
+                let (rhs_ty, rhs_term) = self.operand_type(rhs);
+                // NOTE: BinOp::Offset accepts operands with different types
+                //       but we don't support it here
+                self.relate_equal_type(&lhs_ty, &rhs_ty);
+                match (&lhs_ty, op) {
+                    (rty::Type::Int, mir::BinOp::Add) => (lhs_ty, lhs_term.add(rhs_term)),
+                    (rty::Type::Int, mir::BinOp::Sub) => (lhs_ty, lhs_term.sub(rhs_term)),
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
+                        (rty::Type::Bool, lhs_term.ge(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Gt) => {
+                        (rty::Type::Bool, lhs_term.gt(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Le) => {
+                        (rty::Type::Bool, lhs_term.le(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Lt) => {
+                        (rty::Type::Bool, lhs_term.lt(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Eq) => {
+                        (rty::Type::Bool, lhs_term.eq(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ne) => {
+                        (rty::Type::Bool, lhs_term.ne(rhs_term))
+                    }
+                    _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
+                }
+            }
+            _ => unimplemented!("rvalue={:?}", rvalue),
+        }
+    }
+
+    fn rvalue_refined_type(&mut self, rvalue: Rvalue<'_>) -> rty::RefinedType<Var> {
+        let (sty, term) = self.rvalue_type(rvalue);
 
         // TODO: should we cover "to_sort" ness in relate_* methods or here?
         if !sty.to_sort().is_some() {
@@ -321,9 +359,17 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         rty::RefinedType::refined_with_term(sty, term)
     }
 
-    pub fn type_operand(&mut self, operand: Operand, expected: &rty::RefinedType<Var>) {
-        let got = self.operand_refined_type(operand.clone());
+    pub fn type_rvalue(&mut self, rvalue: Rvalue<'_>, expected: &rty::RefinedType<Var>) {
+        let got = self.rvalue_refined_type(rvalue);
         self.relate_sub_refined_type(&got, expected);
+    }
+
+    pub fn operand_refined_type(&mut self, operand: Operand<'_>) -> rty::RefinedType<Var> {
+        self.rvalue_refined_type(Rvalue::Use(operand))
+    }
+
+    pub fn type_operand(&mut self, operand: Operand<'_>, expected: &rty::RefinedType<Var>) {
+        self.type_rvalue(Rvalue::Use(operand), expected);
     }
 
     pub fn type_return(&mut self, expected: &rty::RefinedType<Var>) {
@@ -380,13 +426,19 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         targets: mir::SwitchTargets,
         expected_ret: &rty::RefinedType<Var>,
     ) {
-        let (_, discr_term) = self.operand_type(discr);
+        let (discr_ty, discr_term) = self.operand_type(discr);
         let mut negations = Vec::new();
         for (val, bb) in targets.iter() {
             let val: i64 = val.try_into().unwrap();
-            let mut ecx = self.with_assumption(discr_term.clone().equal_to(chc::Term::int(val)));
+            let target_term = match (val, &discr_ty) {
+                (0, rty::Type::Bool) => chc::Term::bool(false),
+                (1, rty::Type::Bool) => chc::Term::bool(true),
+                (n, rty::Type::Int) => chc::Term::int(n),
+                _ => unimplemented!(),
+            };
+            let mut ecx = self.with_assumption(discr_term.clone().equal_to(target_term.clone()));
             ecx.type_goto(bb, expected_ret);
-            negations.push(discr_term.clone().not_equal_to(chc::Term::int(val)));
+            negations.push(discr_term.clone().not_equal_to(target_term));
         }
         let mut ecx = self.with_assumptions(negations);
         ecx.type_goto(targets.otherwise(), expected_ret);
@@ -409,12 +461,12 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             }
             _ => unimplemented!(),
         };
-        let func_ty = self.rcx().def_ty(def_id).expect("unknown def");
+        let func_ty = self.rcx().def_ty(def_id).expect("unknown def").ty.clone();
         let expected_args: IndexVec<_, _> = args
             .into_iter()
             .map(|op| self.operand_refined_type(op))
             .collect();
-        if let rty::Type::Function(func_ty) = func_ty.ty.clone() {
+        if let rty::Type::Function(func_ty) = func_ty {
             self.relate_fn_sub_type(func_ty, expected_args, expected_ret.clone());
         } else {
             panic!("unexpected def type: {:?}", func_ty);
