@@ -2,6 +2,7 @@ use rustc_hir::lang_items::LangItem;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 
+use crate::annot::{AnnotAtom, AnnotParser};
 use crate::chc;
 use crate::error::Result;
 use crate::refine::RefineCtxt;
@@ -9,6 +10,8 @@ use crate::rty::{self, ClauseBuilderExt as _, RefinedType};
 
 mod function;
 pub use function::FunctionAnalyzer;
+
+mod annot;
 
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
@@ -49,7 +52,54 @@ impl<'tcx> Analyzer<'tcx> {
     fn refine_def(&mut self, def_id: DefId) {
         let sig = self.tcx.fn_sig(def_id);
         let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
-        let rty = self.rcx.mir_function_ty(sig);
+
+        // TODO: merge this into FunctionTemplateBuilder or something like that
+        let mut rty = self.rcx.mir_function_ty(sig);
+
+        let mut param_resolver = annot::ParamResolver::default();
+        for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).into_iter().zip(sig.inputs()) {
+            param_resolver.push_param(input_ident.name, input_ty);
+        }
+
+        let mut require_annot = None;
+        for require in self.tcx.get_attrs_by_path(def_id, &annot::requires_path()) {
+            let require = AnnotParser::default()
+                .resolver(&param_resolver)
+                .parse(require)
+                .unwrap();
+            if require_annot.is_some() {
+                unimplemented!();
+            }
+            require_annot = Some(require);
+        }
+        let mut ensure_annot = None;
+        for ensure in self.tcx.get_attrs_by_path(def_id, &annot::ensures_path()) {
+            let ensure = AnnotParser::default()
+                .resolver(annot::ResultResolver::new(&sig.output()))
+                .resolver(&param_resolver)
+                .parse(ensure)
+                .unwrap();
+            if ensure_annot.is_some() {
+                unimplemented!();
+            }
+            ensure_annot = Some(ensure);
+        }
+
+        assert!(require_annot.is_some() == ensure_annot.is_some());
+        if let Some(AnnotAtom::Atom(require)) = require_annot {
+            let last_idx = rty.params.last_index().unwrap();
+            for (param_idx, param_ty) in rty.params.iter_enumerated_mut() {
+                if param_idx == last_idx {
+                    param_ty.refinement = require.clone();
+                } else {
+                    param_ty.refinement = rty::Refinement::top();
+                }
+            }
+        }
+        if let Some(AnnotAtom::Atom(ensure)) = ensure_annot {
+            rty.ret.refinement = ensure;
+        }
+
         let rty = RefinedType::unrefined(rty.into());
         self.rcx.register_def(def_id, rty);
     }

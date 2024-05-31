@@ -1,5 +1,6 @@
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_middle;
@@ -18,6 +19,7 @@ mod refine;
 // maybe we should add a layer to implement relatively pure type system logic with MIR primitives
 
 // pure logic
+mod annot;
 mod chc;
 mod rty;
 
