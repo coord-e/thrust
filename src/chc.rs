@@ -389,6 +389,9 @@ pub struct KnownPred {
 
 impl std::fmt::Display for KnownPred {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if self.is_negative {
+            f.write_str("!")?;
+        }
         f.write_str(self.name)
     }
 }
