@@ -277,7 +277,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                 builder.add_mapped_var(param_idx, sort);
             }
         }
-        for (got_ty, expected_ty) in got.params.iter().zip(&expected_args) {
+        for ((param_idx, got_ty), expected_ty) in got.params.iter_enumerated().zip(&expected_args) {
             // TODO we can use relate_sub_refined_type here when we implemenented builder-aware relate_*
             let clause = builder
                 .clone()
@@ -285,13 +285,11 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                 .add_body(expected_ty.refinement.clone())
                 .head(got_ty.refinement.clone());
             self.rcx_mut().add_clause(clause);
-        }
-
-        for (param_idx, expected_ty) in expected_args.iter_enumerated() {
             builder
                 .with_mapped_value_var(param_idx)
                 .add_body(expected_ty.refinement.clone());
         }
+
         let clause = builder
             .with_value_var(&got.ret.ty)
             .add_body(got.ret.refinement)
