@@ -1,4 +1,4 @@
-//@error-in-other-file: verification error
+//@error-in-other-file: Unsat
 
 fn swap(x: &mut i64, y: &mut i64) {
     let v = *x;

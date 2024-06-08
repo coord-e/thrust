@@ -1,4 +1,4 @@
-//@error-in-other-file: verification error
+//@error-in-other-file: Unsat
 
 fn f(x: &mut i64, y: i64) {
     *x = y;
