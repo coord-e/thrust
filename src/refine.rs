@@ -55,6 +55,12 @@ impl RefineCtxt {
             }
             mir_ty::TyKind::Tuple(ts) if ts.is_empty() => rty::Type::unit(),
             mir_ty::TyKind::Never => rty::Type::never(),
+            mir_ty::TyKind::FnPtr(sig) => {
+                // TODO: justification for skip_binder
+                let sig = sig.skip_binder();
+                let ty = self.mir_function_ty(sig);
+                rty::Type::function(ty)
+            }
             kind => unimplemented!("mir_ty: {:?}", kind),
         }
     }

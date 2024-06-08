@@ -180,6 +180,16 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             };
             self.env.bind(local, rty);
         }
+        // unit return may use _0 without preceeding def
+        if ty.ret.ty.is_unit() {
+            let ty = if mut_locals.contains(&mir::RETURN_PLACE) {
+                rty::RefinedType::unrefined(rty::PointerType::own(rty::Type::unit()).into())
+                    .vacuous()
+            } else {
+                rty::RefinedType::unrefined(rty::Type::unit()).vacuous()
+            };
+            self.env.bind(mir::RETURN_PLACE, ty);
+        }
         ty.ret.subst_var(|idx| subst_var_fn(&self.env, idx))
     }
 
@@ -211,7 +221,9 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         match (got, expected) {
             (rty::Type::Unit, rty::Type::Unit)
             | (rty::Type::Int, rty::Type::Int)
-            | (rty::Type::Bool, rty::Type::Bool) => {}
+            | (rty::Type::Bool, rty::Type::Bool)
+            | (rty::Type::String, rty::Type::String)
+            | (rty::Type::Never, rty::Type::Never) => {}
             (rty::Type::Pointer(got), rty::Type::Pointer(expected))
                 if got.kind == expected.kind =>
             {
@@ -240,12 +252,14 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                         .add_body(expected_ty.refinement)
                         .head(got_ty.refinement.clone());
                     self.rcx_mut().add_clause(clause);
+                    self.relate_sub_type(&expected_ty.ty, &got_ty.ty);
                 }
                 let clause = builder
                     .with_value_var(&got.ret.ty)
                     .add_body(got.ret.refinement.clone())
                     .head(expected.ret.refinement.clone());
                 self.rcx_mut().add_clause(clause);
+                self.relate_sub_type(&got.ret.ty, &expected.ret.ty);
             }
             _ => panic!(
                 "inconsistent types: got={}, expected={}",
@@ -315,6 +329,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             builder
                 .with_mapped_value_var(param_idx)
                 .add_body(expected_ty.refinement.clone());
+            self.relate_sub_type(&expected_ty.ty, &got_ty.ty);
         }
 
         let clause = builder
@@ -322,6 +337,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             .add_body(got.ret.refinement)
             .head(expected_ret.refinement);
         self.rcx_mut().add_clause(clause);
+        self.relate_sub_type(&got.ret.ty, &expected_ret.ty);
     }
 
     fn operand_type(&self, operand: Operand<'_>) -> (rty::Type, chc::Term<Var>) {
@@ -335,9 +351,12 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         }
     }
 
-    fn rvalue_type(&mut self, rvalue: Rvalue<'_>) -> (rty::Type, chc::Term<Var>) {
+    fn rvalue_type(&mut self, rvalue: Rvalue<'_>) -> (rty::Type, Option<chc::Term<Var>>) {
         match rvalue {
-            Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::Use(operand) => {
+                let (ty, term) = self.operand_type(operand);
+                (ty, Some(term))
+            }
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = *operands;
                 let (lhs_ty, lhs_term) = self.operand_type(lhs);
@@ -345,7 +364,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                 // NOTE: BinOp::Offset accepts operands with different types
                 //       but we don't support it here
                 self.relate_equal_type(&lhs_ty, &rhs_ty);
-                match (&lhs_ty, op) {
+                let (ty, term) = match (&lhs_ty, op) {
                     (rty::Type::Int, mir::BinOp::Add) => (lhs_ty, lhs_term.add(rhs_term)),
                     (rty::Type::Int, mir::BinOp::Sub) => (lhs_ty, lhs_term.sub(rhs_term)),
                     (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
@@ -367,7 +386,24 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                         (rty::Type::Bool, lhs_term.ne(rhs_term))
                     }
                     _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
-                }
+                };
+                (ty, Some(term))
+            }
+            Rvalue::Cast(
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::ReifyFnPointer),
+                operand,
+                _ty,
+            ) => {
+                let func_ty = match operand.const_fn_def() {
+                    Some((def_id, args)) => {
+                        if !args.is_empty() {
+                            tracing::warn!(?args, ?def_id, "generic args ignored");
+                        }
+                        self.rcx().def_ty(def_id).expect("unknown def").ty.clone()
+                    }
+                    _ => unimplemented!(),
+                };
+                (func_ty.into(), None)
             }
             _ => unimplemented!("rvalue={:?}", rvalue),
         }
@@ -376,12 +412,14 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     fn rvalue_refined_type(&mut self, rvalue: Rvalue<'_>) -> rty::RefinedType<Var> {
         let (sty, term) = self.rvalue_type(rvalue);
 
-        // TODO: should we cover "to_sort" ness in relate_* methods or here?
-        if !sty.to_sort().is_some() {
-            return rty::RefinedType::unrefined(sty).vacuous();
+        if let Some(term) = term {
+            // TODO: should we cover "to_sort" ness in relate_* methods or here?
+            if sty.to_sort().is_some() {
+                return rty::RefinedType::refined_with_term(sty, term);
+            }
         }
 
-        rty::RefinedType::refined_with_term(sty, term)
+        rty::RefinedType::unrefined(sty).vacuous()
     }
 
     pub fn type_rvalue(&mut self, rvalue: Rvalue<'_>, expected: &rty::RefinedType<Var>) {
@@ -402,17 +440,21 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     }
 
     pub fn type_goto(&mut self, bb: BasicBlock, expected_ret: &rty::RefinedType<Var>) {
+        tracing::debug!(bb = ?bb, "type_goto");
         let bty = self.bcx.basic_block_ty(bb);
         let expected_args: IndexVec<_, _> = bty
             .as_ref()
             .params
             .iter_enumerated()
             .map(|(param_idx, rty)| {
-                // TODO: should we cover "to_sort" ness in relate_* methods or here?
-                if rty.ty.to_sort().is_some() {
-                    let arg_local = bty.local_of_param(param_idx).unwrap();
+                if let Some(arg_local) = bty.local_of_param(param_idx) {
                     let (sty, term) = self.env.local_type(arg_local);
-                    rty::RefinedType::refined_with_term(sty, term)
+                    // TODO: should we cover "to_sort" ness in relate_* methods or here?
+                    if rty.ty.to_sort().is_some() {
+                        rty::RefinedType::refined_with_term(sty, term)
+                    } else {
+                        rty::RefinedType::unrefined(sty).vacuous()
+                    }
                 } else {
                     rty::RefinedType::unrefined(rty.ty.clone()).vacuous()
                 }
@@ -482,16 +524,19 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     ) where
         I: IntoIterator<Item = Operand<'tcx>>,
     {
-        let def_id = match func.const_fn_def() {
+        // TODO: handle const_fn_def on Env side
+        let func_ty = match func.const_fn_def() {
             Some((def_id, args)) => {
                 if !args.is_empty() {
                     tracing::warn!(?args, ?def_id, "generic args ignored");
                 }
-                def_id
+                self.rcx().def_ty(def_id).expect("unknown def").ty.clone()
             }
-            _ => unimplemented!(),
+            _ => {
+                let (ty, _) = self.env.operand_type(func.clone());
+                ty
+            }
         };
-        let func_ty = self.rcx().def_ty(def_id).expect("unknown def").ty.clone();
         let expected_args: IndexVec<_, _> = args
             .into_iter()
             .map(|op| self.operand_refined_type(op))
@@ -507,8 +552,10 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     pub fn assign_to_local<'tcx>(&mut self, local: Local, rvalue: Rvalue<'tcx>) {
         let (_local_ty, local_term) = self.env.local_type(local);
         let (_rvalue_ty, rvalue_term) = self.rvalue_type(rvalue);
-        self.env
-            .assume(local_term.mut_final().equal_to(rvalue_term));
+        if let Some(rvalue_term) = rvalue_term {
+            self.env
+                .assume(local_term.mut_final().equal_to(rvalue_term));
+        }
     }
 
     pub fn drop_local(&mut self, local: Local) {

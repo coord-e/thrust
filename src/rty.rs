@@ -260,12 +260,20 @@ impl Type {
         Type::Never
     }
 
+    pub fn function(ty: FunctionType) -> Self {
+        Type::Function(ty)
+    }
+
     pub fn deref(self) -> Type {
         if let Type::Pointer(ty) = self {
             *ty.elem
         } else {
             panic!("invalid deref");
         }
+    }
+
+    pub fn is_unit(&self) -> bool {
+        matches!(self, Type::Unit)
     }
 
     pub fn as_function(&self) -> Option<&FunctionType> {
