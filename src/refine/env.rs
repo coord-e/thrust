@@ -63,7 +63,7 @@ impl Var {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MutLocalBinding {
+enum FlowLocalBinding {
     Mut(TempVarIdx, TempVarIdx),
     Box(TempVarIdx),
 }
@@ -74,8 +74,7 @@ pub struct Env {
     tmp_vars: IndexVec<TempVarIdx, rty::Type>,
     unbound_assumptions: Vec<chc::Atom<Var>>,
 
-    // TODO: change this to flow_locals
-    mut_locals: HashMap<Local, MutLocalBinding>,
+    flow_locals: HashMap<Local, FlowLocalBinding>,
 }
 
 impl Env {
@@ -90,7 +89,8 @@ impl Env {
             rty::RefinedTypeVar::Free(v) => chc::Term::var(v),
         });
         self.assume(assumption);
-        self.mut_locals.insert(local, MutLocalBinding::Box(current));
+        self.flow_locals
+            .insert(local, FlowLocalBinding::Box(current));
     }
 
     fn bind_mut(&mut self, local: Local, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
@@ -104,8 +104,8 @@ impl Env {
             rty::RefinedTypeVar::Free(v) => chc::Term::var(v),
         });
         self.assume(assumption);
-        self.mut_locals
-            .insert(local, MutLocalBinding::Mut(current, final_));
+        self.flow_locals
+            .insert(local, FlowLocalBinding::Mut(current, final_));
     }
 
     pub fn bind(&mut self, local: Local, rty: rty::RefinedType<Var>) {
@@ -163,13 +163,13 @@ impl Env {
     }
 
     pub fn contains_local(&self, local: Local) -> bool {
-        self.locals.contains_key(&local) || self.mut_locals.contains_key(&local)
+        self.locals.contains_key(&local) || self.flow_locals.contains_key(&local)
     }
 
     pub fn local_type(&self, local: Local) -> (rty::Type, chc::Term<Var>) {
         // TODO: should this driven by type?
-        match self.mut_locals.get(&local).copied() {
-            Some(MutLocalBinding::Mut(current, final_)) => {
+        match self.flow_locals.get(&local).copied() {
+            Some(FlowLocalBinding::Mut(current, final_)) => {
                 let inner_ty = self.tmp_vars[current].clone();
                 let term = chc::Term::mut_(
                     chc::Term::var(current.into()),
@@ -177,7 +177,7 @@ impl Env {
                 );
                 (rty::PointerType::mut_to(inner_ty).into(), term)
             }
-            Some(MutLocalBinding::Box(current)) => {
+            Some(FlowLocalBinding::Box(current)) => {
                 let inner_ty = self.tmp_vars[current].clone();
                 let term = chc::Term::box_(chc::Term::var(current.into()));
                 (rty::PointerType::own(inner_ty).into(), term)
@@ -240,10 +240,10 @@ impl Env {
         local: Local,
         prophecy_var: TempVarIdx,
     ) -> (rty::Type, chc::Term<Var>) {
-        match self.mut_locals[&local] {
-            MutLocalBinding::Box(x) => {
-                self.mut_locals
-                    .insert(local, MutLocalBinding::Box(prophecy_var));
+        match self.flow_locals[&local] {
+            FlowLocalBinding::Box(x) => {
+                self.flow_locals
+                    .insert(local, FlowLocalBinding::Box(prophecy_var));
                 let term = chc::Term::mut_(
                     chc::Term::var(x.into()),
                     chc::Term::var(prophecy_var.into()),
@@ -253,9 +253,9 @@ impl Env {
                     term,
                 )
             }
-            MutLocalBinding::Mut(x1, x2) => {
-                self.mut_locals
-                    .insert(local, MutLocalBinding::Mut(prophecy_var, x2));
+            FlowLocalBinding::Mut(x1, x2) => {
+                self.flow_locals
+                    .insert(local, FlowLocalBinding::Mut(prophecy_var, x2));
                 let term = chc::Term::mut_(
                     chc::Term::var(x1.into()),
                     chc::Term::var(prophecy_var.into()),
