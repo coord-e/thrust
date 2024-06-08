@@ -100,6 +100,10 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         self.bcx.rcx_mut()
     }
 
+    pub fn is_mut_local(&self, local: Local) -> bool {
+        self.mut_locals.contains(&local)
+    }
+
     pub fn mir_refined_ty(&mut self, ty: mir_ty::Ty<'_>) -> rty::RefinedType<Var> {
         let ty = self.rcx_mut().mir_ty(ty);
         let mut builder = rty::TemplateBuilder::default();

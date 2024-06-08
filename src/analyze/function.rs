@@ -39,7 +39,12 @@ impl<'tcx> ReborrowVisitor<'_, 'tcx, '_, '_> {
         let ty = mir_ty::Ty::new_mut_ref(self.tcx, r, inner_ty);
         let decl = mir::LocalDecl::new(ty, self.local_decls[local].source_info.span);
         let new_local = self.local_decls.push(decl);
-        let new_local_ty = self.ecx.borrow_local_(local, inner_ty);
+        let place = if self.ecx.is_mut_local(local) {
+            mir::Place::from(local).project_deeper(&[mir::PlaceElem::Deref], self.tcx)
+        } else {
+            local.into()
+        };
+        let new_local_ty = self.ecx.borrow_place_(place, inner_ty);
         self.ecx
             .bind_local(new_local, new_local_ty, mir::Mutability::Not);
         tracing::info!(old_local = ?local, ?new_local, "implicitly reborrowed");
