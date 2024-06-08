@@ -9,6 +9,24 @@ use crate::error::Result;
 use crate::refine::{BasicBlockType, RefineBasicBlockCtxt, RefineBodyCtxt, RefineCtxt};
 use crate::rty::{FunctionType, PointerType};
 
+struct RenameLocalVisitor<'tcx> {
+    from: Local,
+    to: Local,
+    tcx: TyCtxt<'tcx>,
+}
+
+impl<'tcx> mir::visit::MutVisitor<'tcx> for RenameLocalVisitor<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn visit_local(&mut self, local: &mut Local, _: mir::visit::PlaceContext, _: mir::Location) {
+        if *local == self.from {
+            *local = self.to;
+        }
+    }
+}
+
 struct ReborrowVisitor<'a, 'tcx, 'rcx, 'bcx> {
     tcx: TyCtxt<'tcx>,
     ecx: &'a mut RefineBasicBlockCtxt<'rcx, 'bcx>,
@@ -50,10 +68,18 @@ impl<'a, 'tcx, 'rcx, 'bcx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 
             return;
         };
 
-        place.local = self.insert_reborrow(place.local, *inner_ty);
+        let new_local = self.insert_reborrow(place.local, *inner_ty);
+        RenameLocalVisitor {
+            from: place.local,
+            to: new_local,
+            tcx: self.tcx,
+        }
+        .visit_rvalue(rvalue, location);
+        place.local = new_local;
         self.super_assign(place, rvalue, location);
     }
 
+    // TODO: is it always true that the operand is not referred again in rvalue
     fn visit_operand(&mut self, operand: &mut mir::Operand<'tcx>, location: mir::Location) {
         let Some(p) = operand.place() else {
             self.super_operand(operand, location);
