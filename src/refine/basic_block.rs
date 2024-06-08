@@ -446,6 +446,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
             negations.push(discr_term.clone().not_equal_to(target_term));
         }
         self.with_assumptions(negations, |ecx| {
+            callback(ecx, targets.otherwise());
             ecx.type_goto(targets.otherwise(), expected_ret);
         });
     }
