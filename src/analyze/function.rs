@@ -211,6 +211,7 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
             let live_locals_after_terminator = results.get().clone();
 
             use rustc_data_structures::graph::WithSuccessors as _;
+            let mut ins = BitSet::new_empty(self.body.local_decls.len());
             for succ_bb in self.body.basic_blocks.successors(bb) {
                 let edge_drops = {
                     let mut t = live_locals_after_terminator.clone();
@@ -218,9 +219,13 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
                     t
                 };
                 after_terminator.insert(succ_bb, edge_drops);
+                ins.union(&bb_ins[&succ_bb]);
             }
 
-            let mut last_live_locals = live_locals_after_terminator;
+            tracing::debug!(?live_locals_after_terminator, ?ins);
+            // FIXME: isn't it appropriate to use live_locals_after_terminator here? but it lacks
+            //        some locals from successor ins...
+            let mut last_live_locals = ins;
             // TODO: we may use seek_before_primary_effect here
             for statement_index in (0..=data.statements.len()).rev() {
                 let loc = mir::Location {
@@ -229,6 +234,7 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
                 };
                 results.seek_after_primary_effect(loc);
                 let live_locals = results.get().clone();
+                tracing::debug!(?live_locals, ?loc);
                 after_statements[statement_index] = {
                     let mut t = live_locals.clone();
                     if let Some(def) = def_local(data.visitable(statement_index)) {
