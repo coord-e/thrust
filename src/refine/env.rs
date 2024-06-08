@@ -103,7 +103,7 @@ impl Env {
             ),
             rty::RefinedTypeVar::Free(v) => chc::Term::var(v),
         });
-        self.unbound_assumptions.push(assumption);
+        self.assume(assumption);
         self.mut_locals
             .insert(local, MutLocalBinding::Mut(current, final_));
     }
@@ -253,7 +253,18 @@ impl Env {
                     term,
                 )
             }
-            MutLocalBinding::Mut { .. } => unimplemented!("reborrow"),
+            MutLocalBinding::Mut(x1, x2) => {
+                self.mut_locals
+                    .insert(local, MutLocalBinding::Mut(prophecy_var, x2));
+                let term = chc::Term::mut_(
+                    chc::Term::var(x1.into()),
+                    chc::Term::var(prophecy_var.into()),
+                );
+                (
+                    rty::PointerType::mut_to(self.tmp_vars[x1].clone()).into(),
+                    term,
+                )
+            }
         }
     }
 }
