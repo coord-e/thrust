@@ -448,8 +448,14 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
             self.type_basic_block(bb, &rty)?;
         }
 
+        let mut_locals = self
+            .body
+            .local_decls
+            .iter_enumerated()
+            .filter_map(|(local, decl)| decl.mutability.is_mut().then_some(local))
+            .collect();
         let mut ecx = self.bcx.basic_block_ctxt();
-        let ret = ecx.bind_params(expected.clone());
+        let ret = ecx.bind_params(expected.clone(), mut_locals);
         ecx.type_goto(mir::START_BLOCK, &ret);
 
         Ok(())

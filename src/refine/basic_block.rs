@@ -145,17 +145,40 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     }
 
     // TODO: reconsider API
-    pub fn bind_params(&mut self, ty: rty::FunctionType) -> rty::RefinedType<Var> {
+    pub fn bind_params(
+        &mut self,
+        ty: rty::FunctionType,
+        mut_locals: HashSet<Local>,
+    ) -> rty::RefinedType<Var> {
         let subst_var_fn = |env: &Env, idx| {
             // TODO: this would be broken when we turned args mutually-referenced...
-            let (_, term) = env.local_type(super::local_of_function_param(idx));
-            term
+            let local = super::local_of_function_param(idx);
+            let (_, term) = env.local_type(local);
+            if mut_locals.contains(&local) {
+                term.box_current()
+            } else {
+                term
+            }
         };
         for (param_idx, param_rty) in ty.params.into_iter_enumerated() {
-            self.env.bind(
-                super::local_of_function_param(param_idx),
-                param_rty.subst_var(|idx| subst_var_fn(&self.env, idx)),
-            );
+            let local = super::local_of_function_param(param_idx);
+            let rty = if mut_locals.contains(&local) {
+                self.mut_locals.insert(local);
+                rty::RefinedType::new(
+                    rty::PointerType::own(param_rty.ty).into(),
+                    param_rty.refinement.subst_var(|v| match v {
+                        rty::RefinedTypeVar::Value => {
+                            chc::Term::box_current(chc::Term::var(rty::RefinedTypeVar::Value))
+                        }
+                        rty::RefinedTypeVar::Free(idx) => {
+                            subst_var_fn(&self.env, idx).map_var(rty::RefinedTypeVar::Free)
+                        }
+                    }),
+                )
+            } else {
+                param_rty.subst_var(|idx| subst_var_fn(&self.env, idx))
+            };
+            self.env.bind(local, rty);
         }
         ty.ret.subst_var(|idx| subst_var_fn(&self.env, idx))
     }
