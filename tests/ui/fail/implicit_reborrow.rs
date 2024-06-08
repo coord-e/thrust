@@ -1,4 +1,4 @@
-//@error-in-other-file: verification error
+//@error-in-other-file: Unsat
 
 fn set(m: &mut i64) {
     *m = 1;
