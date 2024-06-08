@@ -2,27 +2,35 @@ use std::collections::HashMap;
 
 use rustc_hir::lang_items::LangItem;
 use rustc_index::{bit_set::BitSet, IndexVec};
-use rustc_middle::mir::{self, BasicBlock, Body, Local};
+use rustc_middle::mir::{self, BasicBlock, Body, Local, Place};
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeAndMut};
 
 use crate::error::Result;
 use crate::refine::{BasicBlockType, RefineBasicBlockCtxt, RefineBodyCtxt, RefineCtxt};
 use crate::rty::{FunctionType, PointerType};
 
-struct RenameLocalVisitor<'tcx> {
+struct ReplaceLocalVisitor<'tcx> {
     from: Local,
-    to: Local,
+    to: Place<'tcx>,
     tcx: TyCtxt<'tcx>,
 }
 
-impl<'tcx> mir::visit::MutVisitor<'tcx> for RenameLocalVisitor<'tcx> {
+impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplaceLocalVisitor<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
 
-    fn visit_local(&mut self, local: &mut Local, _: mir::visit::PlaceContext, _: mir::Location) {
-        if *local == self.from {
-            *local = self.to;
+    fn visit_place(
+        &mut self,
+        place: &mut Place<'tcx>,
+        _: mir::visit::PlaceContext,
+        _: mir::Location,
+    ) {
+        if place.local == self.from {
+            place.local = self.to.local;
+            place.projection = self
+                .tcx
+                .mk_place_elems_from_iter(self.to.projection.iter().chain(place.projection));
         }
     }
 }
@@ -34,6 +42,18 @@ struct ReborrowVisitor<'a, 'tcx, 'rcx, 'bcx> {
 }
 
 impl<'tcx> ReborrowVisitor<'_, 'tcx, '_, '_> {
+    fn insert_borrow(&mut self, local: Local, inner_ty: mir_ty::Ty<'tcx>) -> Local {
+        let r = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
+        let ty = mir_ty::Ty::new_mut_ref(self.tcx, r, inner_ty);
+        let decl = mir::LocalDecl::new(ty, self.local_decls[local].source_info.span);
+        let new_local = self.local_decls.push(decl);
+        let new_local_ty = self.ecx.borrow_place_(local.into(), inner_ty);
+        self.ecx
+            .bind_local(new_local, new_local_ty, mir::Mutability::Not);
+        tracing::info!(old_local = ?local, ?new_local, "implicitly borrowed");
+        new_local
+    }
+
     fn insert_reborrow(&mut self, local: Local, inner_ty: mir_ty::Ty<'tcx>) -> Local {
         let r = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
         let ty = mir_ty::Ty::new_mut_ref(self.tcx, r, inner_ty);
@@ -63,6 +83,21 @@ impl<'a, 'tcx, 'rcx, 'bcx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 
         rvalue: &mut mir::Rvalue<'tcx>,
         location: mir::Location,
     ) {
+        if place.projection.is_empty() && self.ecx.is_mut_local(place.local) {
+            let ty = self.local_decls[place.local].ty;
+            let new_local = self.insert_borrow(place.local, ty);
+            let new_place = self.tcx.mk_place_deref(new_local.into());
+            ReplaceLocalVisitor {
+                from: place.local,
+                to: new_place.clone(),
+                tcx: self.tcx,
+            }
+            .visit_rvalue(rvalue, location);
+            *place = new_place;
+            self.super_assign(place, rvalue, location);
+            return;
+        }
+
         if place.projection.as_slice() != &[mir::PlaceElem::Deref] {
             self.super_assign(place, rvalue, location);
             return;
@@ -74,9 +109,9 @@ impl<'a, 'tcx, 'rcx, 'bcx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 
         };
 
         let new_local = self.insert_reborrow(place.local, *inner_ty);
-        RenameLocalVisitor {
+        ReplaceLocalVisitor {
             from: place.local,
-            to: new_local,
+            to: new_local.into(),
             tcx: self.tcx,
         }
         .visit_rvalue(rvalue, location);
