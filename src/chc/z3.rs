@@ -17,7 +17,8 @@ pub fn check_sat(problem: &str) -> Result<(), CheckSatError> {
     let mut file = tempfile::NamedTempFile::new()?;
     write!(file, "{}", smt2)?;
     let output = std::process::Command::new("z3")
-        .args([file.path()])
+        .arg("fp.spacer.global=true")
+        .arg(file.path())
         .output()?;
     drop(file);
     let result = std::str::from_utf8(&output.stdout).unwrap().trim();
