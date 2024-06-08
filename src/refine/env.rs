@@ -60,63 +60,148 @@ impl Var {
     fn color_spec() -> termcolor::ColorSpec {
         termcolor::ColorSpec::new()
     }
+
+    pub fn is_temp(&self) -> bool {
+        matches!(self, Var::Temp(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
-enum FlowLocalBinding {
+enum FlowBinding {
     Mut(TempVarIdx, TempVarIdx),
     Box(TempVarIdx),
+}
+
+impl std::fmt::Display for FlowBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FlowBinding::Mut(current, final_) => write!(f, "mut <{:?}, {:?}>", current, final_),
+            FlowBinding::Box(current) => write!(f, "box <{:?}>", current),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum TempVarBinding {
+    Flow(FlowBinding),
+    Type(rty::RefinedType<Var>),
+}
+
+impl TempVarBinding {
+    fn to_flow(&self) -> Option<FlowBinding> {
+        match self {
+            TempVarBinding::Flow(binding) => Some(*binding),
+            _ => None,
+        }
+    }
+
+    fn as_type(&self) -> Option<&rty::RefinedType<Var>> {
+        match self {
+            TempVarBinding::Type(rty) => Some(rty),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     locals: HashMap<Local, rty::RefinedType<Var>>,
-    tmp_vars: IndexVec<TempVarIdx, rty::Type>,
+    flow_locals: HashMap<Local, FlowBinding>,
+    temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
     unbound_assumptions: Vec<chc::Atom<Var>>,
-
-    flow_locals: HashMap<Local, FlowLocalBinding>,
 }
 
 impl Env {
     pub fn push_temp_var(&mut self, ty: rty::Type) -> TempVarIdx {
-        self.tmp_vars.push(ty)
+        self.temp_vars.push(TempVarBinding::Type(
+            rty::RefinedType::unrefined(ty).vacuous(),
+        ))
     }
 
-    fn bind_own(&mut self, local: Local, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
-        let current = self.push_temp_var(*ty.elem);
-        let assumption = refinement.subst_var(|v| match v {
-            rty::RefinedTypeVar::Value => chc::Term::box_(chc::Term::var(current.into())),
-            rty::RefinedTypeVar::Free(v) => chc::Term::var(v),
+    // when var = Var::Temp(idx), idx must be temp_vars.next_index() in bind_{own,mut,var}
+    fn bind_own(&mut self, var: Var, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
+        // note that the given var is unbound here, so be careful of using indices around temp_vars
+        let current_refinement = refinement.subst_var(|v| match v {
+            rty::RefinedTypeVar::Value => {
+                chc::Term::box_(chc::Term::var(rty::RefinedTypeVar::Value))
+            }
+            rty::RefinedTypeVar::Free(v) => chc::Term::var(rty::RefinedTypeVar::Free(v)),
         });
-        self.assume(assumption);
-        self.flow_locals
-            .insert(local, FlowLocalBinding::Box(current));
+        let current = match var {
+            Var::Local(local) => {
+                let current = self.temp_vars.next_index();
+                self.flow_locals.insert(local, FlowBinding::Box(current));
+                current
+            }
+            Var::Temp(temp) => {
+                // next_index must be `temp`
+                let current = self.temp_vars.next_index() + 1;
+                let binding = FlowBinding::Box(current);
+                assert_eq!(temp, self.temp_vars.push(TempVarBinding::Flow(binding)));
+                current
+            }
+        };
+        self.bind_var(
+            current.into(),
+            rty::RefinedType::new((*ty.elem).into(), current_refinement),
+        );
     }
 
-    fn bind_mut(&mut self, local: Local, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
-        let current = self.push_temp_var(*ty.elem.clone());
-        let final_ = self.push_temp_var(*ty.elem);
-        let assumption = refinement.subst_var(|v| match v {
+    fn bind_mut(&mut self, var: Var, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
+        // note that the given var is unbound here, so be careful of using indices around temp_vars
+        let next_index = self.temp_vars.next_index();
+        let (final_, current) = if var.is_temp() {
+            (next_index + 1, next_index + 2)
+        } else {
+            (next_index, next_index + 1)
+        };
+        let current_refinement = refinement.subst_var(|v| match v {
             rty::RefinedTypeVar::Value => chc::Term::mut_(
-                chc::Term::var(current.into()),
-                chc::Term::var(final_.into()),
+                chc::Term::var(rty::RefinedTypeVar::Value),
+                chc::Term::var(rty::RefinedTypeVar::Free(final_.into())),
             ),
-            rty::RefinedTypeVar::Free(v) => chc::Term::var(v),
+            rty::RefinedTypeVar::Free(v) => chc::Term::var(rty::RefinedTypeVar::Free(v)),
         });
-        self.assume(assumption);
-        self.flow_locals
-            .insert(local, FlowLocalBinding::Mut(current, final_));
+        let binding = FlowBinding::Mut(current, final_);
+        match var {
+            Var::Local(local) => {
+                self.flow_locals.insert(local, binding);
+            }
+            Var::Temp(temp) => {
+                assert_eq!(temp, self.temp_vars.push(TempVarBinding::Flow(binding)));
+            }
+        };
+        assert_eq!(
+            final_,
+            self.temp_vars.push(TempVarBinding::Type(
+                rty::RefinedType::unrefined(*ty.elem.clone()).vacuous()
+            ))
+        );
+        self.bind_var(
+            current.into(),
+            rty::RefinedType::new((*ty.elem).into(), current_refinement),
+        );
+    }
+
+    fn bind_var(&mut self, var: Var, rty: rty::RefinedType<Var>) {
+        match rty.ty {
+            rty::Type::Pointer(ty) if ty.is_own() => self.bind_own(var, ty, rty.refinement),
+            rty::Type::Pointer(ty) if ty.is_mut() => self.bind_mut(var, ty, rty.refinement),
+            _ => match var {
+                Var::Local(local) => {
+                    self.locals.insert(local, rty);
+                }
+                Var::Temp(temp) => {
+                    assert_eq!(temp, self.temp_vars.push(TempVarBinding::Type(rty)));
+                }
+            },
+        }
     }
 
     pub fn bind(&mut self, local: Local, rty: rty::RefinedType<Var>) {
-        tracing::debug!(local = ?local, rty = %rty.display(), "bind");
-        match rty.ty {
-            rty::Type::Pointer(ty) if ty.is_own() => self.bind_own(local, ty, rty.refinement),
-            rty::Type::Pointer(ty) if ty.is_mut() => self.bind_mut(local, ty, rty.refinement),
-            _ => {
-                self.locals.insert(local, rty);
-            }
-        }
+        let rty_disp = rty.clone();
+        self.bind_var(local.into(), rty);
+        tracing::debug!(local = ?local, rty = %rty_disp.display(), term = %self.local_type(local).1.display(), "bind");
     }
 
     pub fn assume(&mut self, assumption: chc::Atom<Var>) {
@@ -134,9 +219,9 @@ impl Env {
             .iter()
             .map(|(local, rty)| (Var::Local(*local), &rty.ty))
             .chain(
-                self.tmp_vars
+                self.temp_vars
                     .iter_enumerated()
-                    .map(|(idx, ty)| (Var::Temp(idx), ty)),
+                    .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), &rty.ty))),
             )
             .filter_map(|(v, ty)| ty.clone().to_sort().map(|sort| (v, sort)))
     }
@@ -144,10 +229,13 @@ impl Env {
     pub fn assumptions(&self) -> impl Iterator<Item = chc::Atom<Var>> + '_ {
         self.locals
             .iter()
-            .filter_map(|(local, rty)| {
-                rty.is_refined()
-                    .then(|| rty.to_free_refinement(|| Var::Local(*local)))
-            })
+            .map(|(local, rty)| (Var::Local(*local), rty))
+            .chain(
+                self.temp_vars
+                    .iter_enumerated()
+                    .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), rty))),
+            )
+            .filter_map(|(var, rty)| rty.is_refined().then(|| rty.to_free_refinement(|| var)))
             .chain(self.unbound_assumptions.iter().cloned())
     }
 
@@ -166,41 +254,56 @@ impl Env {
         self.locals.contains_key(&local) || self.flow_locals.contains_key(&local)
     }
 
-    pub fn local_type(&self, local: Local) -> (rty::Type, chc::Term<Var>) {
-        // TODO: should this driven by type?
-        match self.flow_locals.get(&local).copied() {
-            Some(FlowLocalBinding::Mut(current, final_)) => {
-                let inner_ty = self.tmp_vars[current].clone();
-                let term = chc::Term::mut_(
-                    chc::Term::var(current.into()),
-                    chc::Term::var(final_.into()),
-                );
-                (rty::PointerType::mut_to(inner_ty).into(), term)
+    fn flow_binding(&self, var: Var) -> Option<FlowBinding> {
+        match var {
+            Var::Local(local) => self.flow_locals.get(&local).copied(),
+            Var::Temp(temp) => self.temp_vars[temp].to_flow(),
+        }
+    }
+
+    fn insert_flow_binding(&mut self, var: Var, binding: FlowBinding) {
+        match var {
+            Var::Local(local) => {
+                self.flow_locals.insert(local, binding);
             }
-            Some(FlowLocalBinding::Box(current)) => {
-                let inner_ty = self.tmp_vars[current].clone();
-                let term = chc::Term::box_(chc::Term::var(current.into()));
-                (rty::PointerType::own(inner_ty).into(), term)
-            }
-            None => {
-                let rty = self.locals.get(&local).expect("unbound local");
-                (rty.ty.clone(), chc::Term::var(Var::Local(local)))
+            Var::Temp(temp) => {
+                self.temp_vars[temp] = TempVarBinding::Flow(binding);
             }
         }
     }
 
-    pub fn place_type(&self, place: Place) -> (rty::Type, chc::Term<Var>) {
-        let (inner_ty, inner_term) = self.local_type(place.local);
-        place
-            .projection
-            .iter()
-            .fold((inner_ty, inner_term), |(ty, term), proj| {
-                if !matches!(proj, PlaceElem::Deref) {
-                    unimplemented!();
-                }
-                let ty = ty.into_pointer().unwrap();
-                (*ty.elem, ty.kind.deref_term(term))
-            })
+    fn var(&self, var: Var) -> Option<&rty::RefinedType<Var>> {
+        match var {
+            Var::Local(local) => self.locals.get(&local),
+            Var::Temp(temp) => self.temp_vars[temp].as_type(),
+        }
+    }
+
+    fn var_type(&self, var: Var) -> (rty::Type, chc::Term<Var>) {
+        // TODO: should this driven by type as the rule does?
+        match self.flow_binding(var) {
+            Some(FlowBinding::Box(current)) => {
+                let (current_ty, current_term) = self.var_type(current.into());
+                let term = chc::Term::box_(current_term);
+                (rty::PointerType::own(current_ty).into(), term)
+            }
+            Some(FlowBinding::Mut(current, final_)) => {
+                let (current_ty, current_term) = self.var_type(current.into());
+                let (_final_ty, final_term) = self.var_type(final_.into());
+                // TODO: check current_ty = final_ty
+
+                let term = chc::Term::mut_(current_term, final_term);
+                (rty::PointerType::mut_to(current_ty).into(), term)
+            }
+            None => {
+                let rty = self.var(var).expect("unbound var");
+                (rty.ty.clone(), chc::Term::var(var))
+            }
+        }
+    }
+
+    pub fn local_type(&self, local: Local) -> (rty::Type, chc::Term<Var>) {
+        self.var_type(local.into())
     }
 
     pub fn operand_type(&self, operand: Operand<'_>) -> (rty::Type, chc::Term<Var>) {
@@ -235,36 +338,109 @@ impl Env {
         }
     }
 
+    fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> (rty::Type, chc::Term<Var>) {
+        match self.flow_binding(var).expect("borrowing unbound var") {
+            FlowBinding::Box(x) => {
+                let (inner_ty, inner_term) = self.var_type(x.into());
+                self.insert_flow_binding(var, FlowBinding::Box(prophecy));
+                let term = chc::Term::mut_(inner_term, chc::Term::var(prophecy.into()));
+                (rty::PointerType::mut_to(inner_ty).into(), term)
+            }
+            FlowBinding::Mut(x1, x2) => {
+                // TODO: check x2 ty
+                let (inner_ty, x1_term) = self.var_type(x1.into());
+                self.insert_flow_binding(var, FlowBinding::Mut(prophecy, x2));
+                let term = chc::Term::mut_(x1_term, chc::Term::var(prophecy.into()));
+                (rty::PointerType::mut_to(inner_ty).into(), term)
+            }
+        }
+    }
+
     pub fn borrow_local(
         &mut self,
         local: Local,
         prophecy_var: TempVarIdx,
     ) -> (rty::Type, chc::Term<Var>) {
-        match self.flow_locals[&local] {
-            FlowLocalBinding::Box(x) => {
-                self.flow_locals
-                    .insert(local, FlowLocalBinding::Box(prophecy_var));
-                let term = chc::Term::mut_(
-                    chc::Term::var(x.into()),
-                    chc::Term::var(prophecy_var.into()),
-                );
-                (
-                    rty::PointerType::mut_to(self.tmp_vars[x].clone()).into(),
-                    term,
-                )
+        self.borrow_var(local.into(), prophecy_var)
+    }
+
+    fn locate_place(&self, place: Place<'_>) -> Var {
+        let mut var = place.local.into();
+
+        for elem in place.projection {
+            if !matches!(elem, PlaceElem::Deref) {
+                unimplemented!();
             }
-            FlowLocalBinding::Mut(x1, x2) => {
-                self.flow_locals
-                    .insert(local, FlowLocalBinding::Mut(prophecy_var, x2));
-                let term = chc::Term::mut_(
-                    chc::Term::var(x1.into()),
-                    chc::Term::var(prophecy_var.into()),
-                );
-                (
-                    rty::PointerType::mut_to(self.tmp_vars[x1].clone()).into(),
-                    term,
-                )
+
+            var = match self.flow_binding(var).expect("deref unbound var") {
+                FlowBinding::Box(x) => x.into(),
+                FlowBinding::Mut(x, _) => x.into(),
+            };
+        }
+
+        var
+    }
+
+    pub fn borrow_place(
+        &mut self,
+        place: Place<'_>,
+        prophecy_var: TempVarIdx,
+    ) -> (rty::Type, chc::Term<Var>) {
+        let var = self.locate_place(place);
+        self.borrow_var(var, prophecy_var)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Path {
+    Local(Local),
+    Deref(Box<Path>),
+}
+
+impl<'tcx> From<Place<'tcx>> for Path {
+    fn from(place: Place<'tcx>) -> Self {
+        place
+            .projection
+            .into_iter()
+            .fold(Path::Local(place.local), |path, elem| match elem {
+                PlaceElem::Deref => Path::Deref(Box::new(path)),
+                _ => unimplemented!(),
+            })
+    }
+}
+
+impl Path {
+    fn deref(self) -> Self {
+        Path::Deref(Box::new(self))
+    }
+}
+
+impl Env {
+    fn path_type(&self, path: &Path) -> (rty::Type, chc::Term<Var>) {
+        match path {
+            Path::Local(local) => self.local_type(*local),
+            Path::Deref(path) => {
+                let (ty, term) = self.path_type(path);
+                let ty = ty.into_pointer().unwrap();
+                (*ty.elem, ty.kind.deref_term(term))
             }
         }
+    }
+
+    pub fn place_type(&self, place: Place) -> (rty::Type, chc::Term<Var>) {
+        self.path_type(&place.into())
+    }
+
+    fn drop_path(&mut self, path: &Path) {
+        let (ty, term) = self.path_type(path);
+        if ty.is_mut() {
+            self.assume(term.clone().mut_final().equal_to(term.mut_current()));
+        } else if ty.is_own() {
+            self.drop_path(&path.clone().deref())
+        }
+    }
+
+    pub fn drop_local(&mut self, local: Local) {
+        self.drop_path(&Path::Local(local))
     }
 }

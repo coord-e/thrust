@@ -484,11 +484,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     }
 
     pub fn drop_local(&mut self, local: Local) {
-        let (ty, term) = self.env.local_type(local);
-        if ty.is_mut() {
-            self.env
-                .assume(term.clone().mut_final().equal_to(term.mut_current()));
-        }
+        self.env.drop_local(local);
     }
 
     pub fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'_>) {
@@ -504,10 +500,14 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         rty::RefinedType::refined_with_term(ty, term)
     }
 
-    pub fn borrow_local_(&mut self, local: Local, ty: mir_ty::Ty<'_>) -> rty::RefinedType<Var> {
-        let ty = self.rcx_mut().mir_ty(ty);
-        let temp_var = self.env.push_temp_var(ty);
-        let (ty, term) = self.env.borrow_local(local, temp_var);
+    pub fn borrow_place_<'tcx>(
+        &mut self,
+        place: mir::Place<'tcx>,
+        prophecy_ty: mir_ty::Ty<'tcx>,
+    ) -> rty::RefinedType<Var> {
+        let prophecy_ty = self.rcx_mut().mir_ty(prophecy_ty);
+        let prophecy = self.env.push_temp_var(prophecy_ty);
+        let (ty, term) = self.env.borrow_place(place, prophecy);
         rty::RefinedType::refined_with_term(ty, term)
     }
 }
