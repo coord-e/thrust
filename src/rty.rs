@@ -282,6 +282,13 @@ impl Type {
         }
     }
 
+    pub fn is_mut(&self) -> bool {
+        match self {
+            Type::Pointer(ty) => ty.is_mut(),
+            _ => false,
+        }
+    }
+
     // XXX: this is something like 'logically meaningful to reason about'
     // and better naming is needed
     pub fn to_sort(&self) -> Option<chc::Sort> {

@@ -74,22 +74,11 @@ pub struct Env {
     tmp_vars: IndexVec<TempVarIdx, rty::Type>,
     unbound_assumptions: Vec<chc::Atom<Var>>,
 
+    // TODO: change this to flow_locals
     mut_locals: HashMap<Local, MutLocalBinding>,
 }
 
 impl Env {
-    pub fn clone_with_assumptions(&self, assumptions: Vec<chc::Atom<Var>>) -> Self {
-        let mut env = self.clone();
-        env.unbound_assumptions.extend(assumptions);
-        env
-    }
-
-    pub fn clone_with_assumption(&self, assumption: chc::Atom<Var>) -> Self {
-        let mut env = self.clone();
-        env.unbound_assumptions.push(assumption);
-        env
-    }
-
     pub fn push_temp_var(&mut self, ty: rty::Type) -> TempVarIdx {
         self.tmp_vars.push(ty)
     }
@@ -100,7 +89,7 @@ impl Env {
             rty::RefinedTypeVar::Value => chc::Term::box_(chc::Term::var(current.into())),
             rty::RefinedTypeVar::Free(v) => chc::Term::var(v),
         });
-        self.unbound_assumptions.push(assumption);
+        self.assume(assumption);
         self.mut_locals.insert(local, MutLocalBinding::Box(current));
     }
 
@@ -133,6 +122,10 @@ impl Env {
     pub fn assume(&mut self, assumption: chc::Atom<Var>) {
         tracing::debug!(assumption = %assumption.display(), "assume");
         self.unbound_assumptions.push(assumption);
+    }
+
+    pub fn extend_assumptions(&mut self, assumptions: Vec<chc::Atom<Var>>) {
+        self.unbound_assumptions.extend(assumptions);
     }
 
     pub fn dependencies(&self) -> impl Iterator<Item = (Var, chc::Sort)> + '_ {

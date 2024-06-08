@@ -396,36 +396,37 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         self.relate_fn_sub_type(bty.to_function_ty(), expected_args, expected_ret.clone());
     }
 
-    fn with_assumptions<'a>(
-        &'a mut self,
-        assumptions: Vec<chc::Atom<Var>>,
-    ) -> RefineBasicBlockCtxt<'rcx, 'a> {
-        RefineBasicBlockCtxt {
-            bcx: self.bcx,
-            env: self.env.clone_with_assumptions(assumptions),
-            prophecy_vars: self.prophecy_vars.clone(),
-            mut_locals: self.mut_locals.clone(),
-        }
+    fn with_assumptions<F, T>(&mut self, assumptions: Vec<chc::Atom<Var>>, callback: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        let old_env = self.env.clone();
+        self.env.extend_assumptions(assumptions);
+        let result = callback(self);
+        self.env = old_env;
+        result
     }
 
-    fn with_assumption<'a>(
-        &'a mut self,
-        assumption: chc::Atom<Var>,
-    ) -> RefineBasicBlockCtxt<'rcx, 'a> {
-        RefineBasicBlockCtxt {
-            bcx: self.bcx,
-            env: self.env.clone_with_assumption(assumption),
-            prophecy_vars: self.prophecy_vars.clone(),
-            mut_locals: self.mut_locals.clone(),
-        }
+    fn with_assumption<F, T>(&mut self, assumption: chc::Atom<Var>, callback: F) -> T
+    where
+        F: FnOnce(&mut Self) -> T,
+    {
+        let old_env = self.env.clone();
+        self.env.assume(assumption);
+        let result = callback(self);
+        self.env = old_env;
+        result
     }
 
-    pub fn type_switch_int(
+    pub fn type_switch_int<F>(
         &mut self,
         discr: Operand<'_>,
         targets: mir::SwitchTargets,
         expected_ret: &rty::RefinedType<Var>,
-    ) {
+        mut callback: F,
+    ) where
+        F: FnMut(&mut Self, BasicBlock),
+    {
         let (discr_ty, discr_term) = self.operand_type(discr);
         let mut negations = Vec::new();
         for (val, bb) in targets.iter() {
@@ -436,12 +437,15 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
                 (n, rty::Type::Int) => chc::Term::int(n),
                 _ => unimplemented!(),
             };
-            let mut ecx = self.with_assumption(discr_term.clone().equal_to(target_term.clone()));
-            ecx.type_goto(bb, expected_ret);
+            self.with_assumption(discr_term.clone().equal_to(target_term.clone()), |ecx| {
+                callback(ecx, bb);
+                ecx.type_goto(bb, expected_ret);
+            });
             negations.push(discr_term.clone().not_equal_to(target_term));
         }
-        let mut ecx = self.with_assumptions(negations);
-        ecx.type_goto(targets.otherwise(), expected_ret);
+        self.with_assumptions(negations, |ecx| {
+            ecx.type_goto(targets.otherwise(), expected_ret);
+        });
     }
 
     pub fn type_call<'tcx, I>(
@@ -474,11 +478,19 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
     }
 
     // TODO: move most of this to Env
-    pub fn assign_to_local<'tcx>(&mut self, local: Local, operand: Operand<'tcx>) {
+    pub fn assign_to_local<'tcx>(&mut self, local: Local, rvalue: Rvalue<'tcx>) {
         let (_local_ty, local_term) = self.env.local_type(local);
-        let (_operand_ty, operand_term) = self.operand_type(operand);
+        let (_rvalue_ty, rvalue_term) = self.rvalue_type(rvalue);
         self.env
-            .assume(local_term.mut_final().equal_to(operand_term))
+            .assume(local_term.mut_final().equal_to(rvalue_term));
+    }
+
+    pub fn drop_local(&mut self, local: Local) {
+        let (ty, term) = self.env.local_type(local);
+        if ty.is_mut() {
+            self.env
+                .assume(term.clone().mut_final().equal_to(term.mut_current()));
+        }
     }
 
     pub fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'_>) {
@@ -490,6 +502,13 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
 
     pub fn borrow_local(&mut self, statement_index: usize, local: Local) -> rty::RefinedType<Var> {
         let temp_var = self.prophecy_vars[&statement_index];
+        let (ty, term) = self.env.borrow_local(local, temp_var);
+        rty::RefinedType::refined_with_term(ty, term)
+    }
+
+    pub fn borrow_local_(&mut self, local: Local, ty: mir_ty::Ty<'_>) -> rty::RefinedType<Var> {
+        let ty = self.rcx_mut().mir_ty(ty);
+        let temp_var = self.env.push_temp_var(ty);
         let (ty, term) = self.env.borrow_local(local, temp_var);
         rty::RefinedType::refined_with_term(ty, term)
     }
