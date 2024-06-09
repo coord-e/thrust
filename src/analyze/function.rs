@@ -248,6 +248,10 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
             use rustc_data_structures::graph::WithSuccessors as _;
             let mut ins = BitSet::new_empty(self.body.local_decls.len());
             for succ_bb in self.body.basic_blocks.successors(bb) {
+                if !bb_ins.contains_key(&succ_bb) {
+                    results.seek_to_block_start(succ_bb);
+                    bb_ins.insert(succ_bb, results.get().clone());
+                }
                 let edge_drops = {
                     let mut t = live_locals_after_terminator.clone();
                     t.subtract(&bb_ins[&succ_bb]);
