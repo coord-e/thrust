@@ -4,12 +4,12 @@ use rustc_index::IndexVec;
 
 mod clause_builder;
 mod smtlib2;
-mod z3;
+mod solver;
 
 pub use clause_builder::ClauseBuilder;
-pub use z3::CheckSatError;
+pub use solver::{Config, CheckSatError};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
     Int,
     Bool,
@@ -54,6 +54,24 @@ impl Sort {
         match &self {
             Sort::Box(_) | Sort::Mut(_) => self.pretty(allocator).parens(),
             _ => self.pretty(allocator),
+        }
+    }
+
+    fn deref(self) -> Self {
+        match self {
+            Sort::Box(s) => *s,
+            Sort::Mut(s) => *s,
+            _ => panic!("invalid deref"),
+        }
+    }
+
+    fn length(&self) -> usize {
+        match self {
+            Sort::Int => 1,
+            Sort::Bool => 1,
+            Sort::String => 1,
+            Sort::Box(s) => s.length() + 1,
+            Sort::Mut(s) => s.length() + 1,
         }
     }
 
@@ -150,6 +168,20 @@ impl Function {
 
     pub fn is_infix(&self) -> bool {
         self.is_infix
+    }
+
+    fn sort<I>(&self, _args: I) -> Sort where I: IntoIterator<Item = Sort> {
+        match *self {
+            Self::ADD => Sort::int(),
+            Self::SUB => Sort::int(),
+            Self::EQ => Sort::bool(),
+            Self::GE => Sort::bool(),
+            Self::GT => Sort::bool(),
+            Self::LE => Sort::bool(),
+            Self::LT => Sort::bool(),
+            Self::NOT => Sort::bool(),
+            _ => unimplemented!(),
+        }
     }
 
     pub const ADD: Function = Function::infix("+");
@@ -270,6 +302,21 @@ impl<V> Term<V> {
         F: FnMut(V) -> W,
     {
         self.subst_var(|v| Term::Var(f(v)))
+    }
+
+    fn sort<F>(&self, mut var_sort: F) -> Sort where F: FnMut(&V) -> Sort {
+        match self {
+            Term::Var(v) => var_sort(v),
+            Term::Bool(_) => Sort::bool(),
+            Term::Int(_) => Sort::int(),
+            Term::String(_) => Sort::string(),
+            Term::Box(t) => Sort::box_(t.sort(var_sort)),
+            Term::Mut(t, _) => Sort::mut_(t.sort(var_sort)),
+            Term::BoxCurrent(t) => t.sort(var_sort).deref(),
+            Term::MutCurrent(t) => t.sort(var_sort).deref(),
+            Term::MutFinal(t) => t.sort(var_sort).deref(),
+            Term::App(fun, args) => fun.sort(args.iter().map(|t| t.sort(&mut var_sort))),
+        }
     }
 
     pub fn var(v: V) -> Self {
@@ -648,6 +695,12 @@ where
     }
 }
 
+impl Clause {
+    fn term_sort(&self, term: &Term<TermVarIdx>) -> Sort {
+        term.sort(|v| self.vars[*v].clone())
+    }
+}
+
 rustc_index::newtype_index! {
     #[debug_format = "c{}"]
     pub struct ClauseId { }
@@ -670,13 +723,13 @@ impl System {
         smtlib2::System::new(self)
     }
 
-    pub fn solve(&self) -> Result<(), z3::CheckSatError> {
+    pub fn solve(&self) -> Result<(), CheckSatError> {
         let mut f = std::fs::File::create("refinement-analyzer.txt").unwrap();
         for (idx, c) in self.clauses.iter_enumerated() {
             use crate::pretty::PrettyDisplayExt as _;
             use std::io::Write as _;
             write!(f, "{:?}: {}\n", idx, c.display()).unwrap();
         }
-        z3::check_sat(&self.smtlib2().to_string())
+        Config::load_env().check_sat(self.smtlib2())
     }
 }

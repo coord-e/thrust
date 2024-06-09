@@ -1,5 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: REFA_SOLVER_TIMEOUT_SECS=60
 
 #![feature(register_tool)]
 #![register_tool(refa)]
