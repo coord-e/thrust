@@ -73,24 +73,35 @@ impl RefineCtxt {
     where
         I: IntoIterator<Item = mir_ty::TypeAndMut<'tcx>>,
     {
-        let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
+        let param_tys: Vec<_> = params
+            .into_iter()
+            .map(|param_ty| {
+                // elaboration: treat mutabully declared variables as own
+                if param_ty.mutbl.is_mut() {
+                    rty::PointerType::own(self.mir_ty(param_ty.ty)).into()
+                } else {
+                    self.mir_ty(param_ty.ty)
+                }
+            })
+            .collect();
+
         let mut builder = rty::TemplateBuilder::default();
-        for param_ty in params.into_iter() {
-            // elaboration: treat mutabully declared variables as own
-            let param_ty = if param_ty.mutbl.is_mut() {
-                rty::PointerType::own(self.mir_ty(param_ty.ty)).into()
-            } else {
-                self.mir_ty(param_ty.ty)
-            };
+        let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
+        if let Some(param_ty) = param_tys.last() {
+            for param_ty in param_tys.iter().take(param_tys.len() - 1) {
+                let param_idx =
+                    param_rtys.push(rty::RefinedType::unrefined(param_ty.clone()).vacuous());
+                if let Some(param_sort) = param_ty.to_sort() {
+                    builder.add_dependency(param_idx.into(), param_sort);
+                }
+            }
             let tmpl = builder.clone().build(param_ty.clone());
             let param_rty = self.register_template(tmpl);
             let param_idx = param_rtys.push(param_rty);
-
             if let Some(param_sort) = param_ty.to_sort() {
                 builder.add_dependency(param_idx.into(), param_sort);
             }
-        }
-        if param_rtys.is_empty() {
+        } else {
             // elaboration: we need at least one predicate variable in parameter
             let tmpl = builder.clone().build(rty::Type::unit());
             let param_rty = self.register_template(tmpl);
