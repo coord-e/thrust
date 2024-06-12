@@ -358,9 +358,8 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
                 Some((p, rvalue)) if p.projection.len() == 0 && !ecx.is_known_local(p.local) => {
                     // new binding
                     let decl = &local_decls[p.local];
-                    let rty = ecx.mir_refined_ty(decl.ty);
                     // TODO: maybe we should tie them together in ecx
-                    ecx.type_rvalue(rvalue.clone(), &rty);
+                    let rty = ecx.rvalue_refined_type(rvalue.clone());
                     ecx.bind_local(p.local, rty, decl.mutability);
                 }
                 Some((p, rvalue)) if p.projection.as_slice() == &[PlaceElem::Deref] => {
