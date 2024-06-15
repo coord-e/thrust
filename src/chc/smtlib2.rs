@@ -94,22 +94,48 @@ impl<'a> std::fmt::Display for Term<'a> {
             }
             chc::Term::Mut(t1, t2) => {
                 let s = self.clause.term_sort(t1);
-                write!(f, "(mut_{} {} {})", Sort::new(&s), Term::new(self.clause, t1), Term::new(self.clause, t2))
-            },
+                write!(
+                    f,
+                    "(mut_{} {} {})",
+                    Sort::new(&s),
+                    Term::new(self.clause, t1),
+                    Term::new(self.clause, t2)
+                )
+            }
             chc::Term::BoxCurrent(t) => {
                 let s = self.clause.term_sort(t).deref();
-                write!(f, "(box_current_{} {})", Sort::new(&s), Term::new(self.clause, t))
-            },
+                write!(
+                    f,
+                    "(box_current_{} {})",
+                    Sort::new(&s),
+                    Term::new(self.clause, t)
+                )
+            }
             chc::Term::MutCurrent(t) => {
                 let s = self.clause.term_sort(t).deref();
-                write!(f, "(mut_current_{} {})", Sort::new(&s), Term::new(self.clause, t))
-            },
+                write!(
+                    f,
+                    "(mut_current_{} {})",
+                    Sort::new(&s),
+                    Term::new(self.clause, t)
+                )
+            }
             chc::Term::MutFinal(t) => {
                 let s = self.clause.term_sort(t).deref();
-                write!(f, "(mut_final_{} {})", Sort::new(&s), Term::new(self.clause, t))
-            },
+                write!(
+                    f,
+                    "(mut_final_{} {})",
+                    Sort::new(&s),
+                    Term::new(self.clause, t)
+                )
+            }
             chc::Term::App(fn_, args) => {
-                write!(f, "({} {})", fn_, List::open(args.iter().map(|t| Term::new(self.clause, t))))
+                write!(
+                    f,
+                    "({} {})",
+                    fn_,
+                    List::open(args.iter().map(|t| Term::new(self.clause, t)))
+                )
             }
         }
     }
@@ -222,10 +248,10 @@ impl<'a> std::fmt::Display for System<'a> {
 fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort>) {
     sorts.insert(clause.term_sort(t));
     match t {
-        chc::Term::Var(_) => {},
-        chc::Term::Bool(_) => {},
-        chc::Term::Int(_) => {},
-        chc::Term::String(_) => {},
+        chc::Term::Var(_) => {}
+        chc::Term::Bool(_) => {}
+        chc::Term::Int(_) => {}
+        chc::Term::String(_) => {}
         chc::Term::Box(t) => term_sorts(clause, t, sorts),
         chc::Term::Mut(t1, t2) => {
             term_sorts(clause, t1, sorts);
@@ -234,9 +260,11 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort
         chc::Term::BoxCurrent(t) => term_sorts(clause, t, sorts),
         chc::Term::MutCurrent(t) => term_sorts(clause, t, sorts),
         chc::Term::MutFinal(t) => term_sorts(clause, t, sorts),
-        chc::Term::App(fun, args) => for arg in args {
-            term_sorts(clause, arg, sorts);
-        },
+        chc::Term::App(fun, args) => {
+            for arg in args {
+                term_sorts(clause, arg, sorts);
+            }
+        }
     }
 }
 

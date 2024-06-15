@@ -7,7 +7,7 @@ mod smtlib2;
 mod solver;
 
 pub use clause_builder::ClauseBuilder;
-pub use solver::{Config, CheckSatError};
+pub use solver::{CheckSatError, Config};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
@@ -170,7 +170,10 @@ impl Function {
         self.is_infix
     }
 
-    fn sort<I>(&self, _args: I) -> Sort where I: IntoIterator<Item = Sort> {
+    fn sort<I>(&self, _args: I) -> Sort
+    where
+        I: IntoIterator<Item = Sort>,
+    {
         match *self {
             Self::ADD => Sort::int(),
             Self::SUB => Sort::int(),
@@ -304,7 +307,10 @@ impl<V> Term<V> {
         self.subst_var(|v| Term::Var(f(v)))
     }
 
-    fn sort<F>(&self, mut var_sort: F) -> Sort where F: FnMut(&V) -> Sort {
+    fn sort<F>(&self, mut var_sort: F) -> Sort
+    where
+        F: FnMut(&V) -> Sort,
+    {
         match self {
             Term::Var(v) => var_sort(v),
             Term::Bool(_) => Sort::bool(),

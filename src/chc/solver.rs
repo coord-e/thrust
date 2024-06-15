@@ -55,7 +55,10 @@ impl Config {
         config
     }
 
-    fn wait_solver(&self, mut child: std::process::Child) -> Result<(std::process::Output, std::time::Duration), CheckSatError> {
+    fn wait_solver(
+        &self,
+        mut child: std::process::Child,
+    ) -> Result<(std::process::Output, std::time::Duration), CheckSatError> {
         let start = std::time::Instant::now();
         let deadline = self.timeout.map(|timeout| start + timeout);
         tracing::info!(timeout = ?self.timeout, pid = child.id(), "waiting solver");
@@ -75,7 +78,9 @@ impl Config {
     pub fn check_sat(&self, problem: impl std::fmt::Display) -> Result<(), CheckSatError> {
         use std::io::Write as _;
         let smt2 = format!("{}\n(check-sat)\n", problem);
-        let mut file = tempfile::Builder::new().suffix(".smt2").tempfile_in(&self.temp_dir)?;
+        let mut file = tempfile::Builder::new()
+            .suffix(".smt2")
+            .tempfile_in(&self.temp_dir)?;
         write!(file, "{}", smt2)?;
 
         let child = std::process::Command::new(&self.solver)
@@ -93,7 +98,10 @@ impl Config {
         match stdout.trim() {
             "sat" if output.status.success() => Ok(()),
             "unsat" if output.status.success() => Err(CheckSatError::Unsat),
-            _ => Err(CheckSatError::Error { stdout: stdout.into_owned(), stderr: stderr.into_owned() }),
+            _ => Err(CheckSatError::Error {
+                stdout: stdout.into_owned(),
+                stderr: stderr.into_owned(),
+            }),
         }
     }
 }
