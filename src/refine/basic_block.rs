@@ -9,7 +9,7 @@ use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::rty::{self, ClauseBuilderExt as _};
 
-use super::{Env, RefineBodyCtxt, RefineCtxt, TempVarIdx, Var};
+use super::{Env, RefineBodyCtxt, RefineCtxt, TempVarIdx, TemplateTypeGenerator, Var};
 
 /// `BasicBlockType` is a special case of `FunctionType` whose parameters are
 /// associated with `Local`s.

@@ -5,7 +5,7 @@ use rustc_span::def_id::DefId;
 use crate::annot::{AnnotAtom, AnnotParser};
 use crate::chc;
 use crate::error::Result;
-use crate::refine::RefineCtxt;
+use crate::refine::{RefineCtxt, TemplateTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _, RefinedType};
 
 mod function;

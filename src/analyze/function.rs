@@ -6,7 +6,9 @@ use rustc_middle::mir::{self, BasicBlock, Body, Local, Place};
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeAndMut};
 
 use crate::error::Result;
-use crate::refine::{BasicBlockType, RefineBasicBlockCtxt, RefineBodyCtxt, RefineCtxt};
+use crate::refine::{
+    BasicBlockType, RefineBasicBlockCtxt, RefineBodyCtxt, RefineCtxt, TemplateTypeGenerator,
+};
 use crate::rty::{FunctionType, PointerType};
 
 struct ReplaceLocalVisitor<'tcx> {
