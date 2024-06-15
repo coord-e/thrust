@@ -27,3 +27,6 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 
 [dev-dependencies]
 ui_test = "0.23.0"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
