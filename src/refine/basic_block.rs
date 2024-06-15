@@ -409,7 +409,7 @@ impl<'rcx, 'bcx> RefineBasicBlockCtxt<'rcx, 'bcx> {
         }
     }
 
-    fn rvalue_refined_type(&mut self, rvalue: Rvalue<'_>) -> rty::RefinedType<Var> {
+    pub fn rvalue_refined_type(&mut self, rvalue: Rvalue<'_>) -> rty::RefinedType<Var> {
         let (sty, term) = self.rvalue_type(rvalue);
 
         if let Some(term) = term {
