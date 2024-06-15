@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rustc_hir::lang_items::LangItem;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
@@ -21,12 +23,15 @@ pub struct Analyzer<'tcx> {
     // but will be extended to contain externally known def's refinement types
     // (at least for every defs referenced by local def bodies)
     rcx: RefineCtxt,
+
+    trusted: HashSet<DefId>,
 }
 
 impl<'tcx> Analyzer<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         let rcx = RefineCtxt::default();
-        Self { tcx, rcx }
+        let trusted = HashSet::default();
+        Self { tcx, rcx, trusted }
     }
 
     fn refine_local_defs(&mut self) {
@@ -86,6 +91,15 @@ impl<'tcx> Analyzer<'tcx> {
         }
 
         assert!(require_annot.is_some() == ensure_annot.is_some());
+        if self
+            .tcx
+            .get_attrs_by_path(def_id, &annot::trusted_path())
+            .next()
+            .is_some()
+        {
+            assert!(require_annot.is_some());
+            self.trusted.insert(def_id);
+        }
         if let Some(AnnotAtom::Atom(require)) = require_annot {
             let last_idx = rty.params.last_index().unwrap();
             for (param_idx, param_ty) in rty.params.iter_enumerated_mut() {
@@ -109,6 +123,10 @@ impl<'tcx> Analyzer<'tcx> {
         self.register_known_defs();
 
         for local_def_id in self.tcx.mir_keys(()) {
+            if self.trusted.contains(&local_def_id.to_def_id()) {
+                tracing::info!(?local_def_id, "trusted");
+                continue;
+            }
             let body = self.tcx.optimized_mir(local_def_id.to_def_id());
             let expected = self.rcx.def_ty(local_def_id.to_def_id()).unwrap().clone();
             let _span = tracing::span!(

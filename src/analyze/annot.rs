@@ -13,6 +13,10 @@ pub fn ensures_path() -> [Symbol; 2] {
     [Symbol::intern("refa"), Symbol::intern("ensures")]
 }
 
+pub fn trusted_path() -> [Symbol; 2] {
+    [Symbol::intern("refa"), Symbol::intern("trusted")]
+}
+
 fn ty_to_term_kind(ty: &mir_ty::Ty<'_>) -> annot::TermKind {
     match ty.kind() {
         mir_ty::TyKind::Ref(_, ty, mir_ty::Mutability::Mut) => {
