@@ -369,7 +369,12 @@ impl<'rcx, 'tcx, 'mir> FunctionAnalyzer<'rcx, 'tcx, 'mir> {
                     ecx.assign_to_local(p.local, rvalue.clone());
                 }
                 _ => {
-                    unimplemented!();
+                    if !matches!(
+                        stmt.kind,
+                        mir::StatementKind::StorageLive(_) | mir::StatementKind::StorageDead(_)
+                    ) {
+                        unimplemented!();
+                    }
                 }
             }
             for local in self.drop_points[&bb].after_statements[stmt_idx].iter() {
