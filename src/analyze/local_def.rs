@@ -8,7 +8,7 @@ use rustc_span::def_id::LocalDefId;
 use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{self, BasicBlockType, TemplateTypeGenerator};
+use crate::refine::{BasicBlockType, TemplateTypeGenerator};
 use crate::rty;
 
 fn def_local<'a, 'tcx, T: mir::visit::MirVisitable<'tcx> + ?Sized>(
@@ -47,7 +47,7 @@ pub struct Analyzer<'tcx, 'ctx> {
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn is_mut_param(&self, param_idx: rty::FunctionParamIdx) -> bool {
-        let param_local = refine::local_of_function_param(param_idx);
+        let param_local = analyze::local_of_function_param(param_idx);
         self.body.local_decls[param_local].mutability.is_mut()
     }
 
@@ -214,7 +214,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     }
                     continue;
                 }
-                while refine::local_of_function_param(params.next_index()) != param_local {
+                while analyze::local_of_function_param(params.next_index()) != param_local {
                     tracing::debug!(next_idx = ?params.next_index(), param_local = ?param_local, "elaborate_unused_args");
                     let mock_ty = expected_ty.params[params.next_index()].ty.clone();
                     params.push(rty::RefinedType::unrefined(mock_ty).vacuous());

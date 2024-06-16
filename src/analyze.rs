@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::mir::BasicBlock;
+use rustc_middle::mir::{Local, BasicBlock};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{BasicBlockType, RefineCtxt};
+use crate::refine::{BasicBlockType};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 mod annot;
@@ -15,21 +15,30 @@ mod basic_block;
 mod crate_;
 mod local_def;
 
+pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
+    Local::from(idx.index() + 1)
+}
+
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
 
-    // currently contains only local-def templates,
-    // but will be extended to contain externally known def's refinement types
-    // (at least for every defs referenced by local def bodies)
-    rcx: RefineCtxt,
+    /// Collection of refined known def types.
+    ///
+    /// currently contains only local-def templates,
+    /// but will be extended to contain externally known def's refinement types
+    /// (at least for every defs referenced by local def bodies)
+    defs: HashMap<DefId, rty::RefinedType>,
+
+    /// Resulting CHC system.
+    system: chc::System,
 
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
 }
 
 impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
     fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId {
-        self.rcx.generate_pred_var(pred_sig)
+        self.system.new_pred_var(pred_sig)
     }
 }
 
@@ -98,25 +107,29 @@ impl<'tcx> Analyzer<'tcx> {
 
 impl<'tcx> Analyzer<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        let rcx = RefineCtxt::default();
-        let basic_blocks = HashMap::default();
+        let defs = Default::default();
+        let system = Default::default();
+        let basic_blocks = Default::default();
         Self {
             tcx,
-            rcx,
+            defs,
+            system,
             basic_blocks,
         }
     }
 
     pub fn add_clause(&mut self, clause: chc::Clause) {
-        self.rcx.add_clause(clause);
+        tracing::debug!(clause = %clause.display(), id = ?self.system.clauses.next_index(), "add_clause");
+        self.system.clauses.push(clause);
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
-        self.rcx.register_def(def_id, rty)
+        tracing::debug!(def_id = ?def_id, rty = %rty.display(), "register_def");
+        self.defs.insert(def_id, rty);
     }
 
     pub fn def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
-        self.rcx.def_ty(def_id)
+        self.defs.get(&def_id)
     }
 
     pub fn register_basic_block_ty(
@@ -166,7 +179,7 @@ impl<'tcx> Analyzer<'tcx> {
     }
 
     pub fn solve(&mut self) {
-        if let Err(err) = self.rcx.solve() {
+        if let Err(err) = self.system.solve() {
             self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
     }
