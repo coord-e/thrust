@@ -7,7 +7,7 @@ mod template;
 pub use template::{Template, TemplateBuilder};
 
 mod clause_builder;
-pub use clause_builder::{ClauseBuilderExt, RefinementClauseBuilder};
+pub use clause_builder::ClauseBuilderExt;
 
 rustc_index::newtype_index! {
     #[debug_format = "${}"]

@@ -11,13 +11,10 @@ mod template;
 pub use template::{PredVarGenerator, TemplateTypeGenerator};
 
 mod basic_block;
-pub use basic_block::{BasicBlockType, RefineBasicBlockCtxt};
+pub use basic_block::BasicBlockType;
 
 mod env;
 pub use env::{Env, TempVarIdx, Var};
-
-mod body;
-pub use body::RefineBodyCtxt;
 
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
@@ -57,7 +54,7 @@ impl RefineCtxt {
         self.defs.get(&def_id)
     }
 
-    pub fn body_ctxt(&mut self) -> RefineBodyCtxt<'_> {
-        RefineBodyCtxt::new(self)
+    pub fn solve(&mut self) -> Result<(), chc::CheckSatError> {
+        self.system.solve()
     }
 }

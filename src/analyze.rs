@@ -1,19 +1,19 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use rustc_hir::lang_items::LangItem;
+use rustc_middle::mir::BasicBlock;
 use rustc_middle::ty::TyCtxt;
-use rustc_span::def_id::DefId;
+use rustc_span::def_id::{DefId, LocalDefId};
 
-use crate::annot::{AnnotAtom, AnnotParser};
 use crate::chc;
-use crate::error::Result;
-use crate::refine::{RefineCtxt, TemplateTypeGenerator};
-use crate::rty::{self, ClauseBuilderExt as _, RefinedType};
-
-mod function;
-pub use function::FunctionAnalyzer;
+use crate::pretty::PrettyDisplayExt as _;
+use crate::refine::{BasicBlockType, RefineCtxt};
+use crate::rty::{self, ClauseBuilderExt as _};
 
 mod annot;
+mod basic_block;
+mod crate_;
+mod local_def;
 
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
@@ -24,151 +24,150 @@ pub struct Analyzer<'tcx> {
     // (at least for every defs referenced by local def bodies)
     rcx: RefineCtxt,
 
-    trusted: HashSet<DefId>,
+    basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
+}
+
+impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
+    fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId {
+        self.rcx.generate_pred_var(pred_sig)
+    }
+}
+
+impl<'tcx> Analyzer<'tcx> {
+    fn relate_sub_type(&mut self, got: &rty::Type, expected: &rty::Type) {
+        tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
+
+        match (got, expected) {
+            (rty::Type::Unit, rty::Type::Unit)
+            | (rty::Type::Int, rty::Type::Int)
+            | (rty::Type::Bool, rty::Type::Bool)
+            | (rty::Type::String, rty::Type::String)
+            | (rty::Type::Never, rty::Type::Never) => {}
+            (rty::Type::Pointer(got), rty::Type::Pointer(expected))
+                if got.kind == expected.kind =>
+            {
+                match got.kind {
+                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut) => {
+                        self.relate_sub_type(&got.elem, &expected.elem);
+                    }
+                    rty::PointerKind::Ref(rty::RefKind::Mut) => {
+                        self.relate_equal_type(&got.elem, &expected.elem);
+                    }
+                }
+            }
+            (rty::Type::Function(got), rty::Type::Function(expected)) => {
+                // TODO: check sty and length is equal
+                // TODO: add value_var dependency
+                let mut builder = chc::ClauseBuilder::default();
+                for (param_idx, param_rty) in got.params.iter_enumerated() {
+                    if let Some(sort) = param_rty.ty.to_sort() {
+                        builder.add_mapped_var(param_idx, sort);
+                    }
+                }
+                for (got_ty, expected_ty) in got.params.iter().zip(expected.params.clone()) {
+                    let clause = builder
+                        .clone()
+                        .with_value_var(&got_ty.ty)
+                        .add_body(expected_ty.refinement)
+                        .head(got_ty.refinement.clone());
+                    self.add_clause(clause);
+                    self.relate_sub_type(&expected_ty.ty, &got_ty.ty);
+                }
+                let clause = builder
+                    .with_value_var(&got.ret.ty)
+                    .add_body(got.ret.refinement.clone())
+                    .head(expected.ret.refinement.clone());
+                self.add_clause(clause);
+                self.relate_sub_type(&got.ret.ty, &expected.ret.ty);
+            }
+            _ => panic!(
+                "inconsistent types: got={}, expected={}",
+                got.display(),
+                expected.display()
+            ),
+        }
+    }
+
+    fn relate_equal_type(&mut self, got: &rty::Type, expected: &rty::Type) {
+        tracing::debug!(got = %got.display(), expected = %expected.display(), "equal_type");
+
+        self.relate_sub_type(got, expected);
+        self.relate_sub_type(expected, got);
+    }
 }
 
 impl<'tcx> Analyzer<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         let rcx = RefineCtxt::default();
-        let trusted = HashSet::default();
-        Self { tcx, rcx, trusted }
-    }
-
-    fn refine_local_defs(&mut self) {
-        for local_def_id in self.tcx.mir_keys(()) {
-            self.refine_def(local_def_id.to_def_id());
+        let basic_blocks = HashMap::default();
+        Self {
+            tcx,
+            rcx,
+            basic_blocks,
         }
     }
 
-    fn register_known_defs(&mut self) {
+    pub fn add_clause(&mut self, clause: chc::Clause) {
+        self.rcx.add_clause(clause);
+    }
+
+    pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
+        self.rcx.register_def(def_id, rty)
+    }
+
+    pub fn def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
+        self.rcx.def_ty(def_id)
+    }
+
+    pub fn register_basic_block_ty(
+        &mut self,
+        def_id: LocalDefId,
+        bb: BasicBlock,
+        rty: BasicBlockType,
+    ) {
+        tracing::debug!(def_id = ?def_id, ?bb, rty = %rty.display(), "register_basic_block_ty");
+        self.basic_blocks.entry(def_id).or_default().insert(bb, rty);
+    }
+
+    pub fn basic_block_ty(&self, def_id: LocalDefId, bb: BasicBlock) -> &BasicBlockType {
+        &self.basic_blocks[&def_id][&bb]
+    }
+
+    pub fn register_well_known_defs(&mut self) {
         let panic_ty = {
-            let param = RefinedType::new(
+            let param = rty::RefinedType::new(
                 rty::PointerType::immut_to(rty::Type::string()).into(),
                 rty::Refinement::bottom(),
             );
-            let ret = RefinedType::new(rty::Type::never(), rty::Refinement::bottom());
+            let ret = rty::RefinedType::new(rty::Type::never(), rty::Refinement::bottom());
             rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret)
         };
         let panic_def_id = self.tcx.require_lang_item(LangItem::Panic, None);
-        self.rcx
-            .register_def(panic_def_id, RefinedType::unrefined(panic_ty.into()));
+        self.register_def(panic_def_id, rty::RefinedType::unrefined(panic_ty.into()));
     }
 
-    fn refine_def(&mut self, def_id: DefId) {
-        let sig = self.tcx.fn_sig(def_id);
-        let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
-
-        // TODO: merge this into FunctionTemplateBuilder or something like that
-        let mut rty = self.rcx.mir_function_ty(sig);
-
-        let mut param_resolver = annot::ParamResolver::default();
-        for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).into_iter().zip(sig.inputs()) {
-            param_resolver.push_param(input_ident.name, input_ty);
-        }
-
-        let mut require_annot = None;
-        for require in self.tcx.get_attrs_by_path(def_id, &annot::requires_path()) {
-            let require = AnnotParser::default()
-                .resolver(&param_resolver)
-                .parse(require)
-                .unwrap();
-            if require_annot.is_some() {
-                unimplemented!();
-            }
-            require_annot = Some(require);
-        }
-        let mut ensure_annot = None;
-        for ensure in self.tcx.get_attrs_by_path(def_id, &annot::ensures_path()) {
-            let ensure = AnnotParser::default()
-                .resolver(annot::ResultResolver::new(&sig.output()))
-                .resolver(&param_resolver)
-                .parse(ensure)
-                .unwrap();
-            if ensure_annot.is_some() {
-                unimplemented!();
-            }
-            ensure_annot = Some(ensure);
-        }
-
-        assert!(require_annot.is_some() == ensure_annot.is_some());
-        if self
-            .tcx
-            .get_attrs_by_path(def_id, &annot::trusted_path())
-            .next()
-            .is_some()
-        {
-            assert!(require_annot.is_some());
-            self.trusted.insert(def_id);
-        }
-        if let Some(AnnotAtom::Atom(require)) = require_annot {
-            let last_idx = rty.params.last_index().unwrap();
-            for (param_idx, param_ty) in rty.params.iter_enumerated_mut() {
-                if param_idx == last_idx {
-                    param_ty.refinement = require.clone();
-                } else {
-                    param_ty.refinement = rty::Refinement::top();
-                }
-            }
-        }
-        if let Some(AnnotAtom::Atom(ensure)) = ensure_annot {
-            rty.ret.refinement = ensure;
-        }
-
-        let rty = RefinedType::unrefined(rty.into());
-        self.rcx.register_def(def_id, rty);
+    pub fn crate_analyzer(&mut self) -> crate_::Analyzer<'tcx, '_> {
+        crate_::Analyzer::new(self)
     }
 
-    pub fn run(&mut self) -> Result<()> {
-        self.refine_local_defs();
-        self.register_known_defs();
+    pub fn local_def_analyzer(
+        &mut self,
+        local_def_id: LocalDefId,
+    ) -> local_def::Analyzer<'tcx, '_> {
+        local_def::Analyzer::new(self, local_def_id)
+    }
 
-        for local_def_id in self.tcx.mir_keys(()) {
-            if self.trusted.contains(&local_def_id.to_def_id()) {
-                tracing::info!(?local_def_id, "trusted");
-                continue;
-            }
-            let body = self.tcx.optimized_mir(local_def_id.to_def_id());
-            let expected = self.rcx.def_ty(local_def_id.to_def_id()).unwrap().clone();
-            let _span = tracing::span!(
-                tracing::Level::INFO, "def",
-                def = %self.tcx.def_path_str(local_def_id.to_def_id()),
-            )
-            .entered();
-            if let rty::Type::Function(expected) = expected.ty {
-                FunctionAnalyzer::new(self.tcx, &mut self.rcx, body).run(&expected)?;
-            } else {
-                unimplemented!()
-            }
+    pub fn basic_block_analyzer(
+        &mut self,
+        local_def_id: LocalDefId,
+        bb: BasicBlock,
+    ) -> basic_block::Analyzer<'tcx, '_> {
+        basic_block::Analyzer::new(self, local_def_id, bb)
+    }
+
+    pub fn solve(&mut self) {
+        if let Err(err) = self.rcx.solve() {
+            self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
-
-        if let Some((def_id, _)) = self.tcx.entry_fn(()) {
-            // we want to assert entry function is safe to execute without any assumption
-            // TODO: replace code here with relate_* in Env + Refine context (created with empty env)
-            let entry_ty = self
-                .rcx
-                .def_ty(def_id)
-                .unwrap()
-                .ty
-                .as_function()
-                .unwrap()
-                .clone();
-            let mut builder = chc::ClauseBuilder::default();
-            for (param_idx, param_ty) in entry_ty.params.iter_enumerated() {
-                if let Some(sort) = param_ty.ty.to_sort() {
-                    builder.add_mapped_var(param_idx, sort);
-                }
-            }
-            builder.add_body(chc::Atom::top());
-            for param_ty in entry_ty.params {
-                let clause = builder
-                    .clone()
-                    .with_value_var(&param_ty.ty)
-                    .head(param_ty.refinement);
-                self.rcx.add_clause(clause);
-            }
-        }
-
-        self.rcx.system().solve()?;
-        Ok(())
     }
 }

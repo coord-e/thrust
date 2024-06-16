@@ -17,9 +17,10 @@ impl Callbacks for CompilerCalls {
         queries: &'tcx Queries<'tcx>,
     ) -> Compilation {
         queries.global_ctxt().unwrap().enter(|tcx| {
-            if let Err(err) = refinement_analyzer::Analyzer::new(tcx).run() {
-                tcx.dcx().err(format!("verification error: {:?}", err));
-            }
+            let mut ctx = refinement_analyzer::Analyzer::new(tcx);
+            ctx.register_well_known_defs();
+            ctx.crate_analyzer().run();
+            ctx.solve();
         });
         Compilation::Stop
     }
