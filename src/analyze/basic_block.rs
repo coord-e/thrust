@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use rustc_index::{bit_set::BitSet, IndexVec};
+use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Body, Local, Operand, Rvalue, TerminatorKind};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::LocalDefId;
@@ -11,25 +11,9 @@ use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{BasicBlockType, Env, TempVarIdx, TemplateTypeGenerator, Var};
 use crate::rty::{self, ClauseBuilderExt as _};
 
+mod drop_point;
 mod visitor;
-
-#[derive(Debug, Clone)]
-pub struct DropPoints {
-    pub after_statements: Vec<BitSet<Local>>,
-    pub after_terminator: HashMap<BasicBlock, BitSet<Local>>,
-}
-
-impl DropPoints {
-    pub fn after_statement(&self, statement_index: usize) -> BitSet<Local> {
-        self.after_statements[statement_index].clone()
-    }
-
-    pub fn after_terminator(&self, target: &BasicBlock) -> BitSet<Local> {
-        let mut t = self.after_terminator[target].clone();
-        t.union(self.after_statements.last().unwrap());
-        t
-    }
-}
+pub use drop_point::DropPoints;
 
 pub struct Analyzer<'tcx, 'ctx> {
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
@@ -422,71 +406,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         rty::RefinedType::refined_with_term(ty, term)
     }
 
-    // TODO: remove this
-    fn alloc_prophecies(&mut self) {
-        for (stmt_idx, stmt) in self.body.basic_blocks[self.basic_block]
-            .statements
-            .iter()
-            .enumerate()
-        {
-            if let Some((p, Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, _))) = stmt.kind.as_assign()
-            {
-                if p.projection.len() != 0 {
-                    unimplemented!();
-                }
-                // TODO: is it appropriate to use builtin_deref here... maybe we should handle dereferencing logic in `refine`
-                let inner_ty = self.local_decls[p.local].ty.builtin_deref(true).unwrap().ty;
-                self.add_prophecy_var(stmt_idx, inner_ty);
-            }
-        }
-    }
-}
-
-impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    pub fn new(
-        ctx: &'ctx mut analyze::Analyzer<'tcx>,
-        local_def_id: LocalDefId,
-        basic_block: BasicBlock,
-    ) -> Self {
-        let tcx = ctx.tcx;
-        let drop_points = DropPoints {
-            after_statements: vec![],
-            after_terminator: HashMap::new(),
-        };
-        let body = tcx.optimized_mir(local_def_id.to_def_id());
-        let env = Env::default();
-        let local_decls = body.local_decls.clone();
-        let defined_locals = Default::default();
-        let prophecy_vars = Default::default();
-        Self {
-            ctx,
-            tcx,
-            local_def_id,
-            drop_points,
-            basic_block,
-            body,
-            env,
-            local_decls,
-            defined_locals,
-            prophecy_vars,
-        }
-    }
-
-    pub fn drop_points(&mut self, drop_points: DropPoints) -> &mut Self {
-        self.drop_points = drop_points;
-        self
-    }
-
-    pub fn env(&mut self, env: Env) -> &mut Self {
-        self.env = env;
-        self
-    }
-
-    pub fn run(&mut self, expected: &BasicBlockType) {
-        let expected_ret = self.bind_locals(&expected);
-
-        self.alloc_prophecies();
-
+    fn analyze_statements(&mut self) {
         for (stmt_idx, mut stmt) in self.body.basic_blocks[self.basic_block]
             .statements
             .iter()
@@ -528,7 +448,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.drop_local(local);
             }
         }
+    }
 
+    fn analyze_terminator(&mut self, expected_ret: &rty::RefinedType<Var>) {
         let mut term = self.body.basic_blocks[self.basic_block]
             .terminator()
             .clone();
@@ -581,10 +503,71 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     self.type_goto(*target, &expected_ret);
                 }
             }
-            _ => {
-                tracing::warn!(term = ?term, "skipped");
-                // unimplemented!();
+            _ => unimplemented!("term={:?}", term.kind),
+        }
+    }
+
+    // TODO: remove this
+    fn alloc_prophecies(&mut self) {
+        for (stmt_idx, stmt) in self.body.basic_blocks[self.basic_block]
+            .statements
+            .iter()
+            .enumerate()
+        {
+            if let Some((p, Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, _))) = stmt.kind.as_assign()
+            {
+                if p.projection.len() != 0 {
+                    unimplemented!();
+                }
+                // TODO: is it appropriate to use builtin_deref here... maybe we should handle dereferencing logic in `refine`
+                let inner_ty = self.local_decls[p.local].ty.builtin_deref(true).unwrap().ty;
+                self.add_prophecy_var(stmt_idx, inner_ty);
             }
         }
+    }
+}
+
+impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    pub fn new(
+        ctx: &'ctx mut analyze::Analyzer<'tcx>,
+        local_def_id: LocalDefId,
+        basic_block: BasicBlock,
+    ) -> Self {
+        let tcx = ctx.tcx;
+        let drop_points = DropPoints::default();
+        let body = tcx.optimized_mir(local_def_id.to_def_id());
+        let env = Env::default();
+        let local_decls = body.local_decls.clone();
+        let defined_locals = Default::default();
+        let prophecy_vars = Default::default();
+        Self {
+            ctx,
+            tcx,
+            local_def_id,
+            drop_points,
+            basic_block,
+            body,
+            env,
+            local_decls,
+            defined_locals,
+            prophecy_vars,
+        }
+    }
+
+    pub fn drop_points(&mut self, drop_points: DropPoints) -> &mut Self {
+        self.drop_points = drop_points;
+        self
+    }
+
+    pub fn env(&mut self, env: Env) -> &mut Self {
+        self.env = env;
+        self
+    }
+
+    pub fn run(&mut self, expected: &BasicBlockType) {
+        let expected_ret = self.bind_locals(&expected);
+        self.alloc_prophecies();
+        self.analyze_statements();
+        self.analyze_terminator(&expected_ret);
     }
 }

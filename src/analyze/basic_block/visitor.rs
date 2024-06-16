@@ -161,4 +161,3 @@ impl<'a, 'tcx, 'ctx> ReborrowVisitor<'a, 'tcx, 'ctx> {
         // dummy location
     }
 }
-

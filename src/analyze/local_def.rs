@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use rustc_index::{bit_set::BitSet, IndexVec};
-use rustc_middle::mir::{self, BasicBlock, Body, Local};
+use rustc_index::IndexVec;
+use rustc_middle::mir::{self, BasicBlock, Body};
 use rustc_middle::ty::{TyCtxt, TypeAndMut};
 use rustc_span::def_id::LocalDefId;
 
@@ -10,30 +10,6 @@ use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{BasicBlockType, TemplateTypeGenerator};
 use crate::rty;
-
-fn def_local<'a, 'tcx, T: mir::visit::MirVisitable<'tcx> + ?Sized>(
-    visitable: &'a T,
-) -> Option<Local> {
-    struct Visitor {
-        local: Option<Local>,
-    }
-    impl<'tcx> mir::visit::Visitor<'tcx> for Visitor {
-        fn visit_local(
-            &mut self,
-            local: Local,
-            ctxt: mir::visit::PlaceContext,
-            _location: mir::Location,
-        ) {
-            if ctxt.is_place_assignment() {
-                let old = self.local.replace(local);
-                assert!(old.is_none());
-            }
-        }
-    }
-    let mut visitor = Visitor { local: None };
-    visitable.apply(mir::Location::START, &mut visitor);
-    visitor.local
-}
 
 pub struct Analyzer<'tcx, 'ctx> {
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
@@ -58,71 +34,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iterate_to_fixpoint()
             .into_results_cursor(self.body);
 
-        let mut bb_ins = HashMap::new();
-        for (bb, data) in mir::traversal::postorder(self.body) {
-            let mut after_terminator = HashMap::new();
-            let mut after_statements = Vec::new();
-            after_statements.resize_with(data.statements.len() + 1, || BitSet::new_empty(0));
-
-            results.seek_to_block_end(bb);
-            let live_locals_after_terminator = results.get().clone();
-
-            use rustc_data_structures::graph::WithSuccessors as _;
-            let mut ins = BitSet::new_empty(self.body.local_decls.len());
-            for succ_bb in self.body.basic_blocks.successors(bb) {
-                if !bb_ins.contains_key(&succ_bb) {
-                    results.seek_to_block_start(succ_bb);
-                    bb_ins.insert(succ_bb, results.get().clone());
-                }
-                let edge_drops = {
-                    let mut t = live_locals_after_terminator.clone();
-                    t.subtract(&bb_ins[&succ_bb]);
-                    t
-                };
-                after_terminator.insert(succ_bb, edge_drops);
-                ins.union(&bb_ins[&succ_bb]);
-            }
-
-            tracing::debug!(?live_locals_after_terminator, ?ins);
-            // FIXME: isn't it appropriate to use live_locals_after_terminator here? but it lacks
-            //        some locals from successor ins...
-            let mut last_live_locals = ins;
-            // TODO: we may use seek_before_primary_effect here
-            for statement_index in (0..=data.statements.len()).rev() {
-                let loc = mir::Location {
-                    statement_index,
-                    block: bb,
-                };
-                results.seek_after_primary_effect(loc);
-                let live_locals = results.get().clone();
-                tracing::debug!(?live_locals, ?loc);
-                after_statements[statement_index] = {
-                    let mut t = live_locals.clone();
-                    if let Some(def) = def_local(data.visitable(statement_index)) {
-                        t.insert(def);
-                    }
-                    t.subtract(&last_live_locals);
-                    t
-                };
-                last_live_locals = live_locals;
-            }
-
-            tracing::info!(
-                ?bb,
-                ?after_statements,
-                ?after_terminator,
-                "analyzed implicit drop points"
-            );
-            self.drop_points.insert(
-                bb,
-                analyze::basic_block::DropPoints {
-                    after_statements,
-                    after_terminator,
-                },
-            );
-
-            bb_ins.insert(bb, last_live_locals.clone());
-            let live_locals: Vec<_> = last_live_locals
+        let mut builder = analyze::basic_block::DropPoints::builder(self.body);
+        for (bb, _data) in mir::traversal::postorder(self.body) {
+            self.drop_points.insert(bb, builder.build(&mut results, bb));
+            results.seek_to_block_start(bb);
+            let live_locals: Vec<_> = results
+                .get()
                 .iter()
                 .map(|in_local| {
                     let decl = &self.body.local_decls[in_local];

@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::mir::{Local, BasicBlock};
+use rustc_middle::mir::{BasicBlock, Local};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{BasicBlockType};
+use crate::refine::BasicBlockType;
 use crate::rty::{self, ClauseBuilderExt as _};
 
 mod annot;
