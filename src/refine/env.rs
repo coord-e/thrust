@@ -223,7 +223,7 @@ impl Env {
                     .iter_enumerated()
                     .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), &rty.ty))),
             )
-            .filter_map(|(v, ty)| ty.clone().to_sort().map(|sort| (v, sort)))
+            .map(|(v, ty)| (v, ty.to_sort()))
     }
 
     pub fn assumptions(&self) -> impl Iterator<Item = chc::Atom<Var>> + '_ {

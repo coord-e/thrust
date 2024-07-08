@@ -77,6 +77,7 @@ struct Sort<'a> {
 impl<'a> std::fmt::Display for Sort<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.inner {
+            chc::Sort::Null => write!(f, "Null"),
             chc::Sort::Int => write!(f, "Int"),
             chc::Sort::Bool => write!(f, "Bool"),
             chc::Sort::String => write!(f, "String"),
@@ -260,6 +261,9 @@ impl<'a> std::fmt::Display for System<'a> {
         let mut sorts: Vec<_> = self.collect_sorts().into_iter().collect();
         sorts.sort_by_key(|s| s.length()); // print small one first
         for s in sorts {
+            if let chc::Sort::Null = &s {
+                writeln!(f, "(declare-datatypes () ((Null null)))")?;
+            }
             if let chc::Sort::Box(inner) = &s {
                 let inner = Sort::new(inner);
                 let ss = List::sorts(std::iter::once(inner.clone()));

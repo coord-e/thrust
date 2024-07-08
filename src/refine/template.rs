@@ -33,16 +33,12 @@ where
         for param_ty in param_tys.iter().take(param_tys.len() - 1) {
             let param_idx =
                 param_rtys.push(rty::RefinedType::unrefined(param_ty.clone()).vacuous());
-            if let Some(param_sort) = param_ty.to_sort() {
-                builder.add_dependency(param_idx.into(), param_sort);
-            }
+            builder.add_dependency(param_idx.into(), param_ty.to_sort());
         }
         let tmpl = builder.clone().build(param_ty.clone());
         let param_rty = g.register_template(tmpl);
         let param_idx = param_rtys.push(param_rty);
-        if let Some(param_sort) = param_ty.to_sort() {
-            builder.add_dependency(param_idx.into(), param_sort);
-        }
+        builder.add_dependency(param_idx.into(), param_ty.to_sort());
     } else {
         // elaboration: we need at least one predicate variable in parameter
         let tmpl = builder.clone().build(rty::Type::unit());

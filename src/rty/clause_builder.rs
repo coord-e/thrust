@@ -14,7 +14,7 @@ pub trait ClauseBuilderExt {
 
 impl ClauseBuilderExt for chc::ClauseBuilder {
     fn with_value_var<'a>(&'a mut self, ty: &Type) -> RefinementClauseBuilder<'a> {
-        let value_var = ty.to_sort().map(|s| self.add_var(s));
+        let value_var = self.add_var(ty.to_sort());
         RefinementClauseBuilder {
             builder: self,
             value_var,
@@ -25,7 +25,7 @@ impl ClauseBuilderExt for chc::ClauseBuilder {
     where
         T: Hash + Eq + Debug + 'static,
     {
-        let value_var = self.find_mapped_var(v);
+        let value_var = self.find_mapped_var(v).unwrap();
         RefinementClauseBuilder {
             builder: self,
             value_var,
@@ -35,7 +35,7 @@ impl ClauseBuilderExt for chc::ClauseBuilder {
 
 pub struct RefinementClauseBuilder<'a> {
     builder: &'a mut chc::ClauseBuilder,
-    value_var: Option<chc::TermVarIdx>,
+    value_var: chc::TermVarIdx,
 }
 
 impl<'a> RefinementClauseBuilder<'a> {
@@ -44,7 +44,7 @@ impl<'a> RefinementClauseBuilder<'a> {
         T: Hash + Eq + Debug + 'static,
     {
         refinement.map_var(|v| match v {
-            RefinedTypeVar::Value => self.value_var.unwrap(),
+            RefinedTypeVar::Value => self.value_var,
             RefinedTypeVar::Free(v) => self.builder.mapped_var(v),
         })
     }

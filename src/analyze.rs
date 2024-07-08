@@ -69,9 +69,7 @@ impl<'tcx> Analyzer<'tcx> {
                 // TODO: add value_var dependency
                 let mut builder = chc::ClauseBuilder::default();
                 for (param_idx, param_rty) in got.params.iter_enumerated() {
-                    if let Some(sort) = param_rty.ty.to_sort() {
-                        builder.add_mapped_var(param_idx, sort);
-                    }
+                    builder.add_mapped_var(param_idx, param_rty.ty.to_sort());
                 }
                 for (got_ty, expected_ty) in got.params.iter().zip(expected.params.clone()) {
                     let clause = builder

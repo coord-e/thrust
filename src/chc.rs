@@ -11,6 +11,7 @@ pub use solver::{CheckSatError, Config};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
+    Null,
     Int,
     Bool,
     String,
@@ -26,6 +27,7 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
+            Sort::Null => allocator.text("null"),
             Sort::Int => allocator.text("int"),
             Sort::Bool => allocator.text("bool"),
             Sort::String => allocator.text("string"),
@@ -85,6 +87,7 @@ impl Sort {
 
     fn length(&self) -> usize {
         match self {
+            Sort::Null => 1,
             Sort::Int => 1,
             Sort::Bool => 1,
             Sort::String => 1,
@@ -99,6 +102,10 @@ impl Sort {
             Sort::Tuple(ss) => Some(ss),
             _ => None,
         }
+    }
+
+    pub fn null() -> Self {
+        Sort::Null
     }
 
     pub fn int() -> Self {
@@ -123,6 +130,16 @@ impl Sort {
 
     pub fn tuple(sorts: Vec<Sort>) -> Self {
         Sort::Tuple(sorts)
+    }
+
+    pub fn is_singleton(&self) -> bool {
+        match self {
+            Sort::Null => true,
+            Sort::Tuple(ts) => ts.is_empty() || ts.iter().all(Sort::is_singleton),
+            Sort::Box(s) => s.is_singleton(),
+            Sort::Mut(s) => s.is_singleton(),
+            _ => false,
+        }
     }
 }
 

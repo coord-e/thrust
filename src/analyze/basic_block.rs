@@ -140,9 +140,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // TODO: check sty and length is equal
         let mut builder = self.env.build_clause();
         for (param_idx, param_rty) in got.params.iter_enumerated() {
-            if let Some(sort) = param_rty.ty.to_sort() {
-                builder.add_mapped_var(param_idx, sort);
-            }
+            builder.add_mapped_var(param_idx, param_rty.ty.to_sort());
         }
         for ((param_idx, got_ty), expected_ty) in got.params.iter_enumerated().zip(&expected_args) {
             // TODO we can use relate_sub_refined_type here when we implemenented builder-aware relate_*
@@ -238,8 +236,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let (sty, term) = self.rvalue_type(rvalue);
 
         if let Some(term) = term {
-            // TODO: should we cover "to_sort" ness in relate_* methods or here?
-            if sty.to_sort().is_some() {
+            // TODO: should we cover "is_singleton" ness in relate_* methods or here?
+            if !sty.to_sort().is_singleton() {
                 return rty::RefinedType::refined_with_term(sty, term);
             }
         }
@@ -274,8 +272,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .map(|(param_idx, rty)| {
                 if let Some(arg_local) = bty.local_of_param(param_idx) {
                     let (sty, term) = self.env.local_type(arg_local);
-                    // TODO: should we cover "to_sort" ness in relate_* methods or here?
-                    if rty.ty.to_sort().is_some() {
+                    // TODO: should we cover "is_singleton" ness in relate_* methods or here?
+                    if !rty.ty.to_sort().is_singleton() {
                         rty::RefinedType::refined_with_term(sty, term)
                     } else {
                         rty::RefinedType::unrefined(sty).vacuous()

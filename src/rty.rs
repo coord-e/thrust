@@ -304,28 +304,26 @@ impl Type {
         }
     }
 
-    // XXX: this is something like 'logically meaningful to reason about'
-    // and better naming is needed
-    pub fn to_sort(&self) -> Option<chc::Sort> {
+    pub fn to_sort(&self) -> chc::Sort {
         match self {
-            Type::Unit => None,
-            Type::Int => Some(chc::Sort::int()),
-            Type::Bool => Some(chc::Sort::bool()),
+            Type::Unit => chc::Sort::null(),
+            Type::Int => chc::Sort::int(),
+            Type::Bool => chc::Sort::bool(),
             // TODO: enable string reasoning
             //       currently String sort seems not available in HORN logic of Z3
-            Type::String => None,
-            Type::Never => None,
+            Type::String => chc::Sort::null(),
+            Type::Never => chc::Sort::null(),
             Type::Pointer(ty) => {
-                let elem_sort = ty.elem.to_sort()?;
+                let elem_sort = ty.elem.to_sort();
                 let sort = match ty.kind {
                     PointerKind::Ref(RefKind::Immut) | PointerKind::Own => {
                         chc::Sort::box_(elem_sort)
                     }
                     PointerKind::Ref(RefKind::Mut) => chc::Sort::mut_(elem_sort),
                 };
-                Some(sort)
+                sort
             }
-            Type::Function { .. } => None,
+            Type::Function { .. } => chc::Sort::null(),
         }
     }
 }
