@@ -17,7 +17,7 @@ impl Callbacks for CompilerCalls {
         queries: &'tcx Queries<'tcx>,
     ) -> Compilation {
         queries.global_ctxt().unwrap().enter(|tcx| {
-            let mut ctx = refinement_analyzer::Analyzer::new(tcx);
+            let mut ctx = thrust::Analyzer::new(tcx);
             ctx.register_well_known_defs();
             ctx.crate_analyzer().run();
             ctx.solve();
@@ -38,7 +38,6 @@ pub fn main() {
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stderr)
                 .compact()
-                .with_target(false)
                 .without_time()
                 .with_filter(
                     EnvFilter::builder()

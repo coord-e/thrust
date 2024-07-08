@@ -1,11 +1,11 @@
 [package]
-name = "refinement-analyzer"
+name = "thrust"
 version = "0.1.0"
 authors = ["coord_e <me@coord-e.com>"]
 edition = "2021"
 
 [[bin]]
-name = "refa-rustc"
+name = "thrust-rustc"
 path = "src/main.rs"
 test = false
 

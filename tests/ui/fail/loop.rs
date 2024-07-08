@@ -2,10 +2,10 @@
 //@compile-flags: -C debug-assertions=off
 
 #![feature(register_tool)]
-#![register_tool(refa)]
+#![register_tool(thrust)]
 
-#[refa::requires(true)]
-#[refa::ensures(true)]
+#[thrust::requires(true)]
+#[thrust::ensures(true)]
 fn rand() -> i64 { 1 }
 
 fn main() {

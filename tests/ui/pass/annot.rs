@@ -1,10 +1,10 @@
 //@check-pass
 
 #![feature(register_tool)]
-#![register_tool(refa)]
+#![register_tool(thrust)]
 
-#[refa::requires(true)]
-#[refa::ensures(result != x)]
+#[thrust::requires(true)]
+#[thrust::ensures(result != x)]
 fn rand_except(x: i64) -> i64 {
     if x == 0 {
         1

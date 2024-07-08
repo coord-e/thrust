@@ -6,15 +6,15 @@ use crate::annot;
 use crate::rty;
 
 pub fn requires_path() -> [Symbol; 2] {
-    [Symbol::intern("refa"), Symbol::intern("requires")]
+    [Symbol::intern("thrust"), Symbol::intern("requires")]
 }
 
 pub fn ensures_path() -> [Symbol; 2] {
-    [Symbol::intern("refa"), Symbol::intern("ensures")]
+    [Symbol::intern("thrust"), Symbol::intern("ensures")]
 }
 
 pub fn trusted_path() -> [Symbol; 2] {
-    [Symbol::intern("refa"), Symbol::intern("trusted")]
+    [Symbol::intern("thrust"), Symbol::intern("trusted")]
 }
 
 fn ty_to_term_kind(ty: &mir_ty::Ty<'_>) -> annot::TermKind {
