@@ -4,7 +4,9 @@ use crate::chc;
 
 #[derive(Debug, Clone)]
 struct List<T> {
-    closed: bool,
+    open_char: Option<char>,
+    close_char: Option<char>,
+    delimiter: char,
     items: Vec<T>,
 }
 
@@ -13,17 +15,17 @@ where
     T: std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.closed {
-            write!(f, "(")?;
+        if let Some(c) = self.open_char {
+            write!(f, "{}", c)?;
         }
         for (i, e) in self.items.iter().enumerate() {
             if i != 0 {
-                write!(f, " ")?;
+                write!(f, "{}", self.delimiter)?;
             }
             write!(f, "{}", e)?;
         }
-        if self.closed {
-            write!(f, ")")?;
+        if let Some(c) = self.close_char {
+            write!(f, "{}", c)?;
         }
         Ok(())
     }
@@ -35,7 +37,9 @@ impl<T> List<T> {
         I: std::iter::IntoIterator<Item = T>,
     {
         Self {
-            closed: true,
+            open_char: Some('('),
+            close_char: Some(')'),
+            delimiter: ' ',
             items: inner.into_iter().collect(),
         }
     }
@@ -45,7 +49,21 @@ impl<T> List<T> {
         I: std::iter::IntoIterator<Item = T>,
     {
         Self {
-            closed: false,
+            open_char: None,
+            close_char: None,
+            delimiter: ' ',
+            items: inner.into_iter().collect(),
+        }
+    }
+
+    pub fn sorts<I>(inner: I) -> Self
+    where
+        I: std::iter::IntoIterator<Item = T>,
+    {
+        Self {
+            open_char: Some('<'),
+            close_char: Some('>'),
+            delimiter: '-',
             items: inner.into_iter().collect(),
         }
     }
@@ -62,8 +80,9 @@ impl<'a> std::fmt::Display for Sort<'a> {
             chc::Sort::Int => write!(f, "Int"),
             chc::Sort::Bool => write!(f, "Bool"),
             chc::Sort::String => write!(f, "String"),
-            chc::Sort::Box(s) => write!(f, "Box_{}", Sort::new(s)),
-            chc::Sort::Mut(s) => write!(f, "Mut_{}", Sort::new(s)),
+            chc::Sort::Box(s) => write!(f, "Box{}", List::sorts(std::iter::once(Sort::new(s)))),
+            chc::Sort::Mut(s) => write!(f, "Mut{}", List::sorts(std::iter::once(Sort::new(s)))),
+            chc::Sort::Tuple(ss) => write!(f, "Tuple{}", List::sorts(ss.iter().map(Sort::new))),
         }
     }
 }
@@ -90,14 +109,19 @@ impl<'a> std::fmt::Display for Term<'a> {
             chc::Term::String(s) => write!(f, "\"{}\"", s.escape_default()),
             chc::Term::Box(t) => {
                 let s = self.clause.term_sort(t);
-                write!(f, "(box_{} {})", Sort::new(&s), Term::new(self.clause, t))
+                write!(
+                    f,
+                    "(box{} {})",
+                    List::sorts(std::iter::once(Sort::new(&s))),
+                    Term::new(self.clause, t)
+                )
             }
             chc::Term::Mut(t1, t2) => {
                 let s = self.clause.term_sort(t1);
                 write!(
                     f,
-                    "(mut_{} {} {})",
-                    Sort::new(&s),
+                    "(mut{} {} {})",
+                    List::sorts(std::iter::once(Sort::new(&s))),
                     Term::new(self.clause, t1),
                     Term::new(self.clause, t2)
                 )
@@ -106,8 +130,8 @@ impl<'a> std::fmt::Display for Term<'a> {
                 let s = self.clause.term_sort(t).deref();
                 write!(
                     f,
-                    "(box_current_{} {})",
-                    Sort::new(&s),
+                    "(box_current{} {})",
+                    List::sorts(std::iter::once(Sort::new(&s))),
                     Term::new(self.clause, t)
                 )
             }
@@ -115,8 +139,8 @@ impl<'a> std::fmt::Display for Term<'a> {
                 let s = self.clause.term_sort(t).deref();
                 write!(
                     f,
-                    "(mut_current_{} {})",
-                    Sort::new(&s),
+                    "(mut_current{} {})",
+                    List::sorts(std::iter::once(Sort::new(&s))),
                     Term::new(self.clause, t)
                 )
             }
@@ -124,8 +148,8 @@ impl<'a> std::fmt::Display for Term<'a> {
                 let s = self.clause.term_sort(t).deref();
                 write!(
                     f,
-                    "(mut_final_{} {})",
-                    Sort::new(&s),
+                    "(mut_final{} {})",
+                    List::sorts(std::iter::once(Sort::new(&s))),
                     Term::new(self.clause, t)
                 )
             }
@@ -135,6 +159,25 @@ impl<'a> std::fmt::Display for Term<'a> {
                     "({} {})",
                     fn_,
                     List::open(args.iter().map(|t| Term::new(self.clause, t)))
+                )
+            }
+            chc::Term::Tuple(ts) => {
+                let ss: Vec<_> = ts.iter().map(|t| self.clause.term_sort(t)).collect();
+                write!(
+                    f,
+                    "(tuple{} {})",
+                    List::sorts(ss.iter().map(Sort::new)),
+                    List::open(ts.iter().map(|t| Term::new(self.clause, t)))
+                )
+            }
+            chc::Term::TupleProj(t, i) => {
+                let s = self.clause.term_sort(t);
+                write!(
+                    f,
+                    "(tuple_proj{}.{} {})",
+                    List::sorts(s.as_tuple().unwrap().iter().map(Sort::new)),
+                    i,
+                    Term::new(self.clause, t)
                 )
             }
         }
@@ -219,13 +262,32 @@ impl<'a> std::fmt::Display for System<'a> {
         for s in sorts {
             if let chc::Sort::Box(inner) = &s {
                 let inner = Sort::new(inner);
-                writeln!(f, "(declare-datatypes () ((Box_{inner} (box_{inner} (box_current_{inner} {inner})))))")?;
+                let ss = List::sorts(std::iter::once(inner.clone()));
+                writeln!(
+                    f,
+                    "(declare-datatypes () ((Box{ss} (box{ss} (box_current{ss} {inner})))))"
+                )?;
             }
             if let chc::Sort::Mut(inner) = &s {
                 let inner = Sort::new(inner);
+                let ss = List::sorts(std::iter::once(inner.clone()));
                 writeln!(
                     f,
-                    "(declare-datatypes () ((Mut_{inner} (mut_{inner} (mut_current_{inner} {inner}) (mut_final_{inner} {inner})))))",
+                    "(declare-datatypes () ((Mut{ss} (mut{ss} (mut_current{ss} {inner}) (mut_final{ss} {inner})))))",
+                )?;
+            }
+            if let chc::Sort::Tuple(elems) = &s {
+                let ss = List::sorts(elems.iter().map(Sort::new));
+                let projs = elems
+                    .iter()
+                    .map(Sort::new)
+                    .enumerate()
+                    .map(|(i, s)| format!("(tuple_proj{ss}.{i} {s})"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                writeln!(
+                    f,
+                    "(declare-datatypes () ((Tuple{ss} (tuple{ss} {projs}))))",
                 )?;
             }
         }
@@ -260,11 +322,17 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort
         chc::Term::BoxCurrent(t) => term_sorts(clause, t, sorts),
         chc::Term::MutCurrent(t) => term_sorts(clause, t, sorts),
         chc::Term::MutFinal(t) => term_sorts(clause, t, sorts),
-        chc::Term::App(fun, args) => {
+        chc::Term::App(_fun, args) => {
             for arg in args {
                 term_sorts(clause, arg, sorts);
             }
         }
+        chc::Term::Tuple(ts) => {
+            for t in ts {
+                term_sorts(clause, t, sorts);
+            }
+        }
+        chc::Term::TupleProj(t, _) => term_sorts(clause, t, sorts),
     }
 }
 

@@ -16,6 +16,7 @@ pub enum Sort {
     String,
     Box(Box<Sort>),
     Mut(Box<Sort>),
+    Tuple(Vec<Sort>),
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Sort
@@ -38,6 +39,16 @@ where
                 .append(allocator.line())
                 .append(s.pretty_atom(allocator))
                 .group(),
+            Sort::Tuple(ss) => {
+                let separator = allocator.text(",").append(allocator.line());
+                if ss.len() == 1 {
+                    ss[0].pretty(allocator).append(separator).parens()
+                } else {
+                    allocator
+                        .intersperse(ss.iter().map(|s| s.pretty(allocator)), separator)
+                        .parens()
+                }
+            }
         }
     }
 }
@@ -65,6 +76,13 @@ impl Sort {
         }
     }
 
+    fn tuple_elem(self, index: usize) -> Self {
+        match self {
+            Sort::Tuple(ss) => ss[index].clone(),
+            _ => panic!("invalid tuple_elem"),
+        }
+    }
+
     fn length(&self) -> usize {
         match self {
             Sort::Int => 1,
@@ -72,6 +90,14 @@ impl Sort {
             Sort::String => 1,
             Sort::Box(s) => s.length() + 1,
             Sort::Mut(s) => s.length() + 1,
+            Sort::Tuple(ss) => ss.iter().map(Sort::length).sum::<usize>() + 1,
+        }
+    }
+
+    pub fn as_tuple(&self) -> Option<&[Sort]> {
+        match self {
+            Sort::Tuple(ss) => Some(ss),
+            _ => None,
         }
     }
 
@@ -93,6 +119,10 @@ impl Sort {
 
     pub fn mut_(sort: Sort) -> Self {
         Sort::Mut(Box::new(sort))
+    }
+
+    pub fn tuple(sorts: Vec<Sort>) -> Self {
+        Sort::Tuple(sorts)
     }
 }
 
@@ -209,6 +239,8 @@ pub enum Term<V = TermVarIdx> {
     MutCurrent(Box<Term<V>>),
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
+    Tuple(Vec<Term<V>>),
+    TupleProj(Box<Term<V>>, usize),
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
@@ -253,6 +285,20 @@ where
                     f.append(allocator.line()).append(inner.nest(2)).group()
                 }
             }
+            Term::Tuple(ts) => {
+                let separator = allocator.text(",").append(allocator.line());
+                if ts.len() == 1 {
+                    ts[0].pretty(allocator).append(separator).parens()
+                } else {
+                    allocator
+                        .intersperse(ts.iter().map(|t| t.pretty(allocator)), separator)
+                        .parens()
+                }
+            }
+            Term::TupleProj(t, i) => t
+                .pretty_atom(allocator)
+                .append(allocator.text("."))
+                .append(allocator.as_string(i)),
         }
     }
 }
@@ -290,6 +336,8 @@ impl<V> Term<V> {
             Term::App(fun, args) => {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
+            Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
+            Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
         }
     }
 
@@ -322,6 +370,12 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.sort(var_sort).deref(),
             Term::MutFinal(t) => t.sort(var_sort).deref(),
             Term::App(fun, args) => fun.sort(args.iter().map(|t| t.sort(&mut var_sort))),
+            Term::Tuple(ts) => {
+                // TODO: remove this
+                let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
+                Sort::tuple(ts.iter().map(|t| t.sort(&mut var_sort)).collect())
+            }
+            Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
         }
     }
 
@@ -394,6 +448,14 @@ impl<V> Term<V> {
 
     pub fn lt(self, other: Self) -> Self {
         Term::App(Function::LT, vec![self, other])
+    }
+
+    pub fn tuple(ts: Vec<Term<V>>) -> Self {
+        Term::Tuple(ts)
+    }
+
+    pub fn tuple_proj(self, i: usize) -> Self {
+        Term::TupleProj(Box::new(self), i)
     }
 
     pub fn equal_to(self, other: Self) -> Atom<V> {
