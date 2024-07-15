@@ -13,6 +13,7 @@ use crate::rty::{self, ClauseBuilderExt as _};
 mod annot;
 mod basic_block;
 mod crate_;
+mod did_cache;
 mod local_def;
 
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
@@ -34,6 +35,7 @@ pub struct Analyzer<'tcx> {
     system: chc::System,
 
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
+    def_ids: did_cache::DefIdCache<'tcx>,
 }
 
 impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
@@ -113,6 +115,7 @@ impl<'tcx> Analyzer<'tcx> {
             defs,
             system,
             basic_blocks,
+            def_ids: did_cache::DefIdCache::new(tcx),
         }
     }
 

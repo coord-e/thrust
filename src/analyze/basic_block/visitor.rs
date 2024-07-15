@@ -1,13 +1,14 @@
+use std::collections::HashMap;
+
 use rustc_middle::mir::{self, Local, Place};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
-struct ReplaceLocalVisitor<'tcx> {
-    from: Local,
-    to: Place<'tcx>,
+pub struct ReplaceLocalsVisitor<'tcx> {
+    replacements: HashMap<Local, Place<'tcx>>,
     tcx: TyCtxt<'tcx>,
 }
 
-impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplaceLocalVisitor<'tcx> {
+impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplaceLocalsVisitor<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
@@ -18,12 +19,41 @@ impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplaceLocalVisitor<'tcx> {
         _: mir::visit::PlaceContext,
         _: mir::Location,
     ) {
-        if place.local == self.from {
-            place.local = self.to.local;
+        if let Some(to) = self.replacements.get(&place.local) {
+            place.local = to.local;
             place.projection = self
                 .tcx
-                .mk_place_elems_from_iter(self.to.projection.iter().chain(place.projection));
+                .mk_place_elems_from_iter(to.projection.iter().chain(place.projection));
         }
+    }
+}
+
+impl<'tcx> ReplaceLocalsVisitor<'tcx> {
+    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+        Self {
+            tcx,
+            replacements: Default::default(),
+        }
+    }
+
+    pub fn with_replacement(tcx: TyCtxt<'tcx>, from: Local, to: Place<'tcx>) -> Self {
+        let mut visitor = Self::new(tcx);
+        visitor.add_replacement(from, to);
+        visitor
+    }
+
+    pub fn add_replacement(&mut self, from: Local, to: Place<'tcx>) {
+        self.replacements.insert(from, to);
+    }
+
+    pub fn visit_statement(&mut self, stmt: &mut mir::Statement<'tcx>) {
+        // dummy location
+        mir::visit::MutVisitor::visit_statement(self, stmt, mir::Location::START);
+    }
+
+    pub fn visit_terminator(&mut self, term: &mut mir::Terminator<'tcx>) {
+        // dummy location
+        mir::visit::MutVisitor::visit_terminator(self, term, mir::Location::START);
     }
 }
 
@@ -83,12 +113,8 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             let ty = self.analyzer.local_decls[place.local].ty;
             let new_local = self.insert_borrow(place.local, ty);
             let new_place = self.tcx.mk_place_deref(new_local.into());
-            ReplaceLocalVisitor {
-                from: place.local,
-                to: new_place.clone(),
-                tcx: self.tcx,
-            }
-            .visit_rvalue(rvalue, location);
+            ReplaceLocalsVisitor::with_replacement(self.tcx, place.local, new_place.clone())
+                .visit_rvalue(rvalue, location);
             *place = new_place;
             self.super_assign(place, rvalue, location);
             return;
@@ -106,12 +132,8 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
         };
 
         let new_local = self.insert_reborrow(place.local, *inner_ty);
-        ReplaceLocalVisitor {
-            from: place.local,
-            to: new_local.into(),
-            tcx: self.tcx,
-        }
-        .visit_rvalue(rvalue, location);
+        ReplaceLocalsVisitor::with_replacement(self.tcx, place.local, new_local.into())
+            .visit_rvalue(rvalue, location);
         place.local = new_local;
         self.super_assign(place, rvalue, location);
     }
@@ -119,6 +141,12 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
     // TODO: is it always true that the operand is not referred again in rvalue
     fn visit_operand(&mut self, operand: &mut mir::Operand<'tcx>, location: mir::Location) {
         let Some(p) = operand.place() else {
+            self.super_operand(operand, location);
+            return;
+        };
+
+        let mir_ty::TyKind::Ref(_, inner_ty, m) = self.analyzer.local_decls[p.local].ty.kind()
+        else {
             self.super_operand(operand, location);
             return;
         };
@@ -131,11 +159,6 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             unimplemented!();
         }
 
-        let mir_ty::TyKind::Ref(_, inner_ty, m) = self.analyzer.local_decls[p.local].ty.kind()
-        else {
-            self.super_operand(operand, location);
-            return;
-        };
         if !operand.is_move() && m.is_mut() {
             let new_local = self.insert_reborrow(p.local, *inner_ty);
             *operand = mir::Operand::Move(new_local.into());
@@ -152,12 +175,12 @@ impl<'a, 'tcx, 'ctx> ReborrowVisitor<'a, 'tcx, 'ctx> {
     }
 
     pub fn visit_statement(&mut self, stmt: &mut mir::Statement<'tcx>) {
-        mir::visit::MutVisitor::visit_statement(self, stmt, mir::Location::START);
         // dummy location
+        mir::visit::MutVisitor::visit_statement(self, stmt, mir::Location::START);
     }
 
     pub fn visit_terminator(&mut self, term: &mut mir::Terminator<'tcx>) {
-        mir::visit::MutVisitor::visit_terminator(self, term, mir::Location::START);
         // dummy location
+        mir::visit::MutVisitor::visit_terminator(self, term, mir::Location::START);
     }
 }

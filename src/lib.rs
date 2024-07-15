@@ -7,6 +7,7 @@ extern crate rustc_index;
 extern crate rustc_middle;
 extern crate rustc_mir_dataflow;
 extern crate rustc_span;
+extern crate rustc_target;
 
 // works with MIR
 mod analyze;

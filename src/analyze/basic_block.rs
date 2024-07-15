@@ -1,9 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rustc_index::IndexVec;
-use rustc_middle::mir::{self, BasicBlock, Body, Local, Operand, Rvalue, TerminatorKind};
+use rustc_middle::mir::{
+    self, BasicBlock, Body, Local, Operand, Rvalue, StatementKind, TerminatorKind,
+};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
-use rustc_span::def_id::LocalDefId;
+use rustc_span::def_id::{DefId, LocalDefId};
+use rustc_target::abi::FieldIdx;
 
 use crate::analyze;
 use crate::chc;
@@ -26,14 +29,18 @@ pub struct Analyzer<'tcx, 'ctx> {
 
     env: Env,
     local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>,
-    defined_locals: HashSet<Local>,
+    elaborated_locals: HashMap<Local, mir::Place<'tcx>>,
     // TODO: remove this
     prophecy_vars: HashMap<usize, TempVarIdx>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    fn def_ids(&self) -> &analyze::did_cache::DefIdCache<'tcx> {
+        &self.ctx.def_ids
+    }
+
     fn is_defined(&self, local: Local) -> bool {
-        self.defined_locals.contains(&local)
+        self.env.contains_local(local)
     }
 
     fn is_mut_local(&self, local: Local) -> bool {
@@ -42,6 +49,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn reborrow_visitor<'a>(&'a mut self) -> visitor::ReborrowVisitor<'a, 'tcx, 'ctx> {
         visitor::ReborrowVisitor::new(self)
+    }
+
+    fn replace_elaborated_locals_visitor(&self) -> visitor::ReplaceLocalsVisitor<'tcx> {
+        let mut visitor = visitor::ReplaceLocalsVisitor::new(self.tcx);
+        for (from, to) in &self.elaborated_locals {
+            visitor.add_replacement(*from, to.clone());
+        }
+        visitor
     }
 
     fn basic_block_ty(&self, bb: BasicBlock) -> &BasicBlockType {
@@ -339,12 +354,30 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         });
     }
 
+    fn is_box_new(&self, def_id: DefId) -> bool {
+        // TODO: stop using diagnositc item for semantic purpose
+        self.tcx.all_diagnostic_items(()).id_to_name.get(&def_id)
+            == Some(&rustc_span::symbol::sym::box_new)
+    }
+
     fn type_call<I>(&mut self, func: Operand<'tcx>, args: I, expected_ret: &rty::RefinedType<Var>)
     where
         I: IntoIterator<Item = Operand<'tcx>>,
     {
         // TODO: handle const_fn_def on Env side
         let func_ty = match func.const_fn_def() {
+            // TODO: move this to well-known defs?
+            Some((def_id, args)) if self.is_box_new(def_id) => {
+                let inner_ty = self.ctx.mir_ty(args.type_at(0));
+                let param = rty::RefinedType::unrefined(inner_ty.clone());
+                let ret_term =
+                    chc::Term::box_(chc::Term::var(rty::FunctionParamIdx::from(0_usize)));
+                let ret = rty::RefinedType::refined_with_term(
+                    rty::PointerType::own(inner_ty).into(),
+                    ret_term,
+                );
+                rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret).into()
+            }
             Some((def_id, args)) => {
                 if !args.is_empty() {
                     tracing::warn!(?args, ?def_id, "generic args ignored");
@@ -377,6 +410,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn drop_local(&mut self, local: Local) {
+        if self.elaborated_locals.contains_key(&local) {
+            return;
+        }
         self.env.drop_local(local);
     }
 
@@ -387,9 +423,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         tracing::debug!(stmt_idx = %statement_index, temp_var = ?temp_var, "add_prophecy_var");
     }
 
-    fn borrow_local(&mut self, statement_index: usize, local: Local) -> rty::RefinedType<Var> {
+    fn mutable_borrow(
+        &mut self,
+        statement_index: usize,
+        referent: mir::Place<'tcx>,
+    ) -> rty::RefinedType<Var> {
         let temp_var = self.prophecy_vars[&statement_index];
-        let (ty, term) = self.env.borrow_local(local, temp_var);
+        let (ty, term) = self.env.borrow_place(referent, temp_var);
         rty::RefinedType::refined_with_term(ty, term)
     }
 
@@ -404,6 +444,96 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         rty::RefinedType::refined_with_term(ty, term)
     }
 
+    fn unelaborate_box_deref(&self, place: &mir::Place<'tcx>) -> Option<mir::Place<'tcx>> {
+        let unique_did = self.def_ids().unique()?;
+        let nonnull_did = self.def_ids().nonnull()?;
+
+        let (rest, chunk) = place.projection.as_slice().split_last_chunk::<3>()?;
+        let rest_place = mir::Place {
+            local: place.local,
+            projection: self.tcx.mk_place_elems(rest),
+        };
+        let local_ty = rest_place.ty(&self.local_decls, self.tcx).ty;
+        if !local_ty.is_box() {
+            return None;
+        }
+        let inner_ty = local_ty.boxed_ty();
+
+        use mir::ProjectionElem::Field;
+        const ZERO_FIELD: FieldIdx = FieldIdx::from_u32(0);
+        let [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1), Field(ZERO_FIELD, ty2)] = chunk else {
+            return None;
+        };
+
+        if !matches!(
+            ty0.kind(), mir_ty::TyKind::Adt(def, args)
+            if def.did() == unique_did && args.type_at(0) == inner_ty
+        ) {
+            return None;
+        }
+
+        if !matches!(
+            ty1.kind(), mir_ty::TyKind::Adt(def, args)
+            if def.did() == nonnull_did && args.type_at(0) == inner_ty
+        ) {
+            return None;
+        }
+
+        if !matches!(
+            ty2.kind(), mir_ty::TyKind::RawPtr(t)
+            if t.ty == inner_ty && t.mutbl.is_not()
+        ) {
+            return None;
+        }
+
+        Some(rest_place)
+    }
+
+    #[tracing::instrument(skip(self, lhs, rvalue))]
+    fn analyze_assignment(
+        &mut self,
+        lhs: &mir::Place<'tcx>,
+        rvalue: &mir::Rvalue<'tcx>,
+        stmt_idx: usize,
+    ) {
+        if self.is_defined(lhs.local) {
+            // assignment
+            assert!(lhs.projection.as_slice() == &[mir::PlaceElem::Deref]);
+            self.assign_to_local(lhs.local, rvalue.clone());
+            return;
+        }
+
+        // definition
+        assert!(lhs.projection.is_empty());
+
+        if let Rvalue::Use(Operand::Copy(operand)) = rvalue {
+            if let Some(place) = self.unelaborate_box_deref(operand) {
+                self.elaborated_locals.insert(lhs.local, place);
+                tracing::info!(ptr_local = ?lhs.local, ?place, "skipped elaborated box deref");
+                return;
+            }
+        }
+
+        if let Rvalue::CopyForDeref(place) = rvalue {
+            self.elaborated_locals.insert(lhs.local, place.clone());
+            tracing::info!(ret_local = ?lhs.local, ?place, "skipped deref_copy");
+            return;
+        }
+
+        if let Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent) = rvalue {
+            // mutable borrow
+            let mutbl = self.local_decls[lhs.local].mutability;
+            let rty = self.mutable_borrow(stmt_idx, referent.clone());
+            self.bind_local(lhs.local, rty, mutbl);
+            return;
+        }
+
+        // new binding
+        let mutbl = self.local_decls[lhs.local].mutability;
+        let rty = self.rvalue_refined_type(rvalue.clone());
+        self.bind_local(lhs.local, rty, mutbl);
+    }
+
     fn analyze_statements(&mut self) {
         for (stmt_idx, mut stmt) in self.body.basic_blocks[self.basic_block]
             .statements
@@ -411,35 +541,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .cloned()
             .enumerate()
         {
-            tracing::debug!(%stmt_idx, stmt = ?stmt);
             self.reborrow_visitor().visit_statement(&mut stmt);
-            match stmt.kind.as_assign() {
-                Some((p, Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent)))
-                    if p.projection.len() == 0 && referent.projection.len() == 0 =>
-                {
-                    // mutable borrow
-                    let mutbl = self.local_decls[p.local].mutability;
-                    let rty = self.borrow_local(stmt_idx, referent.local);
-                    self.bind_local(p.local, rty, mutbl);
+            self.replace_elaborated_locals_visitor()
+                .visit_statement(&mut stmt);
+            tracing::debug!(%stmt_idx, ?stmt);
+            match &stmt.kind {
+                StatementKind::Assign(x) => {
+                    let (lhs, rvalue) = &**x;
+                    self.analyze_assignment(lhs, rvalue, stmt_idx);
                 }
-                Some((p, rvalue)) if p.projection.len() == 0 && !self.is_defined(p.local) => {
-                    // new binding
-                    let mutbl = self.local_decls[p.local].mutability;
-                    let rty = self.rvalue_refined_type(rvalue.clone());
-                    self.bind_local(p.local, rty, mutbl);
-                }
-                Some((p, rvalue)) if p.projection.as_slice() == &[mir::PlaceElem::Deref] => {
-                    // assignment
-                    self.assign_to_local(p.local, rvalue.clone());
-                }
-                _ => {
-                    if !matches!(
-                        stmt.kind,
-                        mir::StatementKind::StorageLive(_) | mir::StatementKind::StorageDead(_)
-                    ) {
-                        unimplemented!();
-                    }
-                }
+                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
+                _ => unimplemented!("stmt={:?}", stmt.kind),
             }
             for local in self.drop_points.after_statement(stmt_idx).iter() {
                 tracing::info!(?local, ?stmt_idx, "implicitly dropped after statement");
@@ -453,6 +565,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .terminator()
             .clone();
         self.reborrow_visitor().visit_terminator(&mut term);
+        self.replace_elaborated_locals_visitor()
+            .visit_terminator(&mut term);
         tracing::debug!(term = ?term.kind);
         match &term.kind {
             TerminatorKind::Return => {
@@ -501,6 +615,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     self.type_goto(*target, &expected_ret);
                 }
             }
+            TerminatorKind::Drop { target, .. } => {
+                for local in self.drop_points.after_terminator(target).iter() {
+                    tracing::info!(?local, "dropped");
+                    self.drop_local(local);
+                }
+                self.type_goto(*target, &expected_ret);
+            }
+            TerminatorKind::UnwindResume {} => {}
             _ => unimplemented!("term={:?}", term.kind),
         }
     }
@@ -536,8 +658,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let body = tcx.optimized_mir(local_def_id.to_def_id());
         let env = Env::default();
         let local_decls = body.local_decls.clone();
-        let defined_locals = Default::default();
         let prophecy_vars = Default::default();
+        let elaborated_locals = Default::default();
         Self {
             ctx,
             tcx,
@@ -547,8 +669,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             body,
             env,
             local_decls,
-            defined_locals,
             prophecy_vars,
+            elaborated_locals,
         }
     }
 

@@ -76,6 +76,9 @@ pub trait TemplateTypeGenerator: PredVarGenerator {
                 let ty = self.mir_function_ty(sig);
                 rty::Type::function(ty)
             }
+            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
+                rty::PointerType::own(self.mir_ty(params.type_at(0))).into()
+            }
             kind => unimplemented!("mir_ty: {:?}", kind),
         }
     }

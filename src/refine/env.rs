@@ -356,14 +356,6 @@ impl Env {
         }
     }
 
-    pub fn borrow_local(
-        &mut self,
-        local: Local,
-        prophecy_var: TempVarIdx,
-    ) -> (rty::Type, chc::Term<Var>) {
-        self.borrow_var(local.into(), prophecy_var)
-    }
-
     fn locate_place(&self, place: Place<'_>) -> Var {
         let mut var = place.local.into();
 
