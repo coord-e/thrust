@@ -410,9 +410,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn drop_local(&mut self, local: Local) {
-        if self.elaborated_locals.contains_key(&local) {
-            return;
-        }
         self.env.drop_local(local);
     }
 
@@ -442,6 +439,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let prophecy = self.env.push_temp_var(prophecy_ty);
         let (ty, term) = self.env.borrow_place(place, prophecy);
         rty::RefinedType::refined_with_term(ty, term)
+    }
+
+    fn merge_drop_points(&mut self, from: Local, to: Local) {
+        let from_pos = self.drop_points.position(from).unwrap();
+        self.drop_points.remove_after_statement(from_pos, from);
+
+        let Some(to_pos) = self.drop_points.position(to) else {
+            return;
+        };
+        if from_pos > to_pos {
+            self.drop_points.remove_after_statement(to_pos, to);
+            self.drop_points.insert_after_statement(from_pos, to);
+        }
     }
 
     fn unelaborate_box_deref(&self, place: &mir::Place<'tcx>) -> Option<mir::Place<'tcx>> {
@@ -509,6 +519,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if let Rvalue::Use(Operand::Copy(operand)) = rvalue {
             if let Some(place) = self.unelaborate_box_deref(operand) {
                 self.elaborated_locals.insert(lhs.local, place);
+                self.merge_drop_points(lhs.local, place.local);
                 tracing::info!(ptr_local = ?lhs.local, ?place, "skipped elaborated box deref");
                 return;
             }
@@ -516,6 +527,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         if let Rvalue::CopyForDeref(place) = rvalue {
             self.elaborated_locals.insert(lhs.local, place.clone());
+            self.merge_drop_points(lhs.local, place.local);
             tracing::info!(ret_local = ?lhs.local, ?place, "skipped deref_copy");
             return;
         }

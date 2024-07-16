@@ -18,6 +18,26 @@ impl DropPoints {
         }
     }
 
+    pub fn position(&self, local: Local) -> Option<usize> {
+        self.after_statements
+            .iter()
+            .position(|s| s.contains(local))
+            .or_else(|| {
+                self.after_terminator
+                    .values()
+                    .any(|s| s.contains(local))
+                    .then_some(self.after_statements.len())
+            })
+    }
+
+    pub fn remove_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
+        self.after_statements[statement_index].remove(local)
+    }
+
+    pub fn insert_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
+        self.after_statements[statement_index].insert(local)
+    }
+
     pub fn after_statement(&self, statement_index: usize) -> BitSet<Local> {
         self.after_statements[statement_index].clone()
     }
