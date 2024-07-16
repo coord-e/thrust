@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use rustc_middle::mir::{self, Local, Place};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
-pub struct ReplaceLocalsVisitor<'tcx> {
-    replacements: HashMap<Local, Place<'tcx>>,
+pub struct ReplacePlacesVisitor<'tcx> {
+    replacements: HashMap<(Local, &'tcx [mir::PlaceElem<'tcx>]), Place<'tcx>>,
     tcx: TyCtxt<'tcx>,
 }
 
-impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplaceLocalsVisitor<'tcx> {
+impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplacePlacesVisitor<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
@@ -19,16 +19,20 @@ impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplaceLocalsVisitor<'tcx> {
         _: mir::visit::PlaceContext,
         _: mir::Location,
     ) {
-        if let Some(to) = self.replacements.get(&place.local) {
-            place.local = to.local;
-            place.projection = self
-                .tcx
-                .mk_place_elems_from_iter(to.projection.iter().chain(place.projection));
+        let proj = place.projection.as_slice();
+        for i in 0..=proj.len() {
+            if let Some(to) = self.replacements.get(&(place.local, &proj[0..i])) {
+                place.local = to.local;
+                place.projection = self.tcx.mk_place_elems_from_iter(
+                    to.projection.iter().chain(proj.iter().skip(i).cloned()),
+                );
+                return;
+            }
         }
     }
 }
 
-impl<'tcx> ReplaceLocalsVisitor<'tcx> {
+impl<'tcx> ReplacePlacesVisitor<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         Self {
             tcx,
@@ -36,14 +40,15 @@ impl<'tcx> ReplaceLocalsVisitor<'tcx> {
         }
     }
 
-    pub fn with_replacement(tcx: TyCtxt<'tcx>, from: Local, to: Place<'tcx>) -> Self {
+    pub fn with_replacement(tcx: TyCtxt<'tcx>, from: Place<'tcx>, to: Place<'tcx>) -> Self {
         let mut visitor = Self::new(tcx);
         visitor.add_replacement(from, to);
         visitor
     }
 
-    pub fn add_replacement(&mut self, from: Local, to: Place<'tcx>) {
-        self.replacements.insert(from, to);
+    pub fn add_replacement(&mut self, from: Place<'tcx>, to: Place<'tcx>) {
+        self.replacements
+            .insert((from.local, from.projection.as_slice()), to);
     }
 
     pub fn visit_statement(&mut self, stmt: &mut mir::Statement<'tcx>) {

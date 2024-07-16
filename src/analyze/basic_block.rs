@@ -51,10 +51,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         visitor::ReborrowVisitor::new(self)
     }
 
-    fn replace_elaborated_locals_visitor(&self) -> visitor::ReplaceLocalsVisitor<'tcx> {
-        let mut visitor = visitor::ReplaceLocalsVisitor::new(self.tcx);
+    fn replace_elaborated_locals_visitor(&self) -> visitor::ReplacePlacesVisitor<'tcx> {
+        let mut visitor = visitor::ReplacePlacesVisitor::new(self.tcx);
         for (from, to) in &self.elaborated_locals {
-            visitor.add_replacement(*from, to.clone());
+            visitor.add_replacement((*from).into(), to.clone());
         }
         visitor
     }
