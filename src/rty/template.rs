@@ -46,12 +46,14 @@ where
     }
 
     pub fn build(mut self, ty: Type) -> Template<FV> {
-        if let Some(sort) = ty.to_sort() {
-            self.dependencies.insert(RefinedTypeVar::Value, sort);
-        }
+        self.dependencies
+            .insert(RefinedTypeVar::Value, ty.to_sort());
         let mut atom_args = Vec::new();
         let mut pred_sig = chc::PredSig::new();
         for (v, sort) in self.dependencies.into_iter() {
+            if sort.is_singleton() {
+                continue;
+            }
             atom_args.push(chc::Term::Var(v));
             pred_sig.push(sort);
         }

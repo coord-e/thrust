@@ -13,6 +13,7 @@ use crate::rty::{self, ClauseBuilderExt as _};
 mod annot;
 mod basic_block;
 mod crate_;
+mod did_cache;
 mod local_def;
 
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
@@ -34,6 +35,7 @@ pub struct Analyzer<'tcx> {
     system: chc::System,
 
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
+    def_ids: did_cache::DefIdCache<'tcx>,
 }
 
 impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
@@ -43,6 +45,29 @@ impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
 }
 
 impl<'tcx> Analyzer<'tcx> {
+    fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
+    where
+        F: FnMut(FV) -> chc::Sort,
+        FV: std::hash::Hash + Eq + Clone + std::fmt::Debug + 'static,
+    {
+        let fvs: Vec<_> = atoms.iter().flat_map(|a| a.fv()).cloned().collect();
+        let mut builder = chc::ClauseBuilder::default();
+        let mut pred_sig = chc::PredSig::new();
+        for fv in &fvs {
+            let sort = fv_sort(fv.clone());
+            builder.add_mapped_var(fv.clone(), sort.clone());
+            pred_sig.push(sort);
+        }
+        for atom in atoms {
+            builder.add_body_mapped(atom);
+        }
+        let pv = self.system.new_pred_var(pred_sig);
+        let head = chc::Atom::new(pv.into(), fvs.into_iter().map(chc::Term::var).collect());
+        let clause = builder.head_mapped(head.clone());
+        self.add_clause(clause);
+        head
+    }
+
     fn relate_sub_type(&mut self, got: &rty::Type, expected: &rty::Type) {
         tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
 
@@ -69,9 +94,7 @@ impl<'tcx> Analyzer<'tcx> {
                 // TODO: add value_var dependency
                 let mut builder = chc::ClauseBuilder::default();
                 for (param_idx, param_rty) in got.params.iter_enumerated() {
-                    if let Some(sort) = param_rty.ty.to_sort() {
-                        builder.add_mapped_var(param_idx, sort);
-                    }
+                    builder.add_mapped_var(param_idx, param_rty.ty.to_sort());
                 }
                 for (got_ty, expected_ty) in got.params.iter().zip(expected.params.clone()) {
                     let clause = builder
@@ -115,6 +138,7 @@ impl<'tcx> Analyzer<'tcx> {
             defs,
             system,
             basic_blocks,
+            def_ids: did_cache::DefIdCache::new(tcx),
         }
     }
 

@@ -223,7 +223,7 @@ impl Env {
                     .iter_enumerated()
                     .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), &rty.ty))),
             )
-            .filter_map(|(v, ty)| ty.clone().to_sort().map(|sort| (v, sort)))
+            .map(|(v, ty)| (v, ty.to_sort()))
     }
 
     pub fn assumptions(&self) -> impl Iterator<Item = chc::Atom<Var>> + '_ {
@@ -316,8 +316,13 @@ impl Env {
                 };
                 match (ty.kind(), val) {
                     (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                        (rty::Type::int(), chc::Term::int(val.try_to_i64().unwrap()))
+                        let val = val.try_to_int(val.size()).unwrap();
+                        (rty::Type::int(), chc::Term::int(val.try_into().unwrap()))
                     }
+                    (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => (
+                        rty::Type::bool(),
+                        chc::Term::bool(val.try_to_bool().unwrap()),
+                    ),
                     (
                         mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                         ConstValue::Slice { data, meta },
@@ -354,14 +359,6 @@ impl Env {
                 (rty::PointerType::mut_to(inner_ty).into(), term)
             }
         }
-    }
-
-    pub fn borrow_local(
-        &mut self,
-        local: Local,
-        prophecy_var: TempVarIdx,
-    ) -> (rty::Type, chc::Term<Var>) {
-        self.borrow_var(local.into(), prophecy_var)
     }
 
     fn locate_place(&self, place: Place<'_>) -> Var {

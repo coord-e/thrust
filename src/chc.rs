@@ -11,11 +11,13 @@ pub use solver::{CheckSatError, Config};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
+    Null,
     Int,
     Bool,
     String,
     Box(Box<Sort>),
     Mut(Box<Sort>),
+    Tuple(Vec<Sort>),
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Sort
@@ -25,6 +27,7 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
+            Sort::Null => allocator.text("null"),
             Sort::Int => allocator.text("int"),
             Sort::Bool => allocator.text("bool"),
             Sort::String => allocator.text("string"),
@@ -38,6 +41,16 @@ where
                 .append(allocator.line())
                 .append(s.pretty_atom(allocator))
                 .group(),
+            Sort::Tuple(ss) => {
+                let separator = allocator.text(",").append(allocator.line());
+                if ss.len() == 1 {
+                    ss[0].pretty(allocator).append(separator).parens()
+                } else {
+                    allocator
+                        .intersperse(ss.iter().map(|s| s.pretty(allocator)), separator)
+                        .parens()
+                }
+            }
         }
     }
 }
@@ -65,14 +78,34 @@ impl Sort {
         }
     }
 
+    fn tuple_elem(self, index: usize) -> Self {
+        match self {
+            Sort::Tuple(ss) => ss[index].clone(),
+            _ => panic!("invalid tuple_elem"),
+        }
+    }
+
     fn length(&self) -> usize {
         match self {
+            Sort::Null => 1,
             Sort::Int => 1,
             Sort::Bool => 1,
             Sort::String => 1,
             Sort::Box(s) => s.length() + 1,
             Sort::Mut(s) => s.length() + 1,
+            Sort::Tuple(ss) => ss.iter().map(Sort::length).sum::<usize>() + 1,
         }
+    }
+
+    pub fn as_tuple(&self) -> Option<&[Sort]> {
+        match self {
+            Sort::Tuple(ss) => Some(ss),
+            _ => None,
+        }
+    }
+
+    pub fn null() -> Self {
+        Sort::Null
     }
 
     pub fn int() -> Self {
@@ -93,6 +126,20 @@ impl Sort {
 
     pub fn mut_(sort: Sort) -> Self {
         Sort::Mut(Box::new(sort))
+    }
+
+    pub fn tuple(sorts: Vec<Sort>) -> Self {
+        Sort::Tuple(sorts)
+    }
+
+    pub fn is_singleton(&self) -> bool {
+        match self {
+            Sort::Null => true,
+            Sort::Tuple(ts) => ts.is_empty() || ts.iter().all(Sort::is_singleton),
+            Sort::Box(s) => s.is_singleton(),
+            Sort::Mut(s) => s.is_singleton(),
+            _ => false,
+        }
     }
 }
 
@@ -177,6 +224,7 @@ impl Function {
         match *self {
             Self::ADD => Sort::int(),
             Self::SUB => Sort::int(),
+            Self::MUL => Sort::int(),
             Self::EQ => Sort::bool(),
             Self::GE => Sort::bool(),
             Self::GT => Sort::bool(),
@@ -189,6 +237,7 @@ impl Function {
 
     pub const ADD: Function = Function::infix("+");
     pub const SUB: Function = Function::infix("-");
+    pub const MUL: Function = Function::infix("*");
     pub const EQ: Function = Function::infix("=");
     pub const GE: Function = Function::infix(">=");
     pub const GT: Function = Function::infix(">");
@@ -209,6 +258,8 @@ pub enum Term<V = TermVarIdx> {
     MutCurrent(Box<Term<V>>),
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
+    Tuple(Vec<Term<V>>),
+    TupleProj(Box<Term<V>>, usize),
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
@@ -253,6 +304,20 @@ where
                     f.append(allocator.line()).append(inner.nest(2)).group()
                 }
             }
+            Term::Tuple(ts) => {
+                let separator = allocator.text(",").append(allocator.line());
+                if ts.len() == 1 {
+                    ts[0].pretty(allocator).append(separator).parens()
+                } else {
+                    allocator
+                        .intersperse(ts.iter().map(|t| t.pretty(allocator)), separator)
+                        .parens()
+                }
+            }
+            Term::TupleProj(t, i) => t
+                .pretty_atom(allocator)
+                .append(allocator.text("."))
+                .append(allocator.as_string(i)),
         }
     }
 }
@@ -290,6 +355,8 @@ impl<V> Term<V> {
             Term::App(fun, args) => {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
+            Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
+            Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
         }
     }
 
@@ -322,7 +389,32 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.sort(var_sort).deref(),
             Term::MutFinal(t) => t.sort(var_sort).deref(),
             Term::App(fun, args) => fun.sort(args.iter().map(|t| t.sort(&mut var_sort))),
+            Term::Tuple(ts) => {
+                // TODO: remove this
+                let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
+                Sort::tuple(ts.iter().map(|t| t.sort(&mut var_sort)).collect())
+            }
+            Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
         }
+    }
+
+    fn fv_impl(&self) -> Box<dyn Iterator<Item = &V> + '_> {
+        match self {
+            Term::Var(v) => Box::new(std::iter::once(v)),
+            Term::Bool(_) | Term::Int(_) | Term::String(_) => Box::new(std::iter::empty()),
+            Term::Box(t) => t.fv_impl(),
+            Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
+            Term::BoxCurrent(t) => t.fv_impl(),
+            Term::MutCurrent(t) => t.fv_impl(),
+            Term::MutFinal(t) => t.fv_impl(),
+            Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
+            Term::TupleProj(t, _) => t.fv_impl(),
+        }
+    }
+
+    pub fn fv(&self) -> impl Iterator<Item = &V> {
+        self.fv_impl()
     }
 
     pub fn var(v: V) -> Self {
@@ -369,6 +461,10 @@ impl<V> Term<V> {
         Term::App(Function::SUB, vec![self, other])
     }
 
+    pub fn mul(self, other: Self) -> Self {
+        Term::App(Function::MUL, vec![self, other])
+    }
+
     pub fn eq(self, other: Self) -> Self {
         Term::App(Function::EQ, vec![self, other])
     }
@@ -394,6 +490,14 @@ impl<V> Term<V> {
 
     pub fn lt(self, other: Self) -> Self {
         Term::App(Function::LT, vec![self, other])
+    }
+
+    pub fn tuple(ts: Vec<Term<V>>) -> Self {
+        Term::Tuple(ts)
+    }
+
+    pub fn tuple_proj(self, i: usize) -> Self {
+        Term::TupleProj(Box::new(self), i)
     }
 
     pub fn equal_to(self, other: Self) -> Atom<V> {
@@ -654,6 +758,10 @@ impl<V> Atom<V> {
             pred: self.pred,
             args: self.args.into_iter().map(|t| t.map_var(|v| f(v))).collect(),
         }
+    }
+
+    pub fn fv(&self) -> impl Iterator<Item = &V> {
+        self.args.iter().flat_map(|t| t.fv())
     }
 }
 

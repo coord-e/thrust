@@ -33,16 +33,12 @@ where
         for param_ty in param_tys.iter().take(param_tys.len() - 1) {
             let param_idx =
                 param_rtys.push(rty::RefinedType::unrefined(param_ty.clone()).vacuous());
-            if let Some(param_sort) = param_ty.to_sort() {
-                builder.add_dependency(param_idx.into(), param_sort);
-            }
+            builder.add_dependency(param_idx.into(), param_ty.to_sort());
         }
         let tmpl = builder.clone().build(param_ty.clone());
         let param_rty = g.register_template(tmpl);
         let param_idx = param_rtys.push(param_rty);
-        if let Some(param_sort) = param_ty.to_sort() {
-            builder.add_dependency(param_idx.into(), param_sort);
-        }
+        builder.add_dependency(param_idx.into(), param_ty.to_sort());
     } else {
         // elaboration: we need at least one predicate variable in parameter
         let tmpl = builder.clone().build(rty::Type::unit());
@@ -79,6 +75,9 @@ pub trait TemplateTypeGenerator: PredVarGenerator {
                 let sig = sig.skip_binder();
                 let ty = self.mir_function_ty(sig);
                 rty::Type::function(ty)
+            }
+            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
+                rty::PointerType::own(self.mir_ty(params.type_at(0))).into()
             }
             kind => unimplemented!("mir_ty: {:?}", kind),
         }
