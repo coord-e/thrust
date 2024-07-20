@@ -179,17 +179,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.ctx.relate_sub_type(&got.ret.ty, &expected_ret.ty);
     }
 
-    fn operand_type(&self, operand: Operand<'_>) -> (rty::Type, chc::Term<Var>) {
+    fn operand_type(&self, mut operand: Operand<'tcx>) -> (rty::Type, chc::Term<Var>) {
+        if let Operand::Copy(p) | Operand::Move(p) = &mut operand {
+            *p = self.elaborate_place(p);
+        }
         let (sty, term) = self.env.operand_type(operand.clone());
         tracing::debug!(operand = ?operand, sty = %sty.display(), "operand_type");
-        if matches!(operand, Operand::Copy(p) | Operand::Move(p) if self.is_mut_local(p.local)) {
-            (sty.deref(), term.box_current())
-        } else {
-            (sty, term)
-        }
+        (sty, term)
     }
 
-    fn rvalue_type(&mut self, rvalue: Rvalue<'_>) -> (rty::Type, Option<chc::Term<Var>>) {
+    fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> (rty::Type, Option<chc::Term<Var>>) {
         match rvalue {
             Rvalue::Use(operand) => {
                 let (ty, term) = self.operand_type(operand);
@@ -248,7 +247,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn rvalue_refined_type(&mut self, rvalue: Rvalue<'_>) -> rty::RefinedType<Var> {
+    fn rvalue_refined_type(&mut self, rvalue: Rvalue<'tcx>) -> rty::RefinedType<Var> {
         let (sty, term) = self.rvalue_type(rvalue);
 
         if let Some(term) = term {
@@ -261,16 +260,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         rty::RefinedType::unrefined(sty).vacuous()
     }
 
-    fn type_rvalue(&mut self, rvalue: Rvalue<'_>, expected: &rty::RefinedType<Var>) {
+    fn type_rvalue(&mut self, rvalue: Rvalue<'tcx>, expected: &rty::RefinedType<Var>) {
         let got = self.rvalue_refined_type(rvalue);
         self.relate_sub_refined_type(&got, expected);
     }
 
-    fn operand_refined_type(&mut self, operand: Operand<'_>) -> rty::RefinedType<Var> {
+    fn operand_refined_type(&mut self, operand: Operand<'tcx>) -> rty::RefinedType<Var> {
         self.rvalue_refined_type(Rvalue::Use(operand))
     }
 
-    fn type_operand(&mut self, operand: Operand<'_>, expected: &rty::RefinedType<Var>) {
+    fn type_operand(&mut self, operand: Operand<'tcx>, expected: &rty::RefinedType<Var>) {
         self.type_rvalue(Rvalue::Use(operand), expected);
     }
 
@@ -326,7 +325,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn type_switch_int<F>(
         &mut self,
-        discr: Operand<'_>,
+        discr: Operand<'tcx>,
         targets: mir::SwitchTargets,
         expected_ret: &rty::RefinedType<Var>,
         mut callback: F,
@@ -431,7 +430,28 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn assign_to_local(&mut self, local: Local, rvalue: Rvalue<'tcx>) {
+    fn elaborate_place(&self, place: &mir::Place<'tcx>) -> mir::Place<'tcx> {
+        let mut projection = Vec::new();
+        if self.is_mut_local(place.local) {
+            projection.push(mir::PlaceElem::Deref);
+        }
+        projection.extend_from_slice(place.projection.as_slice());
+
+        let mut p = place.clone();
+        p.projection = self.tcx.mk_place_elems(&projection);
+        p
+    }
+
+    fn elaborate_place_for_borrow(&self, place: &mir::Place<'tcx>) -> mir::Place<'tcx> {
+        let mut place = self.elaborate_place(place);
+        assert!(place.projection.last() == Some(&mir::ProjectionElem::Deref));
+        place.projection = self
+            .tcx
+            .mk_place_elems(&place.projection.as_slice()[..place.projection.len() - 1]);
+        place
+    }
+
+    fn assign_to_local(&mut self, local: Local, rvalue: mir::Rvalue<'tcx>) {
         let (_local_ty, local_term) = self.env.local_type(local);
         let (_rvalue_ty, rvalue_term) = self.rvalue_type(rvalue);
         if let Some(rvalue_term) = rvalue_term {
@@ -457,17 +477,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         referent: mir::Place<'tcx>,
     ) -> rty::RefinedType<Var> {
         let temp_var = self.prophecy_vars[&statement_index];
-        let (ty, term) = self.env.borrow_place(referent, temp_var);
+        let place = self.elaborate_place_for_borrow(&referent);
+        let (ty, term) = self.env.borrow_place(place, temp_var);
         rty::RefinedType::refined_with_term(ty, term)
     }
 
     fn borrow_place_(
         &mut self,
-        place: mir::Place<'tcx>,
+        referent: mir::Place<'tcx>,
         prophecy_ty: mir_ty::Ty<'tcx>,
     ) -> rty::RefinedType<Var> {
         let prophecy_ty = self.ctx.mir_ty(prophecy_ty);
         let prophecy = self.env.push_temp_var(prophecy_ty);
+        let place = self.elaborate_place_for_borrow(&referent);
         let (ty, term) = self.env.borrow_place(place, prophecy);
         rty::RefinedType::refined_with_term(ty, term)
     }
@@ -539,6 +561,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) {
         if self.is_defined(lhs.local) {
             // assignment
+            // ReborrowVisitor must transform every assignment into this form
             assert!(lhs.projection.as_slice() == &[mir::PlaceElem::Deref]);
             self.assign_to_local(lhs.local, rvalue.clone());
             return;
@@ -584,9 +607,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .cloned()
             .enumerate()
         {
-            self.reborrow_visitor().visit_statement(&mut stmt);
             self.replace_elaborated_locals_visitor()
                 .visit_statement(&mut stmt);
+            self.reborrow_visitor().visit_statement(&mut stmt);
             tracing::debug!(%stmt_idx, ?stmt);
             match &stmt.kind {
                 StatementKind::Assign(x) => {
@@ -607,9 +630,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut term = self.body.basic_blocks[self.basic_block]
             .terminator()
             .clone();
-        self.reborrow_visitor().visit_terminator(&mut term);
         self.replace_elaborated_locals_visitor()
             .visit_terminator(&mut term);
+        self.reborrow_visitor().visit_terminator(&mut term);
         tracing::debug!(term = ?term.kind);
         match &term.kind {
             TerminatorKind::Return => {
