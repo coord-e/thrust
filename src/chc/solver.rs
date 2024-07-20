@@ -16,6 +16,7 @@ pub struct Config {
     pub solver_args: Vec<String>,
     pub temp_dir: std::path::PathBuf,
     pub timeout: Option<std::time::Duration>,
+    pub smtlib2_output: Option<std::path::PathBuf>,
 }
 
 impl Default for Config {
@@ -25,6 +26,7 @@ impl Default for Config {
             solver_args: vec!["fp.spacer.global=true".to_owned()],
             temp_dir: std::env::temp_dir(),
             timeout: Some(std::time::Duration::from_secs(30)),
+            smtlib2_output: None,
         }
     }
 }
@@ -51,6 +53,9 @@ impl Config {
             } else {
                 config.timeout = Some(std::time::Duration::from_secs(timeout_secs));
             }
+        }
+        if let Some(path) = std::env::var("REFA_SMTLIB2_OUTPUT").ok() {
+            config.smtlib2_output = Some(path.into());
         }
         config
     }
@@ -91,7 +96,11 @@ impl Config {
         tracing::info!(solver = self.solver, args = ?self.solver_args, path = %file.path().display(), pid = child.id(), "spawned solver");
 
         let (output, elapsed) = self.wait_solver(child)?;
-        drop(file);
+        if let Some(path) = &self.smtlib2_output {
+            file.persist(path).map_err(|e| e.error)?;
+        } else {
+            drop(file);
+        }
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         tracing::info!(status = %output.status, stdout = stdout.trim(), stderr = stderr.trim(), ?elapsed, "solver exited");
