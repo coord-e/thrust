@@ -205,6 +205,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let (ty, term) = match (&lhs_ty, op) {
                     (rty::Type::Int, mir::BinOp::Add) => (lhs_ty, lhs_term.add(rhs_term)),
                     (rty::Type::Int, mir::BinOp::Sub) => (lhs_ty, lhs_term.sub(rhs_term)),
+                    (rty::Type::Int, mir::BinOp::Mul) => (lhs_ty, lhs_term.mul(rhs_term)),
                     (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
                         (rty::Type::Bool, lhs_term.ge(rhs_term))
                     }

@@ -224,6 +224,7 @@ impl Function {
         match *self {
             Self::ADD => Sort::int(),
             Self::SUB => Sort::int(),
+            Self::MUL => Sort::int(),
             Self::EQ => Sort::bool(),
             Self::GE => Sort::bool(),
             Self::GT => Sort::bool(),
@@ -236,6 +237,7 @@ impl Function {
 
     pub const ADD: Function = Function::infix("+");
     pub const SUB: Function = Function::infix("-");
+    pub const MUL: Function = Function::infix("*");
     pub const EQ: Function = Function::infix("=");
     pub const GE: Function = Function::infix(">=");
     pub const GT: Function = Function::infix(">");
@@ -457,6 +459,10 @@ impl<V> Term<V> {
 
     pub fn sub(self, other: Self) -> Self {
         Term::App(Function::SUB, vec![self, other])
+    }
+
+    pub fn mul(self, other: Self) -> Self {
+        Term::App(Function::MUL, vec![self, other])
     }
 
     pub fn eq(self, other: Self) -> Self {
