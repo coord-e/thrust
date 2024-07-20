@@ -316,8 +316,13 @@ impl Env {
                 };
                 match (ty.kind(), val) {
                     (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                        (rty::Type::int(), chc::Term::int(val.try_to_i64().unwrap()))
+                        let val = val.try_to_int(val.size()).unwrap();
+                        (rty::Type::int(), chc::Term::int(val.try_into().unwrap()))
                     }
+                    (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => (
+                        rty::Type::bool(),
+                        chc::Term::bool(val.try_to_bool().unwrap()),
+                    ),
                     (
                         mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                         ConstValue::Slice { data, meta },
