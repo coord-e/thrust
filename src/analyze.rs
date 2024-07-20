@@ -45,6 +45,29 @@ impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
 }
 
 impl<'tcx> Analyzer<'tcx> {
+    fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
+    where
+        F: FnMut(FV) -> chc::Sort,
+        FV: std::hash::Hash + Eq + Clone + std::fmt::Debug + 'static,
+    {
+        let fvs: Vec<_> = atoms.iter().flat_map(|a| a.fv()).cloned().collect();
+        let mut builder = chc::ClauseBuilder::default();
+        let mut pred_sig = chc::PredSig::new();
+        for fv in &fvs {
+            let sort = fv_sort(fv.clone());
+            builder.add_mapped_var(fv.clone(), sort.clone());
+            pred_sig.push(sort);
+        }
+        for atom in atoms {
+            builder.add_body_mapped(atom);
+        }
+        let pv = self.system.new_pred_var(pred_sig);
+        let head = chc::Atom::new(pv.into(), fvs.into_iter().map(chc::Term::var).collect());
+        let clause = builder.head_mapped(head.clone());
+        self.add_clause(clause);
+        head
+    }
+
     fn relate_sub_type(&mut self, got: &rty::Type, expected: &rty::Type) {
         tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
 

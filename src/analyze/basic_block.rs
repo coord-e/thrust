@@ -360,6 +360,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             == Some(&rustc_span::symbol::sym::box_new)
     }
 
+    fn is_mem_swap(&self, def_id: DefId) -> bool {
+        // TODO: stop using diagnositc item for semantic purpose
+        self.tcx.all_diagnostic_items(()).id_to_name.get(&def_id)
+            == Some(&rustc_span::symbol::sym::mem_swap)
+    }
+
     fn type_call<I>(&mut self, func: Operand<'tcx>, args: I, expected_ret: &rty::RefinedType<Var>)
     where
         I: IntoIterator<Item = Operand<'tcx>>,
@@ -377,6 +383,30 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     ret_term,
                 );
                 rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret).into()
+            }
+            Some((def_id, args)) if self.is_mem_swap(def_id) => {
+                let inner_ty = self.ctx.mir_ty(args.type_at(0));
+                let param1 =
+                    rty::RefinedType::unrefined(rty::PointerType::mut_to(inner_ty.clone()).into());
+                let param2 =
+                    rty::RefinedType::unrefined(rty::PointerType::mut_to(inner_ty.clone()).into());
+                let param1_var = rty::RefinedTypeVar::Free(rty::FunctionParamIdx::from(0_usize));
+                let param2_var = rty::RefinedTypeVar::Free(rty::FunctionParamIdx::from(1_usize));
+                let ret1 = chc::Term::var(param1_var)
+                    .mut_current()
+                    .equal_to(chc::Term::var(param2_var).mut_final());
+                let ret2 = chc::Term::var(param2_var)
+                    .mut_current()
+                    .equal_to(chc::Term::var(param1_var).mut_final());
+                let ret_refinement = self
+                    .ctx
+                    .implied_atom(vec![ret1, ret2], |_| param1.ty.to_sort());
+                let ret = rty::RefinedType::new(rty::Type::unit(), ret_refinement);
+                rty::FunctionType::new(
+                    [param1.vacuous(), param2.vacuous()].into_iter().collect(),
+                    ret,
+                )
+                .into()
             }
             Some((def_id, args)) => {
                 if !args.is_empty() {

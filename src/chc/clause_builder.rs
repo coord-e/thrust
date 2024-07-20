@@ -95,9 +95,23 @@ impl ClauseBuilder {
         self
     }
 
+    pub fn add_body_mapped<T>(&mut self, atom: Atom<T>) -> &mut Self
+    where
+        T: Hash + Eq + Debug + 'static,
+    {
+        self.add_body(atom.map_var(|v| self.mapped_var(v)))
+    }
+
     pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
         let vars = self.vars.clone();
         let body = self.body.clone();
         Clause { vars, head, body }
+    }
+
+    pub fn head_mapped<T>(&self, head: Atom<T>) -> Clause
+    where
+        T: Hash + Eq + Debug + 'static,
+    {
+        self.head(head.map_var(|v| self.mapped_var(v)))
     }
 }

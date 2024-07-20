@@ -396,6 +396,25 @@ impl<V> Term<V> {
         }
     }
 
+    fn fv_impl(&self) -> Box<dyn Iterator<Item = &V> + '_> {
+        match self {
+            Term::Var(v) => Box::new(std::iter::once(v)),
+            Term::Bool(_) | Term::Int(_) | Term::String(_) => Box::new(std::iter::empty()),
+            Term::Box(t) => t.fv_impl(),
+            Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
+            Term::BoxCurrent(t) => t.fv_impl(),
+            Term::MutCurrent(t) => t.fv_impl(),
+            Term::MutFinal(t) => t.fv_impl(),
+            Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
+            Term::TupleProj(t, _) => t.fv_impl(),
+        }
+    }
+
+    pub fn fv(&self) -> impl Iterator<Item = &V> {
+        self.fv_impl()
+    }
+
     pub fn var(v: V) -> Self {
         Term::Var(v)
     }
@@ -733,6 +752,10 @@ impl<V> Atom<V> {
             pred: self.pred,
             args: self.args.into_iter().map(|t| t.map_var(|v| f(v))).collect(),
         }
+    }
+
+    pub fn fv(&self) -> impl Iterator<Item = &V> {
+        self.args.iter().flat_map(|t| t.fv())
     }
 }
 
