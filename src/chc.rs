@@ -135,7 +135,7 @@ impl Sort {
     pub fn is_singleton(&self) -> bool {
         match self {
             Sort::Null => true,
-            Sort::Tuple(ts) => ts.is_empty() || ts.iter().all(Sort::is_singleton),
+            Sort::Tuple(ts) => ts.iter().all(Sort::is_singleton),
             Sort::Box(s) => s.is_singleton(),
             Sort::Mut(s) => s.is_singleton(),
             _ => false,
@@ -248,6 +248,7 @@ impl Function {
 
 #[derive(Debug, Clone)]
 pub enum Term<V = TermVarIdx> {
+    Null,
     Var(V),
     Bool(bool),
     Int(i64),
@@ -270,6 +271,7 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
+            Term::Null => allocator.text("null"),
             Term::Var(var) => var.pretty(allocator),
             Term::Int(n) => allocator.as_string(n),
             Term::Bool(b) => allocator.as_string(b),
@@ -341,6 +343,7 @@ impl<V> Term<V> {
     // TODO: ?
     fn subst_var_impl<F, W>(self, mut f: Box<dyn FnMut(V) -> Term<W> + '_>) -> Term<W> {
         match self {
+            Term::Null => Term::Null,
             Term::Var(v) => f(v),
             Term::Bool(b) => Term::Bool(b),
             Term::Int(n) => Term::Int(n),
@@ -379,6 +382,7 @@ impl<V> Term<V> {
         F: FnMut(&V) -> Sort,
     {
         match self {
+            Term::Null => Sort::null(),
             Term::Var(v) => var_sort(v),
             Term::Bool(_) => Sort::bool(),
             Term::Int(_) => Sort::int(),
@@ -401,7 +405,9 @@ impl<V> Term<V> {
     fn fv_impl(&self) -> Box<dyn Iterator<Item = &V> + '_> {
         match self {
             Term::Var(v) => Box::new(std::iter::once(v)),
-            Term::Bool(_) | Term::Int(_) | Term::String(_) => Box::new(std::iter::empty()),
+            Term::Null | Term::Bool(_) | Term::Int(_) | Term::String(_) => {
+                Box::new(std::iter::empty())
+            }
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
             Term::BoxCurrent(t) => t.fv_impl(),
@@ -415,6 +421,10 @@ impl<V> Term<V> {
 
     pub fn fv(&self) -> impl Iterator<Item = &V> {
         self.fv_impl()
+    }
+
+    pub fn null() -> Self {
+        Term::Null
     }
 
     pub fn var(v: V) -> Self {

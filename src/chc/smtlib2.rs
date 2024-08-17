@@ -104,6 +104,7 @@ struct Term<'a> {
 impl<'a> std::fmt::Display for Term<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.inner {
+            chc::Term::Null => write!(f, "null"),
             chc::Term::Var(v) => write!(f, "{}", v),
             chc::Term::Int(i) => write!(f, "{}", i),
             chc::Term::Bool(b) => write!(f, "{}", b),
@@ -314,6 +315,7 @@ impl<'a> std::fmt::Display for System<'a> {
 fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort>) {
     sorts.insert(clause.term_sort(t));
     match t {
+        chc::Term::Null => {}
         chc::Term::Var(_) => {}
         chc::Term::Bool(_) => {}
         chc::Term::Int(_) => {}

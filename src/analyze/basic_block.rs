@@ -188,12 +188,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         (sty, term)
     }
 
-    fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> (rty::Type, Option<chc::Term<Var>>) {
+    fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> (rty::Type, chc::Term<Var>) {
         match rvalue {
-            Rvalue::Use(operand) => {
-                let (ty, term) = self.operand_type(operand);
-                (ty, Some(term))
-            }
+            Rvalue::Use(operand) => self.operand_type(operand),
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = *operands;
                 let (lhs_ty, lhs_term) = self.operand_type(lhs);
@@ -201,7 +198,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 // NOTE: BinOp::Offset accepts operands with different types
                 //       but we don't support it here
                 self.ctx.relate_equal_type(&lhs_ty, &rhs_ty);
-                let (ty, term) = match (&lhs_ty, op) {
+                match (&lhs_ty, op) {
                     (rty::Type::Int, mir::BinOp::Add) => (lhs_ty, lhs_term.add(rhs_term)),
                     (rty::Type::Int, mir::BinOp::Sub) => (lhs_ty, lhs_term.sub(rhs_term)),
                     (rty::Type::Int, mir::BinOp::Mul) => (lhs_ty, lhs_term.mul(rhs_term)),
@@ -224,8 +221,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         (rty::Type::Bool, lhs_term.ne(rhs_term))
                     }
                     _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
-                };
-                (ty, Some(term))
+                }
+            }
+            Rvalue::Aggregate(kind, fields) if *kind == mir::AggregateKind::Tuple => {
+                let (field_tys, field_terms) = fields
+                    .into_iter()
+                    .map(|operand| self.operand_type(operand))
+                    .unzip();
+                (
+                    rty::TupleType::new(field_tys).into(),
+                    chc::Term::tuple(field_terms),
+                )
             }
             Rvalue::Cast(
                 mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::ReifyFnPointer),
@@ -241,20 +247,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     }
                     _ => unimplemented!(),
                 };
-                (func_ty.into(), None)
+                (func_ty.into(), chc::Term::null())
             }
-            _ => unimplemented!("rvalue={:?}", rvalue),
+            _ => unimplemented!(
+                "rvalue={:?} ({:?})",
+                rvalue,
+                std::mem::discriminant(&rvalue)
+            ),
         }
     }
 
     fn rvalue_refined_type(&mut self, rvalue: Rvalue<'tcx>) -> rty::RefinedType<Var> {
         let (sty, term) = self.rvalue_type(rvalue);
 
-        if let Some(term) = term {
-            // TODO: should we cover "is_singleton" ness in relate_* methods or here?
-            if !sty.to_sort().is_singleton() {
-                return rty::RefinedType::refined_with_term(sty, term);
-            }
+        // TODO: should we cover "is_singleton" ness in relate_* methods or here?
+        if !sty.to_sort().is_singleton() {
+            return rty::RefinedType::refined_with_term(sty, term);
         }
 
         rty::RefinedType::unrefined(sty).vacuous()
@@ -453,8 +461,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn assign_to_local(&mut self, local: Local, rvalue: mir::Rvalue<'tcx>) {
         let (_local_ty, local_term) = self.env.local_type(local);
-        let (_rvalue_ty, rvalue_term) = self.rvalue_type(rvalue);
-        if let Some(rvalue_term) = rvalue_term {
+        let (rvalue_ty, rvalue_term) = self.rvalue_type(rvalue);
+        if !rvalue_ty.to_sort().is_singleton() {
             self.env
                 .assume(local_term.mut_final().equal_to(rvalue_term));
         }

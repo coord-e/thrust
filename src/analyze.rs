@@ -77,6 +77,13 @@ impl<'tcx> Analyzer<'tcx> {
             | (rty::Type::Bool, rty::Type::Bool)
             | (rty::Type::String, rty::Type::String)
             | (rty::Type::Never, rty::Type::Never) => {}
+            (rty::Type::Tuple(got), rty::Type::Tuple(expected))
+                if got.elems.len() == expected.elems.len() =>
+            {
+                for (got_ty, expected_ty) in got.elems.iter().zip(expected.elems.iter()) {
+                    self.relate_sub_type(got_ty, expected_ty);
+                }
+            }
             (rty::Type::Pointer(got), rty::Type::Pointer(expected))
                 if got.kind == expected.kind =>
             {

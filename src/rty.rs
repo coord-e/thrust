@@ -185,6 +185,38 @@ impl PointerType {
 }
 
 #[derive(Debug, Clone)]
+pub struct TupleType {
+    pub elems: Vec<Type>,
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TupleType
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let separator = allocator.text(",").append(allocator.line());
+        if self.elems.len() == 1 {
+            self.elems[0].pretty(allocator).append(separator).parens()
+        } else {
+            allocator
+                .intersperse(self.elems.iter().map(|s| s.pretty(allocator)), separator)
+                .parens()
+        }
+    }
+}
+
+impl TupleType {
+    pub fn new(elems: Vec<Type>) -> Self {
+        TupleType { elems }
+    }
+
+    pub fn is_unit(&self) -> bool {
+        self.elems.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Type {
     Unit,
     Int,
@@ -193,6 +225,7 @@ pub enum Type {
     Never,
     Pointer(PointerType),
     Function(FunctionType),
+    Tuple(TupleType),
 }
 
 impl From<FunctionType> for Type {
@@ -204,6 +237,12 @@ impl From<FunctionType> for Type {
 impl From<PointerType> for Type {
     fn from(t: PointerType) -> Type {
         Type::Pointer(t)
+    }
+}
+
+impl From<TupleType> for Type {
+    fn from(t: TupleType) -> Type {
+        Type::Tuple(t)
     }
 }
 
@@ -221,6 +260,7 @@ where
             Type::Never => allocator.text("!"),
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
+            Type::Tuple(ty) => ty.pretty(allocator),
         }
     }
 }
@@ -290,6 +330,13 @@ impl Type {
         }
     }
 
+    pub fn into_tuple(self) -> Option<TupleType> {
+        match self {
+            Type::Tuple(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
     pub fn is_mut(&self) -> bool {
         match self {
             Type::Pointer(ty) => ty.is_mut(),
@@ -324,6 +371,10 @@ impl Type {
                 sort
             }
             Type::Function { .. } => chc::Sort::null(),
+            Type::Tuple(ty) => {
+                let elem_sorts = ty.elems.iter().map(|ty| ty.to_sort()).collect();
+                chc::Sort::tuple(elem_sorts)
+            }
         }
     }
 }

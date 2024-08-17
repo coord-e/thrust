@@ -68,7 +68,10 @@ pub trait TemplateTypeGenerator: PredVarGenerator {
                     mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
                 }
             }
-            mir_ty::TyKind::Tuple(ts) if ts.is_empty() => rty::Type::unit(),
+            mir_ty::TyKind::Tuple(ts) => {
+                let elems = ts.iter().map(|ty| self.mir_ty(ty)).collect();
+                rty::TupleType::new(elems).into()
+            }
             mir_ty::TyKind::Never => rty::Type::never(),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
