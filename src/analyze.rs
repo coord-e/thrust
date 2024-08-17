@@ -72,8 +72,7 @@ impl<'tcx> Analyzer<'tcx> {
         tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
 
         match (got, expected) {
-            (rty::Type::Unit, rty::Type::Unit)
-            | (rty::Type::Int, rty::Type::Int)
+            (rty::Type::Int, rty::Type::Int)
             | (rty::Type::Bool, rty::Type::Bool)
             | (rty::Type::String, rty::Type::String)
             | (rty::Type::Never, rty::Type::Never) => {}

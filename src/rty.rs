@@ -211,6 +211,10 @@ impl TupleType {
         TupleType { elems }
     }
 
+    pub fn unit() -> Self {
+        TupleType::new(vec![])
+    }
+
     pub fn is_unit(&self) -> bool {
         self.elems.is_empty()
     }
@@ -218,7 +222,6 @@ impl TupleType {
 
 #[derive(Debug, Clone)]
 pub enum Type {
-    Unit,
     Int,
     Bool,
     String,
@@ -253,7 +256,6 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
-            Type::Unit => allocator.text("()"),
             Type::Int => allocator.text("int"),
             Type::Bool => allocator.text("bool"),
             Type::String => allocator.text("string"),
@@ -281,7 +283,7 @@ impl Type {
     }
 
     pub fn unit() -> Self {
-        Type::Unit
+        Type::Tuple(TupleType::unit())
     }
 
     pub fn int() -> Self {
@@ -313,7 +315,7 @@ impl Type {
     }
 
     pub fn is_unit(&self) -> bool {
-        matches!(self, Type::Unit)
+        matches!(self, Type::Tuple(ty) if ty.is_unit())
     }
 
     pub fn as_function(&self) -> Option<&FunctionType> {
@@ -353,7 +355,6 @@ impl Type {
 
     pub fn to_sort(&self) -> chc::Sort {
         match self {
-            Type::Unit => chc::Sort::null(),
             Type::Int => chc::Sort::int(),
             Type::Bool => chc::Sort::bool(),
             // TODO: enable string reasoning
