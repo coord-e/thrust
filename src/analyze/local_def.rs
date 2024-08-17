@@ -38,7 +38,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for (bb, _data) in mir::traversal::postorder(self.body) {
             self.drop_points.insert(bb, builder.build(&mut results, bb));
             results.seek_to_block_start(bb);
-            let live_locals: Vec<_> = results
+            let mut live_locals: Vec<_> = results
                 .get()
                 .iter()
                 .map(|in_local| {
@@ -50,6 +50,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     (in_local, type_and_mut)
                 })
                 .collect();
+            // TODO: ad-hoc
+            if bb == mir::START_BLOCK {
+                for a in self.body.args_iter() {
+                    if live_locals.iter().any(|(l, _)| *l == a) {
+                        continue;
+                    }
+                    let decl = &self.body.local_decls[a];
+                    let type_and_mut = TypeAndMut {
+                        ty: decl.ty,
+                        mutbl: decl.mutability,
+                    };
+                    live_locals.push((a, type_and_mut));
+                    self.drop_points
+                        .get_mut(&bb)
+                        .unwrap()
+                        .before_statements
+                        .push(a);
+                }
+            }
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
             let rty = self.ctx.mir_basic_block_ty(live_locals, ret_ty);

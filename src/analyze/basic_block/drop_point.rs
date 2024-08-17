@@ -6,6 +6,8 @@ use rustc_mir_dataflow::{impls::MaybeLiveLocals, ResultsCursor};
 
 #[derive(Debug, Clone, Default)]
 pub struct DropPoints {
+    // TODO: ad-hoc
+    pub before_statements: Vec<Local>,
     after_statements: Vec<BitSet<Local>>,
     after_terminator: HashMap<BasicBlock, BitSet<Local>>,
 }
@@ -143,6 +145,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
             "analyzed implicit drop points"
         );
         DropPoints {
+            before_statements: Default::default(),
             after_statements,
             after_terminator,
         }

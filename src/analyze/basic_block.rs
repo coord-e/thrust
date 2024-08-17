@@ -601,6 +601,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn analyze_statements(&mut self) {
+        for local in self.drop_points.before_statements.clone() {
+            tracing::info!(?local, "implicitly dropped before statements");
+            self.drop_local(local);
+        }
         for (stmt_idx, mut stmt) in self.body.basic_blocks[self.basic_block]
             .statements
             .iter()
