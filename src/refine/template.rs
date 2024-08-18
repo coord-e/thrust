@@ -12,7 +12,7 @@ pub trait PredVarGenerator {
 
 fn mir_function_ty_impl<'tcx, T, I>(g: &mut T, params: I, ret_ty: rty::Type) -> rty::FunctionType
 where
-    T: TemplateTypeGenerator + ?Sized,
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
     I: IntoIterator<Item = mir_ty::TypeAndMut<'tcx>>,
 {
     let param_tys: Vec<_> = params
@@ -51,12 +51,14 @@ where
     rty::FunctionType::new(param_rtys, ret_rty)
 }
 
-pub trait TemplateTypeGenerator: PredVarGenerator {
+pub trait TemplateTypeGenerator<'tcx>: PredVarGenerator {
+    fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
+
     fn register_template<FV>(&mut self, tmpl: rty::Template<FV>) -> rty::RefinedType<FV> {
         tmpl.into_refined_type(|pred_sig| self.generate_pred_var(pred_sig))
     }
 
-    fn mir_ty(&mut self, ty: mir_ty::Ty<'_>) -> rty::Type {
+    fn mir_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type {
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
             mir_ty::TyKind::Int(_) => rty::Type::int(),
@@ -82,15 +84,24 @@ pub trait TemplateTypeGenerator: PredVarGenerator {
             mir_ty::TyKind::Adt(def, params) if def.is_box() => {
                 rty::PointerType::own(self.mir_ty(params.type_at(0))).into()
             }
+            mir_ty::TyKind::Adt(def, params) => {
+                if !def.is_struct() {
+                    unimplemented!("non-struct ADT: {:?}", ty);
+                }
+                let elem_tys = def
+                    .all_fields()
+                    .map(|field| {
+                        let ty = field.ty(self.tcx(), params);
+                        self.mir_ty(ty)
+                    })
+                    .collect();
+                rty::TupleType::new(elem_tys).into()
+            }
             kind => unimplemented!("mir_ty: {:?}", kind),
         }
     }
 
-    fn mir_basic_block_ty<'tcx, I>(
-        &mut self,
-        live_locals: I,
-        ret_ty: mir_ty::Ty<'tcx>,
-    ) -> BasicBlockType
+    fn mir_basic_block_ty<I>(&mut self, live_locals: I, ret_ty: mir_ty::Ty<'tcx>) -> BasicBlockType
     where
         I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
     {
@@ -106,7 +117,7 @@ pub trait TemplateTypeGenerator: PredVarGenerator {
         BasicBlockType { ty, locals }
     }
 
-    fn mir_function_ty(&mut self, sig: mir_ty::FnSig<'_>) -> rty::FunctionType {
+    fn mir_function_ty(&mut self, sig: mir_ty::FnSig<'tcx>) -> rty::FunctionType {
         let ret_ty = self.mir_ty(sig.output());
         mir_function_ty_impl(
             self,
@@ -118,5 +129,3 @@ pub trait TemplateTypeGenerator: PredVarGenerator {
         )
     }
 }
-
-impl<T> TemplateTypeGenerator for T where T: PredVarGenerator {}

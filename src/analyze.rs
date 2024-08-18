@@ -44,6 +44,12 @@ impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
     }
 }
 
+impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+}
+
 impl<'tcx> Analyzer<'tcx> {
     fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
     where

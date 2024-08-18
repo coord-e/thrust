@@ -90,7 +90,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .subst_var(|idx| subst_var_fn(&self.env, idx))
     }
 
-    fn mir_refined_ty(&mut self, ty: mir_ty::Ty<'_>) -> rty::RefinedType<Var> {
+    fn mir_refined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<Var> {
         let ty = self.ctx.mir_ty(ty);
         let mut builder = rty::TemplateBuilder::default();
         for (v, sort) in self.env.dependencies() {
@@ -223,7 +223,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
                 }
             }
-            Rvalue::Aggregate(kind, fields) if *kind == mir::AggregateKind::Tuple => {
+            Rvalue::Aggregate(_kind, fields) => {
                 let (field_tys, field_terms) = fields
                     .into_iter()
                     .map(|operand| self.operand_type(operand))
@@ -472,7 +472,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.drop_local(local);
     }
 
-    fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'_>) {
+    fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'tcx>) {
         let ty = self.ctx.mir_ty(ty);
         let temp_var = self.env.push_temp_var(ty);
         self.prophecy_vars.insert(statement_index, temp_var);
