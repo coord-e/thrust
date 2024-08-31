@@ -10,6 +10,32 @@ pub use clause_builder::ClauseBuilder;
 pub use solver::{CheckSatError, Config};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DatatypeSymbol {
+    inner: String,
+}
+
+impl std::fmt::Display for DatatypeSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b DatatypeSymbol
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator.text(self.inner.clone())
+    }
+}
+
+impl DatatypeSymbol {
+    pub fn new(inner: String) -> Self {
+        DatatypeSymbol { inner }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
     Null,
     Int,
@@ -18,6 +44,7 @@ pub enum Sort {
     Box(Box<Sort>),
     Mut(Box<Sort>),
     Tuple(Vec<Sort>),
+    Datatype(DatatypeSymbol),
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Sort
@@ -51,6 +78,7 @@ where
                         .parens()
                 }
             }
+            Sort::Datatype(symbol) => symbol.pretty(allocator),
         }
     }
 }
@@ -82,18 +110,6 @@ impl Sort {
         match self {
             Sort::Tuple(ss) => ss[index].clone(),
             _ => panic!("invalid tuple_elem"),
-        }
-    }
-
-    fn length(&self) -> usize {
-        match self {
-            Sort::Null => 1,
-            Sort::Int => 1,
-            Sort::Bool => 1,
-            Sort::String => 1,
-            Sort::Box(s) => s.length() + 1,
-            Sort::Mut(s) => s.length() + 1,
-            Sort::Tuple(ss) => ss.iter().map(Sort::length).sum::<usize>() + 1,
         }
     }
 
@@ -130,6 +146,10 @@ impl Sort {
 
     pub fn tuple(sorts: Vec<Sort>) -> Self {
         Sort::Tuple(sorts)
+    }
+
+    pub fn datatype(symbol: DatatypeSymbol) -> Self {
+        Sort::Datatype(symbol)
     }
 
     pub fn is_singleton(&self) -> bool {
@@ -261,6 +281,7 @@ pub enum Term<V = TermVarIdx> {
     App(Function, Vec<Term<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
+    DatatypeCtor(DatatypeSymbol, DatatypeSymbol, Vec<Term<V>>),
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
@@ -320,6 +341,13 @@ where
                 .pretty_atom(allocator)
                 .append(allocator.text("."))
                 .append(allocator.as_string(i)),
+            Term::DatatypeCtor(_, symbol, args) => {
+                let separator = allocator.text(",").append(allocator.line());
+                let args = allocator
+                    .intersperse(args.iter().map(|t| t.pretty(allocator)), separator)
+                    .parens();
+                symbol.pretty(allocator).append(args).group()
+            }
         }
     }
 }
@@ -360,6 +388,11 @@ impl<V> Term<V> {
             }
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
+            Term::DatatypeCtor(d_sym, c_sym, args) => Term::DatatypeCtor(
+                d_sym,
+                c_sym,
+                args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
+            ),
         }
     }
 
@@ -399,6 +432,7 @@ impl<V> Term<V> {
                 Sort::tuple(ts.iter().map(|t| t.sort(&mut var_sort)).collect())
             }
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
+            Term::DatatypeCtor(d_sym, _, _) => Sort::datatype(d_sym.clone()),
         }
     }
 
@@ -416,6 +450,7 @@ impl<V> Term<V> {
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
+            Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
         }
     }
 
@@ -508,6 +543,10 @@ impl<V> Term<V> {
 
     pub fn tuple_proj(self, i: usize) -> Self {
         Term::TupleProj(Box::new(self), i)
+    }
+
+    pub fn datatype_ctor(d_sym: DatatypeSymbol, c_sym: DatatypeSymbol, args: Vec<Term<V>>) -> Self {
+        Term::DatatypeCtor(d_sym, c_sym, args)
     }
 
     pub fn equal_to(self, other: Self) -> Atom<V> {
@@ -825,6 +864,24 @@ impl Clause {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DatatypeSelector {
+    pub symbol: DatatypeSymbol,
+    pub sort: Sort,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatatypeCtor {
+    pub symbol: DatatypeSymbol,
+    pub selectors: Vec<DatatypeSelector>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Datatype {
+    pub symbol: DatatypeSymbol,
+    pub ctors: Vec<DatatypeCtor>,
+}
+
 rustc_index::newtype_index! {
     #[debug_format = "c{}"]
     pub struct ClauseId { }
@@ -834,6 +891,7 @@ pub type PredSig = Vec<Sort>;
 
 #[derive(Debug, Clone, Default)]
 pub struct System {
+    pub datatypes: Vec<Datatype>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredSig>,
 }

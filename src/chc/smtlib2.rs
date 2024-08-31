@@ -70,6 +70,23 @@ impl<T> List<T> {
 }
 
 #[derive(Debug, Clone)]
+struct DatatypeSymbol<'a> {
+    inner: &'a chc::DatatypeSymbol,
+}
+
+impl<'a> std::fmt::Display for DatatypeSymbol<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "|{}|", self.inner)
+    }
+}
+
+impl<'a> DatatypeSymbol<'a> {
+    pub fn new(inner: &'a chc::DatatypeSymbol) -> Self {
+        Self { inner }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Sort<'a> {
     inner: &'a chc::Sort,
 }
@@ -84,6 +101,7 @@ impl<'a> std::fmt::Display for Sort<'a> {
             chc::Sort::Box(s) => write!(f, "Box{}", List::sorts(std::iter::once(Sort::new(s)))),
             chc::Sort::Mut(s) => write!(f, "Mut{}", List::sorts(std::iter::once(Sort::new(s)))),
             chc::Sort::Tuple(ss) => write!(f, "Tuple{}", List::sorts(ss.iter().map(Sort::new))),
+            chc::Sort::Datatype(s) => write!(f, "{}", DatatypeSymbol::new(s)),
         }
     }
 }
@@ -182,6 +200,14 @@ impl<'a> std::fmt::Display for Term<'a> {
                     Term::new(self.clause, t)
                 )
             }
+            chc::Term::DatatypeCtor(_, sym, args) => {
+                write!(
+                    f,
+                    "({} {})",
+                    sym,
+                    List::open(args.iter().map(|t| Term::new(self.clause, t)))
+                )
+            }
         }
     }
 }
@@ -252,6 +278,59 @@ impl<'a> Clause<'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct DatatypeSelector<'a> {
+    inner: &'a chc::DatatypeSelector,
+}
+
+impl<'a> std::fmt::Display for DatatypeSelector<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({} {})", self.inner.symbol, Sort::new(&self.inner.sort))
+    }
+}
+
+impl<'a> DatatypeSelector<'a> {
+    pub fn new(inner: &'a chc::DatatypeSelector) -> Self {
+        Self { inner }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DatatypeCtor<'a> {
+    inner: &'a chc::DatatypeCtor,
+}
+
+impl<'a> std::fmt::Display for DatatypeCtor<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let selectors = self.inner.selectors.iter().map(DatatypeSelector::new);
+        writeln!(f, "({} {})", self.inner.symbol, List::open(selectors))
+    }
+}
+
+impl<'a> DatatypeCtor<'a> {
+    pub fn new(inner: &'a chc::DatatypeCtor) -> Self {
+        Self { inner }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Datatype<'a> {
+    inner: &'a chc::Datatype,
+}
+
+impl<'a> std::fmt::Display for Datatype<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ctors = self.inner.ctors.iter().map(DatatypeCtor::new);
+        writeln!(f, "({} {})", self.inner.symbol, List::open(ctors))
+    }
+}
+
+impl<'a> Datatype<'a> {
+    pub fn new(inner: &'a chc::Datatype) -> Self {
+        Self { inner }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct System<'a> {
     inner: &'a chc::System,
 }
@@ -259,43 +338,14 @@ pub struct System<'a> {
 impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)")?;
-        let mut sorts: Vec<_> = self.collect_sorts().into_iter().collect();
-        sorts.sort_by_key(|s| s.length()); // print small one first
-        for s in sorts {
-            if let chc::Sort::Null = &s {
-                writeln!(f, "(declare-datatypes () ((Null null)))")?;
-            }
-            if let chc::Sort::Box(inner) = &s {
-                let inner = Sort::new(inner);
-                let ss = List::sorts(std::iter::once(inner.clone()));
-                writeln!(
-                    f,
-                    "(declare-datatypes () ((Box{ss} (box{ss} (box_current{ss} {inner})))))"
-                )?;
-            }
-            if let chc::Sort::Mut(inner) = &s {
-                let inner = Sort::new(inner);
-                let ss = List::sorts(std::iter::once(inner.clone()));
-                writeln!(
-                    f,
-                    "(declare-datatypes () ((Mut{ss} (mut{ss} (mut_current{ss} {inner}) (mut_final{ss} {inner})))))",
-                )?;
-            }
-            if let chc::Sort::Tuple(elems) = &s {
-                let ss = List::sorts(elems.iter().map(Sort::new));
-                let projs = elems
-                    .iter()
-                    .map(Sort::new)
-                    .enumerate()
-                    .map(|(i, s)| format!("(tuple_proj{ss}.{i} {s})"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                writeln!(
-                    f,
-                    "(declare-datatypes () ((Tuple{ss} (tuple{ss} {projs}))))",
-                )?;
-            }
-        }
+        let builtins = self.collect_builtin_datatypes();
+        let datatypes = List::closed(
+            builtins
+                .iter()
+                .chain(&self.inner.datatypes)
+                .map(Datatype::new),
+        );
+        writeln!(f, "(declare-datatypes () {datatypes})")?;
         for (p, sorts) in self.inner.pred_vars.iter_enumerated() {
             writeln!(
                 f,
@@ -339,6 +389,11 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort
             }
         }
         chc::Term::TupleProj(t, _) => term_sorts(clause, t, sorts),
+        chc::Term::DatatypeCtor(_, _, args) => {
+            for arg in args {
+                term_sorts(clause, arg, sorts);
+            }
+        }
     }
 }
 
@@ -346,6 +401,70 @@ fn atom_sorts(clause: &chc::Clause, a: &chc::Atom, sorts: &mut HashSet<chc::Sort
     for a in &a.args {
         term_sorts(clause, a, sorts);
     }
+}
+
+fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
+    let d = match s {
+        chc::Sort::Null => chc::Datatype {
+            symbol: chc::DatatypeSymbol::new("Null".to_string()),
+            ctors: vec![chc::DatatypeCtor {
+                symbol: chc::DatatypeSymbol::new("null".to_string()),
+                selectors: vec![],
+            }],
+        },
+        chc::Sort::Box(inner) => {
+            let ss = List::sorts(std::iter::once(Sort::new(&inner)));
+            chc::Datatype {
+                symbol: chc::DatatypeSymbol::new(format!("Box{ss}")),
+                ctors: vec![chc::DatatypeCtor {
+                    symbol: chc::DatatypeSymbol::new(format!("box{ss}")),
+                    selectors: vec![chc::DatatypeSelector {
+                        symbol: chc::DatatypeSymbol::new(format!("box_current{ss}")),
+                        sort: *inner,
+                    }],
+                }],
+            }
+        }
+        chc::Sort::Mut(inner) => {
+            let ss = List::sorts(std::iter::once(Sort::new(&inner)));
+            chc::Datatype {
+                symbol: chc::DatatypeSymbol::new(format!("Mut{ss}")),
+                ctors: vec![chc::DatatypeCtor {
+                    symbol: chc::DatatypeSymbol::new(format!("mut{ss}")),
+                    selectors: vec![
+                        chc::DatatypeSelector {
+                            symbol: chc::DatatypeSymbol::new(format!("mut_current{ss}")),
+                            sort: *inner.clone(),
+                        },
+                        chc::DatatypeSelector {
+                            symbol: chc::DatatypeSymbol::new(format!("mut_final{ss}")),
+                            sort: *inner,
+                        },
+                    ],
+                }],
+            }
+        }
+        chc::Sort::Tuple(elems) => {
+            let ss = List::sorts(elems.iter().map(Sort::new));
+            let selectors = elems
+                .iter()
+                .enumerate()
+                .map(|(i, sort)| chc::DatatypeSelector {
+                    symbol: chc::DatatypeSymbol::new(format!("tuple_proj{ss}.{i}")),
+                    sort: sort.clone(),
+                })
+                .collect();
+            chc::Datatype {
+                symbol: chc::DatatypeSymbol::new(format!("Tuple{ss}")),
+                ctors: vec![chc::DatatypeCtor {
+                    symbol: chc::DatatypeSymbol::new(format!("tuple{ss}")),
+                    selectors,
+                }],
+            }
+        }
+        _ => return None,
+    };
+    Some(d)
 }
 
 impl<'a> System<'a> {
@@ -369,5 +488,13 @@ impl<'a> System<'a> {
         }
 
         sorts
+    }
+
+    fn collect_builtin_datatypes(&self) -> Vec<chc::Datatype> {
+        self.collect_sorts()
+            .into_iter()
+            .map(builtin_sort_datatype)
+            .flatten()
+            .collect()
     }
 }

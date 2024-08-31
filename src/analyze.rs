@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use rustc_hir::lang_items::LangItem;
+use rustc_index::IndexVec;
 use rustc_middle::mir::{BasicBlock, Local};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
+use rustc_target::abi::VariantIdx;
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
@@ -18,6 +20,29 @@ mod local_def;
 
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
+}
+
+pub fn resolve_discr<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::VariantDiscr) -> u32 {
+    match discr {
+        mir_ty::VariantDiscr::Relative(i) => i,
+        mir_ty::VariantDiscr::Explicit(did) => {
+            let val = tcx.const_eval_poly(did).unwrap();
+            val.try_to_scalar_int().unwrap().try_to_u32().unwrap()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantDef {
+    pub name: chc::DatatypeSymbol,
+    pub discr: u32,
+    pub ty: rty::Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDatatypeDef {
+    pub name: chc::DatatypeSymbol,
+    pub variants: IndexVec<VariantIdx, EnumVariantDef>,
 }
 
 #[derive(Clone)]
@@ -36,6 +61,8 @@ pub struct Analyzer<'tcx> {
 
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
+
+    enum_datatypes: HashMap<DefId, EnumDatatypeDef>,
 }
 
 impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
@@ -82,6 +109,7 @@ impl<'tcx> Analyzer<'tcx> {
             | (rty::Type::Bool, rty::Type::Bool)
             | (rty::Type::String, rty::Type::String)
             | (rty::Type::Never, rty::Type::Never) => {}
+            (rty::Type::Enum(got), rty::Type::Enum(expected)) if got == expected => {}
             (rty::Type::Tuple(got), rty::Type::Tuple(expected))
                 if got.elems.len() == expected.elems.len() =>
             {
@@ -145,18 +173,25 @@ impl<'tcx> Analyzer<'tcx> {
         let defs = Default::default();
         let system = Default::default();
         let basic_blocks = Default::default();
+        let enum_datatypes = Default::default();
         Self {
             tcx,
             defs,
             system,
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
+            enum_datatypes,
         }
     }
 
     pub fn add_clause(&mut self, clause: chc::Clause) {
         tracing::debug!(clause = %clause.display(), id = ?self.system.clauses.next_index(), "add_clause");
         self.system.clauses.push(clause);
+    }
+
+    pub fn register_enum_def(&mut self, def_id: DefId, enum_def: EnumDatatypeDef) {
+        tracing::debug!(def_id = ?def_id, enum_def = ?enum_def, "register_enum_def");
+        self.enum_datatypes.insert(def_id, enum_def);
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {

@@ -220,6 +220,17 @@ impl TupleType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumType {
+    pub symbol: chc::DatatypeSymbol,
+}
+
+impl EnumType {
+    pub fn new(symbol: chc::DatatypeSymbol) -> Self {
+        EnumType { symbol }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Type {
     Int,
@@ -229,6 +240,7 @@ pub enum Type {
     Pointer(PointerType),
     Function(FunctionType),
     Tuple(TupleType),
+    Enum(EnumType),
 }
 
 impl From<FunctionType> for Type {
@@ -249,6 +261,12 @@ impl From<TupleType> for Type {
     }
 }
 
+impl From<EnumType> for Type {
+    fn from(t: EnumType) -> Type {
+        Type::Enum(t)
+    }
+}
+
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Type
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -263,6 +281,7 @@ where
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
             Type::Tuple(ty) => ty.pretty(allocator),
+            Type::Enum(ty) => ty.symbol.pretty(allocator),
         }
     }
 }
@@ -376,6 +395,7 @@ impl Type {
                 let elem_sorts = ty.elems.iter().map(|ty| ty.to_sort()).collect();
                 chc::Sort::tuple(elem_sorts)
             }
+            Type::Enum(ty) => chc::Sort::datatype(ty.symbol.clone()),
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use rustc_hir::def::DefKind;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{
     self, BasicBlock, Body, Local, Operand, Rvalue, StatementKind, TerminatorKind,
@@ -11,7 +12,7 @@ use rustc_target::abi::FieldIdx;
 use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{BasicBlockType, Env, TempVarIdx, TemplateTypeGenerator, Var};
+use crate::refine::{self, BasicBlockType, Env, TempVarIdx, TemplateTypeGenerator, Var};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 mod drop_point;
@@ -223,15 +224,38 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
                 }
             }
-            Rvalue::Aggregate(_kind, fields) => {
+            Rvalue::Aggregate(kind, fields) => {
                 let (field_tys, field_terms) = fields
                     .into_iter()
                     .map(|operand| self.operand_type(operand))
                     .unzip();
-                (
-                    rty::TupleType::new(field_tys).into(),
-                    chc::Term::tuple(field_terms),
-                )
+                let fields_ty = rty::TupleType::new(field_tys).into();
+                let fields_term = chc::Term::tuple(field_terms);
+                match *kind {
+                    mir::AggregateKind::Adt(did, variant_id, args, _, _)
+                        if self.tcx.def_kind(did) == DefKind::Enum =>
+                    {
+                        if !args.is_empty() {
+                            tracing::warn!(?args, ?did, ?variant_id, "generic args ignored");
+                        }
+                        let adt = self.tcx.adt_def(did);
+                        let ty_sym = refine::datatype_symbol(self.tcx, did);
+                        let variant = adt.variant(variant_id);
+                        let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
+
+                        let enum_ty = rty::EnumType::new(ty_sym.clone()).into();
+                        let ty = rty::TupleType::new(vec![rty::Type::Int, enum_ty]).into();
+
+                        let discr_term =
+                            chc::Term::int(analyze::resolve_discr(self.tcx, variant.discr).into());
+                        let datatype_term =
+                            chc::Term::datatype_ctor(ty_sym, v_sym, vec![fields_term]);
+                        let term = chc::Term::tuple(vec![discr_term, datatype_term]);
+
+                        (ty, term)
+                    }
+                    _ => (fields_ty, fields_term),
+                }
             }
             Rvalue::Cast(
                 mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::ReifyFnPointer),
@@ -248,6 +272,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!(),
                 };
                 (func_ty.into(), chc::Term::null())
+            }
+            Rvalue::Discriminant(place) => {
+                let place = self.elaborate_place(&place);
+                let (_ty, term) = self.env.place_type(place);
+                (rty::Type::Int, chc::Term::tuple_proj(term, 0))
             }
             _ => unimplemented!(
                 "rvalue={:?} ({:?})",

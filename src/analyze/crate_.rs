@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
+use rustc_hir::def::DefKind;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 
 use crate::analyze;
 use crate::annot::{AnnotAtom, AnnotParser};
 use crate::chc;
-use crate::refine::TemplateTypeGenerator;
+use crate::refine::{self, TemplateTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 pub struct Analyzer<'tcx, 'ctx> {
@@ -18,11 +19,13 @@ pub struct Analyzer<'tcx, 'ctx> {
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn refine_local_defs(&mut self) {
         for local_def_id in self.tcx.mir_keys(()) {
-            self.refine_def(local_def_id.to_def_id());
+            if let DefKind::Fn = self.tcx.def_kind(*local_def_id) {
+                self.refine_fn_def(local_def_id.to_def_id());
+            }
         }
     }
 
-    fn refine_def(&mut self, def_id: DefId) {
+    fn refine_fn_def(&mut self, def_id: DefId) {
         let sig = self.tcx.fn_sig(def_id);
         let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
 
@@ -94,6 +97,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn analyze_local_defs(&mut self) {
         for local_def_id in self.tcx.mir_keys(()) {
+            let DefKind::Fn = self.tcx.def_kind(*local_def_id) else {
+                continue;
+            };
             if self.trusted.contains(&local_def_id.to_def_id()) {
                 tracing::info!(?local_def_id, "trusted");
                 continue;
@@ -129,6 +135,38 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
     }
+
+    fn register_enum_defs(&mut self) {
+        for local_def_id in self.tcx.iter_local_def_id() {
+            let DefKind::Enum = self.tcx.def_kind(local_def_id) else {
+                continue;
+            };
+            let adt = self.tcx.adt_def(local_def_id);
+            let name = refine::datatype_symbol(self.tcx, local_def_id.to_def_id());
+            let variants = adt
+                .variants()
+                .iter()
+                .map(|variant| {
+                    let name = refine::datatype_symbol(self.tcx, variant.def_id);
+                    // TODO: consider using TyCtxt::tag_for_variant
+                    let discr = analyze::resolve_discr(self.tcx, variant.discr);
+                    let field_tys = variant
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            // TODO: generic args
+                            let field_ty = field.ty(self.tcx, self.tcx.mk_args(&[]));
+                            self.ctx.mir_ty(field_ty)
+                        })
+                        .collect();
+                    let ty = rty::TupleType::new(field_tys).into();
+                    analyze::EnumVariantDef { name, discr, ty }
+                })
+                .collect();
+            let def = analyze::EnumDatatypeDef { name, variants };
+            self.ctx.register_enum_def(local_def_id.to_def_id(), def);
+        }
+    }
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -139,6 +177,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn run(&mut self) {
+        self.register_enum_defs();
         self.refine_local_defs();
         self.analyze_local_defs();
         self.assert_callable_entry();

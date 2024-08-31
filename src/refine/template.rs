@@ -4,6 +4,7 @@ use rustc_middle::ty as mir_ty;
 
 use super::basic_block::BasicBlockType;
 use crate::chc;
+use crate::refine;
 use crate::rty;
 
 pub trait PredVarGenerator {
@@ -85,17 +86,22 @@ pub trait TemplateTypeGenerator<'tcx>: PredVarGenerator {
                 rty::PointerType::own(self.mir_ty(params.type_at(0))).into()
             }
             mir_ty::TyKind::Adt(def, params) => {
-                if !def.is_struct() {
-                    unimplemented!("non-struct ADT: {:?}", ty);
+                if def.is_enum() {
+                    let sym = refine::datatype_symbol(self.tcx(), def.did());
+                    let enum_ty = rty::EnumType::new(sym).into();
+                    rty::TupleType::new(vec![rty::Type::int(), enum_ty]).into()
+                } else if def.is_struct() {
+                    let elem_tys = def
+                        .all_fields()
+                        .map(|field| {
+                            let ty = field.ty(self.tcx(), params);
+                            self.mir_ty(ty)
+                        })
+                        .collect();
+                    rty::TupleType::new(elem_tys).into()
+                } else {
+                    unimplemented!("unsupported ADT: {:?}", ty);
                 }
-                let elem_tys = def
-                    .all_fields()
-                    .map(|field| {
-                        let ty = field.ty(self.tcx(), params);
-                        self.mir_ty(ty)
-                    })
-                    .collect();
-                rty::TupleType::new(elem_tys).into()
             }
             kind => unimplemented!("mir_ty: {:?}", kind),
         }
