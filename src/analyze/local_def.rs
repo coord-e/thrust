@@ -100,25 +100,32 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             };
             *param_ty = rty::RefinedType::new(
                 ty,
-                param_ty.refinement.clone().subst_var(|v| {
-                    let should_deref = match v {
-                        rty::RefinedTypeVar::Value => self.is_mut_param(param_idx),
-                        rty::RefinedTypeVar::Free(v) => self.is_mut_param(v),
-                    };
-                    if should_deref {
-                        chc::Term::var(v).box_current()
-                    } else {
-                        chc::Term::var(v)
-                    }
-                }),
+                param_ty
+                    .refinement
+                    .clone()
+                    .subst_value_var(|| {
+                        if self.is_mut_param(param_idx) {
+                            chc::Term::var(rty::RefinedTypeVar::Value).box_current()
+                        } else {
+                            chc::Term::var(rty::RefinedTypeVar::Value)
+                        }
+                    })
+                    .subst_var(|v| {
+                        if self.is_mut_param(v) {
+                            chc::Term::var(v).box_current()
+                        } else {
+                            chc::Term::var(v)
+                        }
+                    }),
             );
         }
 
-        fn_ty.ret.refinement = fn_ty.ret.refinement.clone().subst_var(|v| match v {
-            rty::RefinedTypeVar::Free(idx) if self.is_mut_param(idx) => {
+        fn_ty.ret.refinement = fn_ty.ret.refinement.clone().subst_var(|v| {
+            if self.is_mut_param(v) {
                 chc::Term::var(v).box_current()
+            } else {
+                chc::Term::var(v)
             }
-            _ => chc::Term::var(v),
         });
     }
 

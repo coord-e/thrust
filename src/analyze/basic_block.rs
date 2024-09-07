@@ -79,10 +79,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if let Some(local) = ty.local_of_param(param_idx) {
                 self.env.bind(local, param_ty);
             } else {
-                let param_refinement = param_ty.to_free_refinement(|| {
-                    panic!("non-local basic block function param must not mention value var")
-                });
-                self.env.assume(param_refinement);
+                // non-local basic block function param must not mention value var or existential
+                for atom in param_ty.refinement.instantiate().into_atoms() {
+                    self.env.assume(atom);
+                }
             }
         }
         ty.as_ref()
@@ -104,12 +104,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>, mutbl: mir::Mutability) {
         // elaboration:
         let elaborated_rty = if mutbl.is_mut() {
-            let refinement = rty.refinement.subst_var(|v| match v {
-                rty::RefinedTypeVar::Value => {
-                    chc::Term::var(rty::RefinedTypeVar::Value).box_current()
-                }
-                v => chc::Term::var(v),
-            });
+            let refinement = rty
+                .refinement
+                .subst_value_var(|| chc::Term::var(rty::RefinedTypeVar::Value).box_current());
             let ty = rty::PointerType::own(rty.ty).into();
             rty::RefinedType::new(ty, refinement)
         } else {
@@ -438,7 +435,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let ret_refinement = self
                     .ctx
                     .implied_atom(vec![ret1, ret2], |_| param1.ty.to_sort());
-                let ret = rty::RefinedType::new(rty::Type::unit(), ret_refinement);
+                let ret = rty::RefinedType::new(rty::Type::unit(), ret_refinement.into());
                 rty::FunctionType::new(
                     [param1.vacuous(), param2.vacuous()].into_iter().collect(),
                     ret,

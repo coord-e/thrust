@@ -133,12 +133,8 @@ impl Env {
     // when var = Var::Temp(idx), idx must be temp_vars.next_index() in bind_*
     fn bind_own(&mut self, var: Var, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
         // note that the given var is unbound here, so be careful of using indices around temp_vars
-        let current_refinement = refinement.subst_var(|v| match v {
-            rty::RefinedTypeVar::Value => {
-                chc::Term::box_(chc::Term::var(rty::RefinedTypeVar::Value))
-            }
-            rty::RefinedTypeVar::Free(v) => chc::Term::var(rty::RefinedTypeVar::Free(v)),
-        });
+        let current_refinement = refinement
+            .subst_value_var(|| chc::Term::box_(chc::Term::var(rty::RefinedTypeVar::Value)));
         let current = match var {
             Var::Local(local) => {
                 let current = self.temp_vars.next_index();
@@ -167,12 +163,11 @@ impl Env {
         } else {
             (next_index, next_index + 1)
         };
-        let current_refinement = refinement.subst_var(|v| match v {
-            rty::RefinedTypeVar::Value => chc::Term::mut_(
+        let current_refinement = refinement.subst_value_var(|| {
+            chc::Term::mut_(
                 chc::Term::var(rty::RefinedTypeVar::Value),
                 chc::Term::var(rty::RefinedTypeVar::Free(final_.into())),
-            ),
-            rty::RefinedTypeVar::Free(v) => chc::Term::var(rty::RefinedTypeVar::Free(v)),
+            )
         });
         let binding = FlowBinding::Mut(current, final_);
         match var {
@@ -211,8 +206,8 @@ impl Env {
                 rty::RefinedType::unrefined(elem.clone()).vacuous(),
             );
         }
-        let last_element_refinement = refinement.subst_var(|v| match v {
-            rty::RefinedTypeVar::Value => chc::Term::tuple(
+        let last_element_refinement = refinement.subst_value_var(|| {
+            chc::Term::tuple(
                 xs.iter()
                     .copied()
                     .map(|x| {
@@ -221,8 +216,7 @@ impl Env {
                     })
                     .chain(std::iter::once(chc::Term::var(rty::RefinedTypeVar::Value)))
                     .collect(),
-            ),
-            rty::RefinedTypeVar::Free(v) => chc::Term::var(rty::RefinedTypeVar::Free(v)),
+            )
         });
         let last = self.temp_vars.next_index();
         xs.push(last);
@@ -285,7 +279,7 @@ impl Env {
             .map(|(v, ty)| (v, ty.to_sort()))
     }
 
-    pub fn assumptions(&self) -> impl Iterator<Item = chc::Atom<Var>> + '_ {
+    fn vars(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
         self.locals
             .iter()
             .map(|(local, rty)| (Var::Local(*local), rty))
@@ -294,8 +288,7 @@ impl Env {
                     .iter_enumerated()
                     .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), rty))),
             )
-            .filter_map(|(var, rty)| rty.is_refined().then(|| rty.to_free_refinement(|| var)))
-            .chain(self.unbound_assumptions.iter().cloned())
+            .filter(|(_var, rty)| rty.is_refined())
     }
 
     pub fn build_clause(&self) -> chc::ClauseBuilder {
@@ -303,8 +296,23 @@ impl Env {
         for (v, sort) in self.dependencies() {
             builder.add_mapped_var(v, sort);
         }
-        for assumption in self.assumptions() {
-            builder.add_body(assumption.map_var(|v| builder.mapped_var(v)));
+        for (var, rty) in self.vars() {
+            let mut instantiator = rty
+                .refinement
+                .clone()
+                .map_var(|v| builder.mapped_var(v))
+                .instantiate();
+            for (ev, sort) in rty.refinement.existentials() {
+                let tv = builder.add_var(sort.clone());
+                instantiator.existential(ev, tv);
+            }
+            instantiator.value_var(builder.mapped_var(var));
+            for atom in instantiator.into_atoms() {
+                builder.add_body(atom);
+            }
+        }
+        for atom in &self.unbound_assumptions {
+            builder.add_body(atom.clone().map_var(|v| builder.mapped_var(v)));
         }
         builder
     }

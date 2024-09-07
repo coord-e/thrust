@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
@@ -418,9 +420,30 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+rustc_index::newtype_index! {
+    #[debug_format = "e{}"]
+    pub struct ExistentialVarIdx { }
+}
+
+impl std::fmt::Display for ExistentialVarIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "e{}", self.index())
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b ExistentialVarIdx
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator.as_string(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefinedTypeVar<FV> {
     Value,
+    Existential(ExistentialVarIdx),
     Free(FV),
 }
 
@@ -431,6 +454,7 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             RefinedTypeVar::Value => f.write_str("ν"),
+            RefinedTypeVar::Existential(v) => v.fmt(f),
             RefinedTypeVar::Free(v) => v.fmt(f),
         }
     }
@@ -444,12 +468,206 @@ where
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             RefinedTypeVar::Value => allocator.text("ν"),
+            RefinedTypeVar::Existential(v) => v.pretty(allocator),
             RefinedTypeVar::Free(v) => v.pretty(allocator),
         }
     }
 }
 
-pub type Refinement<FV = Closed> = chc::Atom<RefinedTypeVar<FV>>;
+#[derive(Debug, Clone)]
+pub struct Refinement<FV = Closed> {
+    pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
+    pub atoms: Vec<chc::Atom<RefinedTypeVar<FV>>>,
+}
+
+impl<FV> From<chc::Atom<RefinedTypeVar<FV>>> for Refinement<FV> {
+    fn from(atom: chc::Atom<RefinedTypeVar<FV>>) -> Self {
+        Refinement {
+            existentials: IndexVec::new(),
+            atoms: vec![atom],
+        }
+    }
+}
+
+impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b Refinement<FV>
+where
+    &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let existentials = allocator
+            .intersperse(
+                self.existentials
+                    .iter_enumerated()
+                    .map(|(v, s)| v.pretty(allocator).append(allocator.text(":")).append(s)),
+                allocator.text(",").append(allocator.line()),
+            )
+            .group();
+        let atoms = allocator.intersperse(
+            &self.atoms,
+            allocator
+                .text("∧")
+                .enclose(allocator.line(), allocator.space()),
+        );
+        if self.existentials.is_empty() {
+            atoms
+        } else {
+            allocator
+                .text("∃")
+                .append(existentials.nest(2))
+                .append(allocator.text("."))
+                .append(allocator.line().append(atoms).nest(2))
+                .group()
+        }
+    }
+}
+
+impl<FV> Refinement<FV> {
+    pub fn new(
+        existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
+        atoms: Vec<chc::Atom<RefinedTypeVar<FV>>>,
+    ) -> Self {
+        Refinement {
+            existentials,
+            atoms,
+        }
+    }
+
+    pub fn has_existentials(&self) -> bool {
+        !self.existentials.is_empty()
+    }
+
+    pub fn existentials(&self) -> impl Iterator<Item = (ExistentialVarIdx, &chc::Sort)> + '_ {
+        self.existentials.iter_enumerated()
+    }
+
+    pub fn is_top(&self) -> bool {
+        self.atoms.iter().all(|a| a.is_top())
+    }
+
+    pub fn top() -> Self {
+        chc::Atom::top().into()
+    }
+
+    pub fn bottom() -> Self {
+        chc::Atom::bottom().into()
+    }
+
+    pub fn subst_var<F, W>(self, mut f: F) -> Refinement<W>
+    where
+        F: FnMut(FV) -> chc::Term<W>,
+    {
+        Refinement {
+            existentials: self.existentials,
+            atoms: self
+                .atoms
+                .into_iter()
+                .map(|a| {
+                    a.subst_var(|v| match v {
+                        RefinedTypeVar::Value => chc::Term::var(RefinedTypeVar::Value),
+                        RefinedTypeVar::Existential(v) => {
+                            chc::Term::var(RefinedTypeVar::Existential(v))
+                        }
+                        RefinedTypeVar::Free(v) => f(v).map_var(RefinedTypeVar::Free),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    pub fn subst_value_var<F>(self, mut f: F) -> Self
+    where
+        F: FnMut() -> chc::Term<RefinedTypeVar<FV>>,
+    {
+        Refinement {
+            existentials: self.existentials,
+            atoms: self
+                .atoms
+                .into_iter()
+                .map(|a| {
+                    a.subst_var(|v| match v {
+                        RefinedTypeVar::Value => f(),
+                        RefinedTypeVar::Existential(v) => {
+                            chc::Term::var(RefinedTypeVar::Existential(v))
+                        }
+                        RefinedTypeVar::Free(v) => chc::Term::var(RefinedTypeVar::Free(v)),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    pub fn map_var<F, W>(self, mut f: F) -> Refinement<W>
+    where
+        F: FnMut(FV) -> W,
+    {
+        Refinement {
+            existentials: self.existentials,
+            atoms: self
+                .atoms
+                .into_iter()
+                .map(|a| {
+                    a.map_var(|v| match v {
+                        RefinedTypeVar::Value => RefinedTypeVar::Value,
+                        RefinedTypeVar::Existential(v) => RefinedTypeVar::Existential(v),
+                        RefinedTypeVar::Free(v) => RefinedTypeVar::Free(f(v)),
+                    })
+                })
+                .collect(),
+        }
+    }
+
+    pub fn instantiate(self) -> Instantiator<FV> {
+        Instantiator {
+            value_var: None,
+            existentials: HashMap::new(),
+            refinement: self,
+        }
+    }
+
+    fn into_free_atoms<F, T>(self, mut f: F) -> impl Iterator<Item = chc::Atom<T>>
+    where
+        F: FnMut(RefinedTypeVar<FV>) -> T,
+    {
+        self.atoms.into_iter().map(move |a| a.map_var(&mut f))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Instantiator<T> {
+    value_var: Option<T>,
+    existentials: HashMap<ExistentialVarIdx, T>,
+    refinement: Refinement<T>,
+}
+
+impl<T> Instantiator<T> {
+    pub fn value_var(&mut self, value_var: T) -> &mut Self {
+        self.value_var = Some(value_var);
+        self
+    }
+
+    pub fn existential(&mut self, v: ExistentialVarIdx, value: T) -> &mut Self {
+        self.existentials.insert(v, value);
+        self
+    }
+
+    pub fn into_atoms(self) -> impl Iterator<Item = chc::Atom<T>>
+    where
+        T: Clone,
+    {
+        let Instantiator {
+            value_var,
+            existentials,
+            refinement,
+        } = self;
+        refinement.into_free_atoms(move |v| match v {
+            RefinedTypeVar::Value => value_var.clone().unwrap(),
+            RefinedTypeVar::Existential(v) => existentials[&v].clone(),
+            RefinedTypeVar::Free(v) => v,
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct RefinedType<FV = Closed> {
@@ -473,7 +691,7 @@ where
                 .append(allocator.line())
                 .append(allocator.text("|"))
                 .append(allocator.space())
-                .append(&self.refinement)
+                .append(self.refinement.pretty(allocator))
                 .append(allocator.line())
                 .braces()
                 .group()
@@ -489,56 +707,39 @@ impl<FV> RefinedType<FV> {
     pub fn refined_with_term(ty: Type, term: chc::Term<FV>) -> Self {
         let term = term.map_var(RefinedTypeVar::Free);
         let refinement = chc::Term::var(RefinedTypeVar::Value).equal_to(term);
-        RefinedType::new(ty, refinement)
+        RefinedType::new(ty, refinement.into())
     }
 
-    pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>
+    pub fn subst_var<F, W>(self, f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> chc::Term<W>,
     {
         RefinedType {
             ty: self.ty,
-            refinement: self.refinement.subst_var(|v| match v {
-                RefinedTypeVar::Value => chc::Term::var(RefinedTypeVar::Value),
-                RefinedTypeVar::Free(v) => f(v).map_var(RefinedTypeVar::Free),
-            }),
+            refinement: self.refinement.subst_var(f),
         }
     }
 
-    pub fn map_var<F, W>(self, mut f: F) -> RefinedType<W>
+    pub fn map_var<F, W>(self, f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> W,
     {
         RefinedType {
             ty: self.ty,
-            refinement: self.refinement.map_var(|v| match v {
-                RefinedTypeVar::Value => RefinedTypeVar::Value,
-                RefinedTypeVar::Free(v) => RefinedTypeVar::Free(f(v)),
-            }),
+            refinement: self.refinement.map_var(f),
         }
-    }
-
-    pub fn to_free_refinement<F>(&self, value_var_fn: F) -> chc::Atom<FV>
-    where
-        FV: Clone,
-        F: Fn() -> FV,
-    {
-        self.refinement.clone().map_var(|v| match v {
-            RefinedTypeVar::Value => value_var_fn(),
-            RefinedTypeVar::Free(v) => v,
-        })
     }
 
     pub fn is_refined(&self) -> bool {
         !self.refinement.is_top()
     }
+
+    pub fn unrefined(ty: Type) -> Self {
+        RefinedType::new(ty, chc::Atom::top().into())
+    }
 }
 
 impl RefinedType<Closed> {
-    pub fn unrefined(ty: Type) -> Self {
-        RefinedType::new(ty, chc::Atom::top())
-    }
-
     pub fn vacuous<FV>(self) -> RefinedType<FV> {
         self.map_var(|v| match v {})
     }

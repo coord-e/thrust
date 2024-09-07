@@ -81,14 +81,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let last_idx = rty.params.last_index().unwrap();
             for (param_idx, param_ty) in rty.params.iter_enumerated_mut() {
                 if param_idx == last_idx {
-                    param_ty.refinement = require.clone();
+                    param_ty.refinement = require.clone().into();
                 } else {
                     param_ty.refinement = rty::Refinement::top();
                 }
             }
         }
         if let Some(AnnotAtom::Atom(ensure)) = ensure_annot {
-            rty.ret.refinement = ensure;
+            rty.ret.refinement = ensure.into();
         }
 
         let rty = rty::RefinedType::unrefined(rty.into());

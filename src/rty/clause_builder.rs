@@ -3,7 +3,7 @@ use std::hash::Hash;
 
 use crate::chc;
 
-use super::{RefinedTypeVar, Refinement, Type};
+use super::{Refinement, Type};
 
 pub trait ClauseBuilderExt {
     fn with_value_var<'a>(&'a mut self, ty: &Type) -> RefinementClauseBuilder<'a>;
@@ -39,22 +39,25 @@ pub struct RefinementClauseBuilder<'a> {
 }
 
 impl<'a> RefinementClauseBuilder<'a> {
-    fn refinement_to_atom<T>(&self, refinement: Refinement<T>) -> chc::Atom<chc::TermVarIdx>
-    where
-        T: Hash + Eq + Debug + 'static,
-    {
-        refinement.map_var(|v| match v {
-            RefinedTypeVar::Value => self.value_var,
-            RefinedTypeVar::Free(v) => self.builder.mapped_var(v),
-        })
-    }
-
     pub fn add_body<T>(self, refinement: Refinement<T>) -> Self
     where
-        T: Hash + Eq + Debug + 'static,
+        T: Hash + Eq + Debug + Clone + 'static,
     {
-        let body = self.refinement_to_atom(refinement);
-        self.builder.add_body(body);
+        let existentials: Vec<_> = refinement
+            .existentials()
+            .map(|(ev, sort)| (ev, sort.clone()))
+            .collect();
+        let mut instantiator = refinement
+            .map_var(|v| self.builder.mapped_var(v))
+            .instantiate();
+        for (ev, sort) in existentials {
+            let tv = self.builder.add_var(sort);
+            instantiator.existential(ev, tv);
+        }
+        instantiator.value_var(self.value_var);
+        for atom in instantiator.into_atoms() {
+            self.builder.add_body(atom);
+        }
         self
     }
 
@@ -62,7 +65,17 @@ impl<'a> RefinementClauseBuilder<'a> {
     where
         T: Hash + Eq + Debug + 'static,
     {
-        let head = self.refinement_to_atom(refinement);
-        self.builder.head(head)
+        if refinement.has_existentials() {
+            panic!("head refinement must not contain existentials");
+        }
+        let mut instantiator = refinement
+            .map_var(|v| self.builder.mapped_var(v))
+            .instantiate();
+        instantiator.value_var(self.value_var);
+        let mut atoms: Vec<_> = instantiator.into_atoms().collect();
+        if atoms.len() != 1 {
+            panic!("head refinement must contain exactly one atom");
+        }
+        self.builder.head(atoms.pop().unwrap())
     }
 }

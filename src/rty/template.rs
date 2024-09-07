@@ -17,10 +17,10 @@ impl<FV> Template<FV> {
         F: FnOnce(chc::PredSig) -> chc::PredVarId,
     {
         let pred_var = pred_var_generator(self.pred_sig);
-        RefinedType {
-            ty: self.ty,
-            refinement: chc::Atom::new(pred_var.into(), self.atom_args),
-        }
+        RefinedType::new(
+            self.ty,
+            chc::Atom::new(pred_var.into(), self.atom_args).into(),
+        )
     }
 }
 
