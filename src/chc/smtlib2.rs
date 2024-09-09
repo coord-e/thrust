@@ -208,6 +208,9 @@ impl<'a> std::fmt::Display for Term<'a> {
                     List::open(args.iter().map(|t| Term::new(self.clause, t)))
                 )
             }
+            chc::Term::DatatypeDiscr(s, t) => {
+                write!(f, "(|datatype_discr{}| {})", s, Term::new(self.clause, t))
+            }
         }
     }
 }
@@ -328,6 +331,52 @@ impl<'a> Datatype<'a> {
     pub fn new(inner: &'a chc::Datatype) -> Self {
         Self { inner }
     }
+
+    pub fn discr_fun(&self) -> DatatypeDiscrFun<'a> {
+        DatatypeDiscrFun { inner: self.inner }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DatatypeDiscrFunCase<'a> {
+    inner: &'a chc::DatatypeCtor,
+}
+
+impl<'a> std::fmt::Display for DatatypeDiscrFunCase<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let pat = DatatypeSymbol::new(&self.inner.symbol);
+        let discr = self.inner.discriminant;
+        writeln!(f, "({pat} {discr})")
+    }
+}
+
+impl<'a> DatatypeDiscrFunCase<'a> {
+    pub fn new(inner: &'a chc::DatatypeCtor) -> DatatypeDiscrFunCase<'a> {
+        DatatypeDiscrFunCase { inner }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DatatypeDiscrFun<'a> {
+    inner: &'a chc::Datatype,
+}
+
+impl<'a> std::fmt::Display for DatatypeDiscrFun<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sym = &self.inner.symbol;
+        let tsym = DatatypeSymbol::new(sym);
+        let cases = List::closed(self.inner.ctors.iter().map(DatatypeDiscrFunCase::new));
+        writeln!(
+            f,
+            "(define-fun |datatype_discr{sym}| ((x {tsym})) Int (match x {cases})"
+        )
+    }
+}
+
+impl<'a> DatatypeDiscrFun<'a> {
+    pub fn new(inner: &'a chc::Datatype) -> DatatypeDiscrFun<'a> {
+        DatatypeDiscrFun { inner }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -346,6 +395,9 @@ impl<'a> std::fmt::Display for System<'a> {
                 .map(Datatype::new),
         );
         writeln!(f, "(declare-datatypes () {datatypes})")?;
+        for datatype in &self.inner.datatypes {
+            writeln!(f, "{}", DatatypeDiscrFun::new(datatype))?;
+        }
         for (p, sorts) in self.inner.pred_vars.iter_enumerated() {
             writeln!(
                 f,
@@ -394,6 +446,7 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort
                 term_sorts(clause, arg, sorts);
             }
         }
+        chc::Term::DatatypeDiscr(_, t) => term_sorts(clause, t, sorts),
     }
 }
 
@@ -410,6 +463,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
             ctors: vec![chc::DatatypeCtor {
                 symbol: chc::DatatypeSymbol::new("null".to_string()),
                 selectors: vec![],
+                discriminant: 0,
             }],
         },
         chc::Sort::Box(inner) => {
@@ -422,6 +476,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
                         symbol: chc::DatatypeSymbol::new(format!("box_current{ss}")),
                         sort: *inner,
                     }],
+                    discriminant: 0,
                 }],
             }
         }
@@ -441,6 +496,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
                             sort: *inner,
                         },
                     ],
+                    discriminant: 0,
                 }],
             }
         }
@@ -459,6 +515,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
                 ctors: vec![chc::DatatypeCtor {
                     symbol: chc::DatatypeSymbol::new(format!("tuple{ss}")),
                     selectors,
+                    discriminant: 0,
                 }],
             }
         }

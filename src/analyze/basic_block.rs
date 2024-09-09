@@ -240,15 +240,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let variant = adt.variant(variant_id);
                         let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
 
-                        let enum_ty = rty::EnumType::new(ty_sym.clone()).into();
-                        let ty = rty::TupleType::new(vec![rty::Type::Int, enum_ty]).into();
-
-                        let discr_term =
-                            chc::Term::int(analyze::resolve_discr(self.tcx, variant.discr).into());
-                        let datatype_term =
-                            chc::Term::datatype_ctor(ty_sym, v_sym, vec![fields_term]);
-                        let term = chc::Term::tuple(vec![discr_term, datatype_term]);
-
+                        let ty = rty::EnumType::new(ty_sym.clone()).into();
+                        let term = chc::Term::datatype_ctor(ty_sym, v_sym, vec![fields_term]);
                         (ty, term)
                     }
                     _ => (fields_ty, fields_term),
@@ -272,8 +265,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
-                let (_ty, term) = self.env.place_type(place);
-                (rty::Type::Int, chc::Term::tuple_proj(term, 0))
+                let (ty, term) = self.env.place_type(place);
+                let sym = ty
+                    .as_enum()
+                    .expect("discriminant of non-enum")
+                    .symbol
+                    .clone();
+                (rty::Type::Int, chc::Term::datatype_discr(sym, term))
             }
             _ => unimplemented!(
                 "rvalue={:?} ({:?})",

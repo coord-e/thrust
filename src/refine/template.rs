@@ -88,8 +88,7 @@ pub trait TemplateTypeGenerator<'tcx>: PredVarGenerator {
             mir_ty::TyKind::Adt(def, params) => {
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx(), def.did());
-                    let enum_ty = rty::EnumType::new(sym).into();
-                    rty::TupleType::new(vec![rty::Type::int(), enum_ty]).into()
+                    rty::EnumType::new(sym).into()
                 } else if def.is_struct() {
                     let elem_tys = def
                         .all_fields()

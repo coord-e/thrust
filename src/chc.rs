@@ -282,6 +282,7 @@ pub enum Term<V = TermVarIdx> {
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSymbol, DatatypeSymbol, Vec<Term<V>>),
+    DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
@@ -348,6 +349,9 @@ where
                     .parens();
                 symbol.pretty(allocator).append(args).group()
             }
+            Term::DatatypeDiscr(_, t) => allocator
+                .text("discriminant")
+                .append(t.pretty(allocator).parens()),
         }
     }
 }
@@ -393,6 +397,7 @@ impl<V> Term<V> {
                 c_sym,
                 args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
             ),
+            Term::DatatypeDiscr(d_sym, t) => Term::DatatypeDiscr(d_sym, Box::new(t.subst_var(f))),
         }
     }
 
@@ -433,6 +438,7 @@ impl<V> Term<V> {
             }
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
             Term::DatatypeCtor(d_sym, _, _) => Sort::datatype(d_sym.clone()),
+            Term::DatatypeDiscr(_, _) => Sort::int(),
         }
     }
 
@@ -451,6 +457,7 @@ impl<V> Term<V> {
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::DatatypeDiscr(_, t) => t.fv_impl(),
         }
     }
 
@@ -547,6 +554,10 @@ impl<V> Term<V> {
 
     pub fn datatype_ctor(d_sym: DatatypeSymbol, c_sym: DatatypeSymbol, args: Vec<Term<V>>) -> Self {
         Term::DatatypeCtor(d_sym, c_sym, args)
+    }
+
+    pub fn datatype_discr(d_sym: DatatypeSymbol, t: Term<V>) -> Self {
+        Term::DatatypeDiscr(d_sym, Box::new(t))
     }
 
     pub fn equal_to(self, other: Self) -> Atom<V> {
@@ -874,6 +885,7 @@ pub struct DatatypeSelector {
 pub struct DatatypeCtor {
     pub symbol: DatatypeSymbol,
     pub selectors: Vec<DatatypeSelector>,
+    pub discriminant: u32,
 }
 
 #[derive(Debug, Clone)]
