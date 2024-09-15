@@ -454,6 +454,12 @@ pub enum RefinedTypeVar<FV> {
     Free(FV),
 }
 
+impl<T> From<ExistentialVarIdx> for RefinedTypeVar<T> {
+    fn from(v: ExistentialVarIdx) -> Self {
+        RefinedTypeVar::Existential(v)
+    }
+}
+
 impl<FV> std::fmt::Display for RefinedTypeVar<FV>
 where
     FV: std::fmt::Display,

@@ -115,12 +115,404 @@ impl TempVarBinding {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PlaceTypeVar {
+    Var(Var),
+    Existential(rty::ExistentialVarIdx),
+}
+
+impl From<Var> for PlaceTypeVar {
+    fn from(v: Var) -> Self {
+        PlaceTypeVar::Var(v)
+    }
+}
+
+impl From<PlaceTypeVar> for rty::RefinedTypeVar<Var> {
+    fn from(v: PlaceTypeVar) -> Self {
+        match v {
+            PlaceTypeVar::Var(v) => rty::RefinedTypeVar::Free(v),
+            PlaceTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
+        }
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PlaceTypeVar
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        match self {
+            PlaceTypeVar::Var(v) => v.pretty(allocator),
+            PlaceTypeVar::Existential(ev) => ev.pretty(allocator),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaceType {
+    pub ty: rty::Type,
+    pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+    pub term: chc::Term<PlaceTypeVar>,
+    pub conds: Vec<chc::Atom<PlaceTypeVar>>,
+}
+
+impl From<PlaceType> for rty::RefinedType<Var> {
+    fn from(ty: PlaceType) -> Self {
+        let PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        } = ty;
+        let mut atoms: Vec<_> = conds.into_iter().map(|a| a.map_var(Into::into)).collect();
+        atoms.push(chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)));
+        let refinement = rty::Refinement::new(existentials, atoms);
+        rty::RefinedType::new(ty, refinement)
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PlaceType
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let existentials = allocator
+            .intersperse(
+                self.existentials
+                    .iter_enumerated()
+                    .map(|(v, s)| v.pretty(allocator).append(allocator.text(":")).append(s)),
+                allocator.text(",").append(allocator.line()),
+            )
+            .group();
+        let atoms = allocator.intersperse(
+            &self.conds,
+            allocator
+                .text("∧")
+                .enclose(allocator.line(), allocator.space()),
+        );
+        let ty = self
+            .ty
+            .pretty(allocator)
+            .append(self.term.pretty(allocator).brackets())
+            .append(allocator.line())
+            .append(allocator.text("|"))
+            .append(allocator.space())
+            .append(atoms);
+        if self.existentials.is_empty() {
+            allocator
+                .text("∃")
+                .append(existentials.nest(2))
+                .append(allocator.text("."))
+                .append(allocator.line().append(ty).nest(2))
+                .braces()
+                .group()
+        } else {
+            ty.braces().group()
+        }
+    }
+}
+
+impl PlaceType {
+    pub fn with_ty_and_term(ty: rty::Type, term: chc::Term<Var>) -> Self {
+        PlaceType {
+            ty,
+            existentials: IndexVec::new(),
+            term: term.map_var(PlaceTypeVar::Var),
+            conds: Vec::new(),
+        }
+    }
+
+    pub fn into_assumption<F>(self, term_to_atom: F) -> UnboundAssumption
+    where
+        F: FnOnce(chc::Term<PlaceTypeVar>) -> chc::Atom<PlaceTypeVar>,
+    {
+        let PlaceType {
+            ty: _,
+            existentials,
+            term,
+            mut conds,
+        } = self;
+        conds.push(term_to_atom(term));
+        UnboundAssumption {
+            existentials,
+            conds,
+        }
+    }
+
+    pub fn deref(self) -> PlaceType {
+        let PlaceType {
+            ty: inner_ty,
+            existentials,
+            term: inner_term,
+            conds,
+        } = self;
+        let inner_ty = inner_ty.into_pointer().unwrap();
+        let term = inner_ty.kind.deref_term(inner_term);
+        let ty = *inner_ty.elem;
+        PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        }
+    }
+
+    pub fn tuple_proj(self, idx: usize) -> PlaceType {
+        let PlaceType {
+            ty: inner_ty,
+            existentials,
+            term: inner_term,
+            conds,
+        } = self;
+        let inner_ty = inner_ty.into_tuple().unwrap();
+        let term = inner_term.tuple_proj(idx);
+        let ty = inner_ty.elems[idx].clone();
+        PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        }
+    }
+
+    pub fn boxed(self) -> PlaceType {
+        let PlaceType {
+            ty: inner_ty,
+            existentials,
+            term: inner_term,
+            conds,
+        } = self;
+        let term = chc::Term::box_(inner_term);
+        let ty = rty::PointerType::own(inner_ty).into();
+        PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        }
+    }
+
+    pub fn replace<F>(self, f: F) -> PlaceType
+    where
+        F: FnOnce(rty::Type, chc::Term<PlaceTypeVar>) -> (rty::Type, chc::Term<PlaceTypeVar>),
+    {
+        let PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        } = self;
+        let (ty, term) = f(ty, term);
+        PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        }
+    }
+
+    pub fn merge_into_assumption<F>(self, other: PlaceType, f: F) -> UnboundAssumption
+    where
+        F: FnOnce(chc::Term<PlaceTypeVar>, chc::Term<PlaceTypeVar>) -> chc::Atom<PlaceTypeVar>,
+    {
+        let PlaceType {
+            ty: _ty1,
+            mut existentials,
+            term: term1,
+            mut conds,
+        } = self;
+        let PlaceType {
+            ty: _ty2,
+            existentials: evs2,
+            term: term2,
+            conds: conds2,
+        } = other;
+        let atom = f(
+            term1,
+            term2.map_var(|v| match v {
+                PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+                PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + existentials.len()),
+            }),
+        );
+        conds.extend(conds2.into_iter().map(|c| {
+            c.map_var(|v| match v {
+                PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+                PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + existentials.len()),
+            })
+        }));
+        conds.push(atom);
+        existentials.extend(evs2);
+        UnboundAssumption {
+            existentials,
+            conds,
+        }
+    }
+
+    pub fn merge<F>(self, other: PlaceType, f: F) -> PlaceType
+    where
+        F: FnOnce(
+            (rty::Type, chc::Term<PlaceTypeVar>),
+            (rty::Type, chc::Term<PlaceTypeVar>),
+        ) -> (rty::Type, chc::Term<PlaceTypeVar>),
+    {
+        let PlaceType {
+            ty: ty1,
+            mut existentials,
+            term: term1,
+            mut conds,
+        } = self;
+        let PlaceType {
+            ty: ty2,
+            existentials: evs2,
+            term: term2,
+            conds: conds2,
+        } = other;
+        let (ty, term) = f(
+            (ty1, term1),
+            (
+                ty2,
+                term2.map_var(|v| match v {
+                    PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+                    PlaceTypeVar::Existential(ev) => {
+                        PlaceTypeVar::Existential(ev + existentials.len())
+                    }
+                }),
+            ),
+        );
+        conds.extend(conds2.into_iter().map(|c| {
+            c.map_var(|v| match v {
+                PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+                PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + existentials.len()),
+            })
+        }));
+        existentials.extend(evs2);
+        PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        }
+    }
+
+    pub fn mut_with_proph_term(self, proph: chc::Term<Var>) -> PlaceType {
+        let ty = self.ty.clone();
+        self.mut_with(PlaceType::with_ty_and_term(ty, proph))
+    }
+
+    pub fn mut_with(self, proph: PlaceType) -> PlaceType {
+        self.merge(proph, |(ty1, term1), (_, term2)|
+            // TODO: check ty1 = ty2
+            (rty::PointerType::mut_to(ty1).into(), chc::Term::mut_(term1, term2)))
+    }
+
+    pub fn tuple(tys: Vec<PlaceType>) -> PlaceType {
+        #[derive(Default)]
+        struct State {
+            tys: Vec<rty::Type>,
+            terms: Vec<chc::Term<PlaceTypeVar>>,
+            existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+            conds: Vec<chc::Atom<PlaceTypeVar>>,
+        }
+        let State {
+            tys,
+            terms,
+            existentials,
+            conds,
+        } = tys
+            .into_iter()
+            .fold(Default::default(), |mut st: State, ty| {
+                let PlaceType {
+                    ty,
+                    existentials,
+                    term,
+                    conds,
+                } = ty;
+                st.tys.push(ty);
+                st.terms.push(term.map_var(|v| match v {
+                    PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+                    PlaceTypeVar::Existential(ev) => {
+                        PlaceTypeVar::Existential(ev + st.existentials.len())
+                    }
+                }));
+                st.conds.extend(conds.into_iter().map(|c| {
+                    c.map_var(|v| match v {
+                        PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+                        PlaceTypeVar::Existential(ev) => {
+                            PlaceTypeVar::Existential(ev + st.existentials.len())
+                        }
+                    })
+                }));
+                st.existentials.extend(existentials);
+                st
+            });
+        let ty = rty::TupleType::new(tys).into();
+        let term = chc::Term::tuple(terms);
+        PlaceType {
+            ty,
+            existentials,
+            term,
+            conds,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnboundAssumption {
+    pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+    pub conds: Vec<chc::Atom<PlaceTypeVar>>,
+}
+
+impl From<chc::Atom<Var>> for UnboundAssumption {
+    fn from(atom: chc::Atom<Var>) -> Self {
+        let existentials = IndexVec::new();
+        let conds = vec![atom.map_var(Into::into)];
+        UnboundAssumption {
+            existentials,
+            conds,
+        }
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UnboundAssumption
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let existentials = allocator
+            .intersperse(
+                self.existentials
+                    .iter_enumerated()
+                    .map(|(v, s)| v.pretty(allocator).append(allocator.text(":")).append(s)),
+                allocator.text(",").append(allocator.line()),
+            )
+            .group();
+        let atoms = allocator.intersperse(
+            &self.conds,
+            allocator
+                .text("∧")
+                .enclose(allocator.line(), allocator.space()),
+        );
+        if self.existentials.is_empty() {
+            atoms
+        } else {
+            allocator
+                .text("∃")
+                .append(existentials.nest(2))
+                .append(allocator.text("."))
+                .append(allocator.line().append(atoms).nest(2))
+                .group()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     locals: HashMap<Local, rty::RefinedType<Var>>,
     flow_locals: HashMap<Local, FlowBinding>,
     temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
-    unbound_assumptions: Vec<chc::Atom<Var>>,
+    unbound_assumptions: Vec<UnboundAssumption>,
 }
 
 impl Env {
@@ -206,19 +598,35 @@ impl Env {
                 rty::RefinedType::unrefined(elem.clone()).vacuous(),
             );
         }
-        let last_element_refinement = refinement.subst_value_var(|| {
-            chc::Term::tuple(
+        let last = self.temp_vars.next_index();
+        let last_element_refinement = {
+            let tuple_ty = PlaceType::tuple(
                 xs.iter()
                     .copied()
-                    .map(|x| {
-                        let (_, t) = self.var_type(x.into());
-                        t.map_var(rty::RefinedTypeVar::Free)
-                    })
-                    .chain(std::iter::once(chc::Term::var(rty::RefinedTypeVar::Value)))
+                    .chain(std::iter::once(last))
+                    .map(|x| self.var_type(x.into()))
                     .collect(),
-            )
-        });
-        let last = self.temp_vars.next_index();
+            );
+            let tuple_term = tuple_ty.term.map_var(|v| match v {
+                PlaceTypeVar::Var(v) if v == Var::Temp(last) => rty::RefinedTypeVar::Value,
+                PlaceTypeVar::Var(v) => rty::RefinedTypeVar::Free(v),
+                PlaceTypeVar::Existential(ev) => {
+                    rty::RefinedTypeVar::Existential(ev + refinement.existentials.len())
+                }
+            });
+            let mut refinement = refinement;
+            refinement.atoms.extend(tuple_ty.conds.into_iter().map(|a| {
+                a.map_var(|v| match v {
+                    PlaceTypeVar::Var(v) if v == Var::Temp(last) => rty::RefinedTypeVar::Value,
+                    PlaceTypeVar::Var(v) => rty::RefinedTypeVar::Free(v),
+                    PlaceTypeVar::Existential(ev) => {
+                        rty::RefinedTypeVar::Existential(ev + refinement.existentials.len())
+                    }
+                })
+            }));
+            refinement.existentials.extend(tuple_ty.existentials);
+            refinement.subst_value_var(|| tuple_term.clone())
+        };
         xs.push(last);
         self.bind_var(
             last.into(),
@@ -254,16 +662,18 @@ impl Env {
     pub fn bind(&mut self, local: Local, rty: rty::RefinedType<Var>) {
         let rty_disp = rty.clone();
         self.bind_var(local.into(), rty);
-        tracing::debug!(local = ?local, rty = %rty_disp.display(), term = %self.local_type(local).1.display(), "bind");
+        tracing::debug!(local = ?local, rty = %rty_disp.display(), place_type = %self.local_type(local).display(), "bind");
     }
 
-    pub fn assume(&mut self, assumption: chc::Atom<Var>) {
+    pub fn assume(&mut self, assumption: impl Into<UnboundAssumption>) {
+        let assumption = assumption.into();
         tracing::debug!(assumption = %assumption.display(), "assume");
         self.unbound_assumptions.push(assumption);
     }
 
-    pub fn extend_assumptions(&mut self, assumptions: Vec<chc::Atom<Var>>) {
-        self.unbound_assumptions.extend(assumptions);
+    pub fn extend_assumptions(&mut self, assumptions: Vec<impl Into<UnboundAssumption>>) {
+        self.unbound_assumptions
+            .extend(assumptions.into_iter().map(Into::into));
     }
 
     pub fn dependencies(&self) -> impl Iterator<Item = (Var, chc::Sort)> + '_ {
@@ -311,8 +721,18 @@ impl Env {
                 builder.add_body(atom);
             }
         }
-        for atom in &self.unbound_assumptions {
-            builder.add_body(atom.clone().map_var(|v| builder.mapped_var(v)));
+        for assumption in &self.unbound_assumptions {
+            let mut evs = HashMap::new();
+            for (ev, sort) in assumption.existentials.iter_enumerated() {
+                let tv = builder.add_var(sort.clone());
+                evs.insert(ev, tv);
+            }
+            for atom in &assumption.conds {
+                builder.add_body(atom.clone().map_var(|v| match v {
+                    PlaceTypeVar::Var(v) => builder.mapped_var(v),
+                    PlaceTypeVar::Existential(ev) => evs[&ev],
+                }));
+            }
         }
         builder
     }
@@ -346,38 +766,31 @@ impl Env {
         }
     }
 
-    fn var_type(&self, var: Var) -> (rty::Type, chc::Term<Var>) {
+    fn var_type(&self, var: Var) -> PlaceType {
         // TODO: should this driven by type as the rule does?
         match self.flow_binding(var) {
-            Some(&FlowBinding::Box(current)) => {
-                let (current_ty, current_term) = self.var_type(current.into());
-                let term = chc::Term::box_(current_term);
-                (rty::PointerType::own(current_ty).into(), term)
-            }
+            Some(&FlowBinding::Box(current)) => self.var_type(current.into()).boxed(),
             Some(&FlowBinding::Mut(current, final_)) => {
-                let (current_ty, current_term) = self.var_type(current.into());
-                let (_final_ty, final_term) = self.var_type(final_.into());
-                // TODO: check current_ty = final_ty
-
-                let term = chc::Term::mut_(current_term, final_term);
-                (rty::PointerType::mut_to(current_ty).into(), term)
+                let current_ty = self.var_type(current.into());
+                let final_ty = self.var_type(final_.into());
+                current_ty.mut_with(final_ty)
             }
             Some(FlowBinding::Tuple(vs)) => {
-                let (tys, terms) = vs.iter().map(|&v| self.var_type(v.into())).unzip();
-                (rty::TupleType::new(tys).into(), chc::Term::tuple(terms))
+                let tys = vs.iter().map(|&v| self.var_type(v.into())).collect();
+                PlaceType::tuple(tys)
             }
             None => {
                 let rty = self.var(var).expect("unbound var");
-                (rty.ty.clone(), chc::Term::var(var))
+                PlaceType::with_ty_and_term(rty.ty.clone(), chc::Term::var(var))
             }
         }
     }
 
-    pub fn local_type(&self, local: Local) -> (rty::Type, chc::Term<Var>) {
+    pub fn local_type(&self, local: Local) -> PlaceType {
         self.var_type(local.into())
     }
 
-    pub fn operand_type(&self, operand: Operand<'_>) -> (rty::Type, chc::Term<Var>) {
+    pub fn operand_type(&self, operand: Operand<'_>) -> PlaceType {
         use mir::{interpret::Scalar, Const, ConstValue, Mutability};
         match operand {
             Operand::Copy(place) | Operand::Move(place) => self.place_type(place),
@@ -388,12 +801,17 @@ impl Env {
                 match (ty.kind(), val) {
                     (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
                         let val = val.try_to_int(val.size()).unwrap();
-                        (rty::Type::int(), chc::Term::int(val.try_into().unwrap()))
+                        PlaceType::with_ty_and_term(
+                            rty::Type::int(),
+                            chc::Term::int(val.try_into().unwrap()),
+                        )
                     }
-                    (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => (
-                        rty::Type::bool(),
-                        chc::Term::bool(val.try_to_bool().unwrap()),
-                    ),
+                    (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
+                        PlaceType::with_ty_and_term(
+                            rty::Type::bool(),
+                            chc::Term::bool(val.try_to_bool().unwrap()),
+                        )
+                    }
                     (
                         mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                         ConstValue::Slice { data, meta },
@@ -403,7 +821,7 @@ impl Env {
                             .inner()
                             .inspect_with_uninit_and_ptr_outside_interpreter(0..end);
                         let content = std::str::from_utf8(content).unwrap();
-                        (
+                        PlaceType::with_ty_and_term(
                             rty::PointerType::immut_to(rty::Type::string()).into(),
                             chc::Term::box_(chc::Term::string(content.to_owned())),
                         )
@@ -414,20 +832,17 @@ impl Env {
         }
     }
 
-    fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> (rty::Type, chc::Term<Var>) {
+    fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> PlaceType {
         match self.flow_binding(var).expect("borrowing unbound var") {
             &FlowBinding::Box(x) => {
-                let (inner_ty, inner_term) = self.var_type(x.into());
+                let inner_ty = self.var_type(x.into());
                 self.insert_flow_binding(var, FlowBinding::Box(prophecy));
-                let term = chc::Term::mut_(inner_term, chc::Term::var(prophecy.into()));
-                (rty::PointerType::mut_to(inner_ty).into(), term)
+                inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
             }
             &FlowBinding::Mut(x1, x2) => {
-                // TODO: check x2 ty
-                let (inner_ty, x1_term) = self.var_type(x1.into());
+                let inner_ty = self.var_type(x1.into());
                 self.insert_flow_binding(var, FlowBinding::Mut(prophecy, x2));
-                let term = chc::Term::mut_(x1_term, chc::Term::var(prophecy.into()));
-                (rty::PointerType::mut_to(inner_ty).into(), term)
+                inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
             }
             _ => panic!("invalid borrow"),
         }
@@ -448,11 +863,7 @@ impl Env {
         var
     }
 
-    pub fn borrow_place(
-        &mut self,
-        place: Place<'_>,
-        prophecy_var: TempVarIdx,
-    ) -> (rty::Type, chc::Term<Var>) {
+    pub fn borrow_place(&mut self, place: Place<'_>, prophecy_var: TempVarIdx) -> PlaceType {
         let var = self.locate_place(place);
         self.borrow_var(var, prophecy_var)
     }
@@ -485,31 +896,26 @@ impl Path {
 }
 
 impl Env {
-    fn path_type(&self, path: &Path) -> (rty::Type, chc::Term<Var>) {
+    fn path_type(&self, path: &Path) -> PlaceType {
         match path {
             Path::Local(local) => self.local_type(*local),
-            Path::Deref(path) => {
-                let (ty, term) = self.path_type(path);
-                let ty = ty.into_pointer().unwrap();
-                (*ty.elem, ty.kind.deref_term(term))
-            }
-            Path::TupleProj(path, idx) => {
-                let (ty, term) = self.path_type(path);
-                let ty = ty.into_tuple().unwrap();
-                (ty.elems[*idx].clone(), term.tuple_proj(*idx))
-            }
+            Path::Deref(path) => self.path_type(path).deref(),
+            Path::TupleProj(path, idx) => self.path_type(path).tuple_proj(*idx),
         }
     }
 
-    pub fn place_type(&self, place: Place) -> (rty::Type, chc::Term<Var>) {
+    pub fn place_type(&self, place: Place) -> PlaceType {
         self.path_type(&place.into())
     }
 
     fn drop_path(&mut self, path: &Path) {
-        let (ty, term) = self.path_type(path);
-        if ty.is_mut() {
-            self.assume(term.clone().mut_final().equal_to(term.mut_current()));
-        } else if ty.is_own() {
+        let ty = self.path_type(path);
+        if ty.ty.is_mut() {
+            self.assume(ty.into_assumption(|term| {
+                let term = term.map_var(Into::into);
+                term.clone().mut_final().equal_to(term.mut_current())
+            }));
+        } else if ty.ty.is_own() {
             self.drop_path(&path.clone().deref())
         }
     }

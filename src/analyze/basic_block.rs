@@ -12,7 +12,9 @@ use rustc_target::abi::FieldIdx;
 use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{self, BasicBlockType, Env, TempVarIdx, TemplateTypeGenerator, Var};
+use crate::refine::{
+    self, BasicBlockType, Env, PlaceType, TempVarIdx, TemplateTypeGenerator, UnboundAssumption, Var,
+};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 mod drop_point;
@@ -66,16 +68,56 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     // TODO: reconsider API
     fn bind_locals(&mut self, ty: &BasicBlockType) -> rty::RefinedType<Var> {
-        let subst_var_fn = |env: &Env, idx| {
-            // TODO: this would be broken when we turned args mutually-referenced...
-            let (_, term) = env.local_type(ty.local_of_param(idx).unwrap());
-            term
+        let subst_refinement = |env: &Env,
+                                refinement: rty::Refinement<rty::FunctionParamIdx>|
+         -> rty::Refinement<Var> {
+            let rty::Refinement {
+                mut existentials,
+                atoms,
+            } = refinement;
+
+            let mut param_local_terms = HashMap::new();
+            let mut param_atoms = Vec::new();
+            for param_idx in ty.as_ref().params.indices() {
+                let Some(local) = ty.local_of_param(param_idx) else {
+                    continue;
+                };
+                if !env.contains_local(local) {
+                    continue;
+                }
+                let local_ty = env.local_type(local);
+                let local_term = local_ty.term.map_var(|v| match v.into() {
+                    rty::RefinedTypeVar::Existential(v) => (v + existentials.len()).into(),
+                    v => v,
+                });
+                param_atoms.extend(local_ty.conds.into_iter().map(|a| {
+                    a.map_var(|v| match v.into() {
+                        rty::RefinedTypeVar::Existential(v) => (v + existentials.len()).into(),
+                        v => v,
+                    })
+                }));
+                existentials.extend(local_ty.existentials);
+                param_local_terms.insert(param_idx, local_term);
+            }
+
+            let atoms = atoms
+                .into_iter()
+                .map(|a| {
+                    a.subst_var(|v| match v {
+                        rty::RefinedTypeVar::Value => chc::Term::var(rty::RefinedTypeVar::Value),
+                        rty::RefinedTypeVar::Free(idx) => param_local_terms[&idx].clone(),
+                        rty::RefinedTypeVar::Existential(ev) => {
+                            chc::Term::var(rty::RefinedTypeVar::Existential(ev))
+                        }
+                    })
+                })
+                .chain(param_atoms)
+                .collect();
+            rty::Refinement::new(existentials, atoms)
         };
         for (param_idx, param_ty) in ty.as_ref().params.iter_enumerated() {
-            // TODO: reconsider clone()
-            let param_ty = param_ty
-                .clone()
-                .subst_var(|idx| subst_var_fn(&self.env, idx));
+            let param_refinement = subst_refinement(&self.env, param_ty.refinement.clone());
+            let param_ty = rty::RefinedType::new(param_ty.ty.clone(), param_refinement);
             if let Some(local) = ty.local_of_param(param_idx) {
                 self.env.bind(local, param_ty);
             } else {
@@ -85,10 +127,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
             }
         }
-        ty.as_ref()
-            .ret
-            .clone()
-            .subst_var(|idx| subst_var_fn(&self.env, idx))
+        let ret_ty = ty.as_ref().ret.clone();
+        let ret_refinement = subst_refinement(&self.env, ret_ty.refinement);
+        rty::RefinedType::new(ret_ty.ty, ret_refinement)
     }
 
     fn mir_refined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<Var> {
@@ -177,57 +218,69 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.ctx.relate_sub_type(&got.ret.ty, &expected_ret.ty);
     }
 
-    fn operand_type(&self, mut operand: Operand<'tcx>) -> (rty::Type, chc::Term<Var>) {
+    fn operand_type(&self, mut operand: Operand<'tcx>) -> PlaceType {
         if let Operand::Copy(p) | Operand::Move(p) = &mut operand {
             *p = self.elaborate_place(p);
         }
-        let (sty, term) = self.env.operand_type(operand.clone());
-        tracing::debug!(operand = ?operand, sty = %sty.display(), "operand_type");
-        (sty, term)
+        let ty = self.env.operand_type(operand.clone());
+        tracing::debug!(operand = ?operand, ty = %ty.display(), "operand_type");
+        ty
     }
 
-    fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> (rty::Type, chc::Term<Var>) {
+    fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = *operands;
-                let (lhs_ty, lhs_term) = self.operand_type(lhs);
-                let (rhs_ty, rhs_term) = self.operand_type(rhs);
-                // NOTE: BinOp::Offset accepts operands with different types
-                //       but we don't support it here
-                self.ctx.relate_equal_type(&lhs_ty, &rhs_ty);
-                match (&lhs_ty, op) {
-                    (rty::Type::Int, mir::BinOp::Add) => (lhs_ty, lhs_term.add(rhs_term)),
-                    (rty::Type::Int, mir::BinOp::Sub) => (lhs_ty, lhs_term.sub(rhs_term)),
-                    (rty::Type::Int, mir::BinOp::Mul) => (lhs_ty, lhs_term.mul(rhs_term)),
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
-                        (rty::Type::Bool, lhs_term.ge(rhs_term))
-                    }
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Gt) => {
-                        (rty::Type::Bool, lhs_term.gt(rhs_term))
-                    }
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Le) => {
-                        (rty::Type::Bool, lhs_term.le(rhs_term))
-                    }
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Lt) => {
-                        (rty::Type::Bool, lhs_term.lt(rhs_term))
-                    }
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Eq) => {
-                        (rty::Type::Bool, lhs_term.eq(rhs_term))
-                    }
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ne) => {
-                        (rty::Type::Bool, lhs_term.ne(rhs_term))
-                    }
+                let lhs_ty = self.operand_type(lhs);
+                let rhs_ty = self.operand_type(rhs);
+                match (&lhs_ty.ty, op) {
+                    (rty::Type::Int, mir::BinOp::Add) => lhs_ty
+                        .merge(rhs_ty, |(lhs_ty, lhs_term), (_, rhs_term)| {
+                            (lhs_ty, lhs_term.add(rhs_term))
+                        }),
+                    (rty::Type::Int, mir::BinOp::Sub) => lhs_ty
+                        .merge(rhs_ty, |(lhs_ty, lhs_term), (_, rhs_term)| {
+                            (lhs_ty, lhs_term.sub(rhs_term))
+                        }),
+                    (rty::Type::Int, mir::BinOp::Mul) => lhs_ty
+                        .merge(rhs_ty, |(lhs_ty, lhs_term), (_, rhs_term)| {
+                            (lhs_ty, lhs_term.mul(rhs_term))
+                        }),
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => lhs_ty
+                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
+                            (rty::Type::Bool, lhs_term.ge(rhs_term))
+                        }),
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Gt) => lhs_ty
+                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
+                            (rty::Type::Bool, lhs_term.gt(rhs_term))
+                        }),
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Le) => lhs_ty
+                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
+                            (rty::Type::Bool, lhs_term.le(rhs_term))
+                        }),
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Lt) => lhs_ty
+                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
+                            (rty::Type::Bool, lhs_term.lt(rhs_term))
+                        }),
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Eq) => lhs_ty
+                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
+                            (rty::Type::Bool, lhs_term.eq(rhs_term))
+                        }),
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ne) => lhs_ty
+                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
+                            (rty::Type::Bool, lhs_term.ne(rhs_term))
+                        }),
                     _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
                 }
             }
             Rvalue::Aggregate(kind, fields) => {
-                let (field_tys, field_terms) = fields
-                    .into_iter()
-                    .map(|operand| self.operand_type(operand))
-                    .unzip();
-                let fields_ty = rty::TupleType::new(field_tys).into();
-                let fields_term = chc::Term::tuple(field_terms);
+                let fields_ty = PlaceType::tuple(
+                    fields
+                        .into_iter()
+                        .map(|operand| self.operand_type(operand))
+                        .collect(),
+                );
                 match *kind {
                     mir::AggregateKind::Adt(did, variant_id, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
@@ -241,10 +294,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
 
                         let ty = rty::EnumType::new(ty_sym.clone()).into();
-                        let term = chc::Term::datatype_ctor(ty_sym, v_sym, vec![fields_term]);
-                        (ty, term)
+                        fields_ty.replace(|_, fields_term| {
+                            let term = chc::Term::datatype_ctor(ty_sym, v_sym, vec![fields_term]);
+                            (ty, term)
+                        })
                     }
-                    _ => (fields_ty, fields_term),
+                    _ => fields_ty,
                 }
             }
             Rvalue::Cast(
@@ -261,17 +316,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     }
                     _ => unimplemented!(),
                 };
-                (func_ty.into(), chc::Term::null())
+                PlaceType::with_ty_and_term(func_ty.into(), chc::Term::null())
             }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
-                let (ty, term) = self.env.place_type(place);
+                let ty = self.env.place_type(place);
                 let sym = ty
+                    .ty
                     .as_enum()
                     .expect("discriminant of non-enum")
                     .symbol
                     .clone();
-                (rty::Type::Int, chc::Term::datatype_discr(sym, term))
+                ty.replace(|_ty, term| (rty::Type::Int, chc::Term::datatype_discr(sym, term)))
             }
             _ => unimplemented!(
                 "rvalue={:?} ({:?})",
@@ -282,14 +338,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn rvalue_refined_type(&mut self, rvalue: Rvalue<'tcx>) -> rty::RefinedType<Var> {
-        let (sty, term) = self.rvalue_type(rvalue);
+        let ty = self.rvalue_type(rvalue);
 
         // TODO: should we cover "is_singleton" ness in relate_* methods or here?
-        if !sty.to_sort().is_singleton() {
-            return rty::RefinedType::refined_with_term(sty, term);
+        if !ty.ty.to_sort().is_singleton() {
+            return ty.into();
         }
 
-        rty::RefinedType::unrefined(sty).vacuous()
+        rty::RefinedType::unrefined(ty.ty).vacuous()
     }
 
     fn type_rvalue(&mut self, rvalue: Rvalue<'tcx>, expected: &rty::RefinedType<Var>) {
@@ -318,12 +374,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iter_enumerated()
             .map(|(param_idx, rty)| {
                 if let Some(arg_local) = bty.local_of_param(param_idx) {
-                    let (sty, term) = self.env.local_type(arg_local);
+                    let arg_local_ty = self.env.local_type(arg_local);
                     // TODO: should we cover "is_singleton" ness in relate_* methods or here?
                     if !rty.ty.to_sort().is_singleton() {
-                        rty::RefinedType::refined_with_term(sty, term)
+                        arg_local_ty.into()
                     } else {
-                        rty::RefinedType::unrefined(sty).vacuous()
+                        rty::RefinedType::unrefined(arg_local_ty.ty).vacuous()
                     }
                 } else {
                     rty::RefinedType::unrefined(rty.ty.clone()).vacuous()
@@ -333,7 +389,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.relate_fn_sub_type(bty.to_function_ty(), expected_args, expected_ret.clone());
     }
 
-    fn with_assumptions<F, T>(&mut self, assumptions: Vec<chc::Atom<Var>>, callback: F) -> T
+    fn with_assumptions<F, T>(
+        &mut self,
+        assumptions: Vec<impl Into<UnboundAssumption>>,
+        callback: F,
+    ) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
@@ -344,7 +404,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         result
     }
 
-    fn with_assumption<F, T>(&mut self, assumption: chc::Atom<Var>, callback: F) -> T
+    fn with_assumption<F, T>(&mut self, assumption: impl Into<UnboundAssumption>, callback: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
@@ -364,21 +424,31 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) where
         F: FnMut(&mut Self, BasicBlock),
     {
-        let (discr_ty, discr_term) = self.operand_type(discr);
+        let discr_ty = self.operand_type(discr);
         let mut negations = Vec::new();
         for (val, bb) in targets.iter() {
             let val: i64 = val.try_into().unwrap();
-            let target_term = match (val, &discr_ty) {
+            let target_term = match (val, &discr_ty.ty) {
                 (0, rty::Type::Bool) => chc::Term::bool(false),
                 (1, rty::Type::Bool) => chc::Term::bool(true),
                 (n, rty::Type::Int) => chc::Term::int(n),
                 _ => unimplemented!(),
             };
-            self.with_assumption(discr_term.clone().equal_to(target_term.clone()), |ecx| {
-                callback(ecx, bb);
-                ecx.type_goto(bb, expected_ret);
-            });
-            negations.push(discr_term.clone().not_equal_to(target_term));
+
+            self.with_assumption(
+                discr_ty
+                    .clone()
+                    .into_assumption(|term| term.equal_to(target_term.clone())),
+                |ecx| {
+                    callback(ecx, bb);
+                    ecx.type_goto(bb, expected_ret);
+                },
+            );
+            negations.push(
+                discr_ty
+                    .clone()
+                    .into_assumption(|term| term.not_equal_to(target_term)),
+            );
         }
         self.with_assumptions(negations, |ecx| {
             callback(ecx, targets.otherwise());
@@ -446,10 +516,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
                 self.ctx.def_ty(def_id).expect("unknown def").ty.clone()
             }
-            _ => {
-                let (ty, _) = self.env.operand_type(func.clone());
-                ty
-            }
+            _ => self.env.operand_type(func.clone()).ty,
         };
         let expected_args: IndexVec<_, _> = args
             .into_iter()
@@ -484,11 +551,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn assign_to_local(&mut self, local: Local, rvalue: mir::Rvalue<'tcx>) {
-        let (_local_ty, local_term) = self.env.local_type(local);
-        let (rvalue_ty, rvalue_term) = self.rvalue_type(rvalue);
-        if !rvalue_ty.to_sort().is_singleton() {
-            self.env
-                .assume(local_term.mut_final().equal_to(rvalue_term));
+        let local_ty = self.env.local_type(local);
+        let rvalue_ty = self.rvalue_type(rvalue);
+        if !rvalue_ty.ty.to_sort().is_singleton() {
+            self.env.assume(
+                local_ty.merge_into_assumption(rvalue_ty, |local_term, rvalue_term| {
+                    local_term.mut_final().equal_to(rvalue_term)
+                }),
+            );
         }
     }
 
@@ -510,8 +580,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) -> rty::RefinedType<Var> {
         let temp_var = self.prophecy_vars[&statement_index];
         let place = self.elaborate_place_for_borrow(&referent);
-        let (ty, term) = self.env.borrow_place(place, temp_var);
-        rty::RefinedType::refined_with_term(ty, term)
+        self.env.borrow_place(place, temp_var).into()
     }
 
     fn borrow_place_(
@@ -522,8 +591,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let prophecy_ty = self.ctx.mir_ty(prophecy_ty);
         let prophecy = self.env.push_temp_var(prophecy_ty);
         let place = self.elaborate_place_for_borrow(&referent);
-        let (ty, term) = self.env.borrow_place(place, prophecy);
-        rty::RefinedType::refined_with_term(ty, term)
+        self.env.borrow_place(place, prophecy).into()
     }
 
     fn merge_drop_points(&mut self, from: Local, to: Local) {
