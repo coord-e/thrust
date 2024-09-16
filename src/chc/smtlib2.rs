@@ -4,9 +4,9 @@ use crate::chc;
 
 #[derive(Debug, Clone)]
 struct List<T> {
-    open_char: Option<char>,
-    close_char: Option<char>,
-    delimiter: char,
+    open: Option<&'static str>,
+    close: Option<&'static str>,
+    delimiter: &'static str,
     items: Vec<T>,
 }
 
@@ -15,7 +15,7 @@ where
     T: std::fmt::Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(c) = self.open_char {
+        if let Some(c) = self.open {
             write!(f, "{}", c)?;
         }
         for (i, e) in self.items.iter().enumerate() {
@@ -24,7 +24,7 @@ where
             }
             write!(f, "{}", e)?;
         }
-        if let Some(c) = self.close_char {
+        if let Some(c) = self.close {
             write!(f, "{}", c)?;
         }
         Ok(())
@@ -37,9 +37,21 @@ impl<T> List<T> {
         I: std::iter::IntoIterator<Item = T>,
     {
         Self {
-            open_char: Some('('),
-            close_char: Some(')'),
-            delimiter: ' ',
+            open: Some("("),
+            close: Some(")"),
+            delimiter: " ",
+            items: inner.into_iter().collect(),
+        }
+    }
+
+    pub fn multiline_closed<I>(inner: I) -> Self
+    where
+        I: std::iter::IntoIterator<Item = T>,
+    {
+        Self {
+            open: Some("(\n"),
+            close: Some("\n)"),
+            delimiter: "\n",
             items: inner.into_iter().collect(),
         }
     }
@@ -49,9 +61,9 @@ impl<T> List<T> {
         I: std::iter::IntoIterator<Item = T>,
     {
         Self {
-            open_char: None,
-            close_char: None,
-            delimiter: ' ',
+            open: None,
+            close: None,
+            delimiter: " ",
             items: inner.into_iter().collect(),
         }
     }
@@ -61,9 +73,9 @@ impl<T> List<T> {
         I: std::iter::IntoIterator<Item = T>,
     {
         Self {
-            open_char: Some('<'),
-            close_char: Some('>'),
-            delimiter: '-',
+            open: Some("<"),
+            close: Some(">"),
+            delimiter: "-",
             items: inner.into_iter().collect(),
         }
     }
@@ -305,7 +317,7 @@ pub struct DatatypeCtor<'a> {
 impl<'a> std::fmt::Display for DatatypeCtor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let selectors = self.inner.selectors.iter().map(DatatypeSelector::new);
-        writeln!(f, "({} {})", self.inner.symbol, List::open(selectors))
+        write!(f, "({} {})", self.inner.symbol, List::open(selectors))
     }
 }
 
@@ -323,7 +335,7 @@ pub struct Datatype<'a> {
 impl<'a> std::fmt::Display for Datatype<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ctors = self.inner.ctors.iter().map(DatatypeCtor::new);
-        writeln!(f, "({} {})", self.inner.symbol, List::open(ctors))
+        write!(f, "({} {})", self.inner.symbol, List::open(ctors))
     }
 }
 
@@ -346,7 +358,7 @@ impl<'a> std::fmt::Display for DatatypeDiscrFunCase<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let pat = DatatypeSymbol::new(&self.inner.symbol);
         let discr = self.inner.discriminant;
-        writeln!(f, "({pat} {discr})")
+        write!(f, "({pat} {discr})")
     }
 }
 
@@ -388,7 +400,7 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)")?;
         let builtins = self.collect_builtin_datatypes();
-        let datatypes = List::closed(
+        let datatypes = List::multiline_closed(
             builtins
                 .iter()
                 .chain(&self.inner.datatypes)
