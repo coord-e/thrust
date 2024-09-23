@@ -353,29 +353,6 @@ impl<'a> Datatype<'a> {
     pub fn new(inner: &'a chc::Datatype) -> Self {
         Self { inner }
     }
-
-    pub fn discr_fun(&self) -> DatatypeDiscrFun<'a> {
-        DatatypeDiscrFun { inner: self.inner }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DatatypeDiscrFunCase<'a> {
-    inner: &'a chc::DatatypeCtor,
-}
-
-impl<'a> std::fmt::Display for DatatypeDiscrFunCase<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let pat = DatatypeSymbol::new(&self.inner.symbol);
-        let discr = self.inner.discriminant;
-        write!(f, "({pat} {discr})")
-    }
-}
-
-impl<'a> DatatypeDiscrFunCase<'a> {
-    pub fn new(inner: &'a chc::DatatypeCtor) -> DatatypeDiscrFunCase<'a> {
-        DatatypeDiscrFunCase { inner }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -387,10 +364,16 @@ impl<'a> std::fmt::Display for DatatypeDiscrFun<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sym = &self.inner.symbol;
         let tsym = DatatypeSymbol::new(sym);
-        let cases = List::closed(self.inner.ctors.iter().map(DatatypeDiscrFunCase::new));
+        let cases = self.inner.ctors.iter().rfold("-1".to_owned(), |acc, ctor| {
+            format!(
+                "(ite ((_ is {ctor}) x) {discr} {acc})",
+                ctor = DatatypeSymbol::new(&ctor.symbol),
+                discr = ctor.discriminant,
+            )
+        });
         writeln!(
             f,
-            "(define-fun |datatype_discr{sym}| ((x {tsym})) Int (match x {cases})"
+            "(define-fun |datatype_discr{sym}| ((x {tsym})) Int {cases})"
         )
     }
 }
