@@ -276,6 +276,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
                 }
             }
+            Rvalue::Ref(_, mir::BorrowKind::Shared, place) => {
+                let ty = self.env.place_type(self.elaborate_place(&place));
+                ty.replace(|ty, term| {
+                    (rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
+                })
+            }
             Rvalue::Aggregate(kind, fields) => {
                 let fields_ty = PlaceType::tuple(
                     fields
