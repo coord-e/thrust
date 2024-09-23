@@ -415,7 +415,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.ctx.def_ty(def_id).expect("unknown def").ty.clone()
             }
             _ => {
-                let (ty, _) = self.env.operand_type(func.clone());
+                let (ty, _) = self.operand_type(func.clone());
                 ty
             }
         };
