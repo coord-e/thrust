@@ -740,7 +740,7 @@ impl Env {
         }
 
         let mut xs = Vec::new();
-        for elem in ty.elems.iter().take(ty.elems.len() - 1) {
+        for elem in &ty.elems {
             let x = self.temp_vars.next_index();
             xs.push(x);
             self.bind_var(
@@ -748,40 +748,35 @@ impl Env {
                 rty::RefinedType::unrefined(elem.clone()).vacuous(),
             );
         }
-        let last = self.temp_vars.next_index();
-        let last_element_refinement = {
+        let assumption = {
             let tuple_ty = PlaceType::tuple(
                 xs.iter()
                     .copied()
-                    .chain(std::iter::once(last))
                     .map(|x| self.var_type(x.into()))
                     .collect(),
             );
-            let tuple_term = tuple_ty.term.map_var(|v| match v {
-                PlaceTypeVar::Var(v) if v == Var::Temp(last) => rty::RefinedTypeVar::Value,
-                PlaceTypeVar::Var(v) => rty::RefinedTypeVar::Free(v),
-                PlaceTypeVar::Existential(ev) => {
-                    rty::RefinedTypeVar::Existential(ev + refinement.existentials.len())
-                }
-            });
-            let mut refinement = refinement;
-            refinement.atoms.extend(tuple_ty.conds.into_iter().map(|a| {
-                a.map_var(|v| match v {
-                    PlaceTypeVar::Var(v) if v == Var::Temp(last) => rty::RefinedTypeVar::Value,
-                    PlaceTypeVar::Var(v) => rty::RefinedTypeVar::Free(v),
-                    PlaceTypeVar::Existential(ev) => {
-                        rty::RefinedTypeVar::Existential(ev + refinement.existentials.len())
-                    }
+            let mut existentials = tuple_ty.existentials;
+            let conds = refinement
+                .atoms
+                .into_iter()
+                .map(|a| {
+                    a.subst_var(|v| match v {
+                        rty::RefinedTypeVar::Value => tuple_ty.term.clone(),
+                        rty::RefinedTypeVar::Free(v) => chc::Term::var(PlaceTypeVar::Var(v)),
+                        rty::RefinedTypeVar::Existential(ev) => {
+                            chc::Term::var(PlaceTypeVar::Existential(ev + existentials.len()))
+                        }
+                    })
                 })
-            }));
-            refinement.existentials.extend(tuple_ty.existentials);
-            refinement.subst_value_var(|| tuple_term.clone())
+                .chain(tuple_ty.conds)
+                .collect();
+            existentials.extend(refinement.existentials);
+            UnboundAssumption {
+                existentials,
+                conds,
+            }
         };
-        xs.push(last);
-        self.bind_var(
-            last.into(),
-            rty::RefinedType::new(ty.elems.last().unwrap().clone(), last_element_refinement),
-        );
+        self.assume(assumption);
         let binding = FlowBinding::Tuple(xs.clone());
         match var {
             Var::Local(local) => {
