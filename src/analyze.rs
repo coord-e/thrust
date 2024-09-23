@@ -1,11 +1,9 @@
 use std::collections::HashMap;
 
 use rustc_hir::lang_items::LangItem;
-use rustc_index::IndexVec;
 use rustc_middle::mir::{BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
-use rustc_target::abi::VariantIdx;
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
@@ -32,19 +30,6 @@ pub fn resolve_discr<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::VariantDiscr) -> u3
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct EnumVariantDef {
-    pub name: chc::DatatypeSymbol,
-    pub discr: u32,
-    pub ty: rty::Type,
-}
-
-#[derive(Debug, Clone)]
-pub struct EnumDatatypeDef {
-    pub name: chc::DatatypeSymbol,
-    pub variants: IndexVec<VariantIdx, EnumVariantDef>,
-}
-
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -62,7 +47,7 @@ pub struct Analyzer<'tcx> {
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
-    enum_datatypes: HashMap<DefId, EnumDatatypeDef>,
+    enum_datatypes: HashMap<DefId, rty::EnumDatatypeDef>,
 }
 
 impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
@@ -189,9 +174,30 @@ impl<'tcx> Analyzer<'tcx> {
         self.system.clauses.push(clause);
     }
 
-    pub fn register_enum_def(&mut self, def_id: DefId, enum_def: EnumDatatypeDef) {
+    pub fn register_enum_def(&mut self, def_id: DefId, enum_def: rty::EnumDatatypeDef) {
         tracing::debug!(def_id = ?def_id, enum_def = ?enum_def, "register_enum_def");
+        let ctors = enum_def
+            .variants
+            .iter()
+            .map(|v| chc::DatatypeCtor {
+                symbol: v.name.clone(),
+                selectors: vec![chc::DatatypeSelector {
+                    symbol: chc::DatatypeSymbol::new(format!("_get{}", v.name)),
+                    sort: v.ty.to_sort(),
+                }],
+                discriminant: v.discr,
+            })
+            .collect();
+        let datatype = chc::Datatype {
+            symbol: enum_def.name.clone(),
+            ctors,
+        };
         self.enum_datatypes.insert(def_id, enum_def);
+        self.system.datatypes.push(datatype);
+    }
+
+    pub fn enum_defs(&self) -> impl Iterator<Item = (&DefId, &rty::EnumDatatypeDef)> {
+        self.enum_datatypes.iter()
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
+use rustc_target::abi::VariantIdx;
 
 use crate::chc;
 
@@ -220,6 +221,26 @@ impl TupleType {
     pub fn is_unit(&self) -> bool {
         self.elems.is_empty()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumVariantDef {
+    pub name: chc::DatatypeSymbol,
+    pub discr: u32,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumDatatypeDef {
+    pub name: chc::DatatypeSymbol,
+    pub variants: IndexVec<VariantIdx, EnumVariantDef>,
+
+    // A predicate variable p with the following implications:
+    // p(v1, v2, ..., vn, x) <= x = V1(v1)
+    // p(v1, v2, ..., vn, x) <= x = V2(v2)
+    // ...
+    // p(v1, v2, ..., vn, x) <= x = Vn(vn)
+    pub matcher_pred: chc::PredVarId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

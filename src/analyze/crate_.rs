@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
 use rustc_hir::def::DefKind;
+use rustc_index::IndexVec;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 
 use crate::analyze;
 use crate::annot::{AnnotAtom, AnnotParser};
 use crate::chc;
-use crate::refine::{self, TemplateTypeGenerator};
+use crate::refine::{self, PredVarGenerator, TemplateTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 pub struct Analyzer<'tcx, 'ctx> {
@@ -143,7 +144,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             };
             let adt = self.tcx.adt_def(local_def_id);
             let name = refine::datatype_symbol(self.tcx, local_def_id.to_def_id());
-            let variants = adt
+            let variants: IndexVec<_, _> = adt
                 .variants()
                 .iter()
                 .map(|variant| {
@@ -160,10 +161,43 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         })
                         .collect();
                     let ty = rty::TupleType::new(field_tys).into();
-                    analyze::EnumVariantDef { name, discr, ty }
+                    rty::EnumVariantDef { name, discr, ty }
                 })
                 .collect();
-            let def = analyze::EnumDatatypeDef { name, variants };
+
+            let mut matcher_pred_sig: chc::PredSig =
+                variants.iter().map(|v| v.ty.to_sort()).collect();
+            matcher_pred_sig.push(chc::Sort::datatype(name.clone()));
+            let matcher_pred = self.ctx.generate_pred_var(matcher_pred_sig.clone());
+
+            let vars = IndexVec::<chc::TermVarIdx, _>::from_raw(matcher_pred_sig);
+            let head = chc::Atom::new(
+                matcher_pred.into(),
+                vars.indices().map(chc::Term::var).collect(),
+            );
+            for (variant_idx, variant) in variants.iter().enumerate() {
+                let ctor_term = chc::Term::datatype_ctor(
+                    name.clone(),
+                    variant.name.clone(),
+                    vec![chc::Term::var(variant_idx.into())],
+                );
+                let data_var: chc::TermVarIdx = (vars.len() - 1).into();
+                let body1 = chc::Term::var(data_var).equal_to(ctor_term);
+                let body2 = chc::Term::datatype_discr(name.clone(), chc::Term::var(data_var))
+                    .equal_to(chc::Term::int(variant.discr as i64));
+                let clause = chc::Clause {
+                    vars: vars.clone(),
+                    head: head.clone(),
+                    body: vec![body1, body2],
+                };
+                self.ctx.add_clause(clause);
+            }
+
+            let def = rty::EnumDatatypeDef {
+                name,
+                variants,
+                matcher_pred,
+            };
             self.ctx.register_enum_def(local_def_id.to_def_id(), def);
         }
     }
