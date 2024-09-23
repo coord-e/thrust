@@ -1091,7 +1091,9 @@ impl Env {
                 (PlaceElem::Deref, &FlowBinding::Box(x)) => x.into(),
                 (PlaceElem::Deref, &FlowBinding::Mut(x, _)) => x.into(),
                 (PlaceElem::Field(idx, _), FlowBinding::Tuple(xs)) => xs[idx.as_usize()].into(),
-                (PlaceElem::Downcast(_, idx), FlowBinding::Enum { variants, .. }) => variants[idx].into(),
+                (PlaceElem::Downcast(_, idx), FlowBinding::Enum { variants, .. }) => {
+                    variants[idx].into()
+                }
                 _ => unimplemented!("elem={:?}", elem),
             };
         }
