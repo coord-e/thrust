@@ -177,38 +177,46 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let existentials = allocator
-            .intersperse(
-                self.existentials
-                    .iter_enumerated()
-                    .map(|(v, s)| v.pretty(allocator).append(allocator.text(":")).append(s)),
-                allocator.text(",").append(allocator.line()),
-            )
-            .group();
-        let atoms = allocator.intersperse(
-            &self.conds,
-            allocator
-                .text("∧")
-                .enclose(allocator.line(), allocator.space()),
-        );
         let ty = self
             .ty
             .pretty(allocator)
-            .append(self.term.pretty(allocator).brackets())
-            .append(allocator.line())
-            .append(allocator.text("|"))
-            .append(allocator.space())
-            .append(atoms);
+            .append(self.term.pretty(allocator).brackets());
+        let ty_and_atoms = if self.conds.is_empty() {
+            ty
+        } else {
+            let atoms = allocator.intersperse(
+                &self.conds,
+                allocator
+                    .text("∧")
+                    .enclose(allocator.line(), allocator.space()),
+            );
+            ty.append(allocator.line())
+                .append(allocator.text("|"))
+                .append(allocator.space())
+                .append(atoms)
+        };
         if self.existentials.is_empty() {
+            if self.conds.is_empty() {
+                ty_and_atoms.group()
+            } else {
+                ty_and_atoms.braces().group()
+            }
+        } else {
+            let existentials = allocator
+                .intersperse(
+                    self.existentials
+                        .iter_enumerated()
+                        .map(|(v, s)| v.pretty(allocator).append(allocator.text(":")).append(s)),
+                    allocator.text(",").append(allocator.line()),
+                )
+                .group();
             allocator
                 .text("∃")
                 .append(existentials.nest(2))
                 .append(allocator.text("."))
-                .append(allocator.line().append(ty).nest(2))
+                .append(allocator.line().append(ty_and_atoms).nest(2))
                 .braces()
                 .group()
-        } else {
-            ty.braces().group()
         }
     }
 }

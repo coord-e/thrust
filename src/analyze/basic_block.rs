@@ -129,7 +129,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         let ret_ty = ty.as_ref().ret.clone();
         let ret_refinement = subst_refinement(&self.env, ret_ty.refinement);
-        rty::RefinedType::new(ret_ty.ty, ret_refinement)
+        let ret_rty = rty::RefinedType::new(ret_ty.ty, ret_refinement);
+        tracing::debug!(ret_rty = %ret_rty.display(), "bind_locals");
+        ret_rty
     }
 
     fn mir_refined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<Var> {
@@ -855,6 +857,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn run(&mut self, expected: &BasicBlockType) {
+        let span = tracing::debug_span!("bb", bb = ?self.basic_block);
+        let _guard = span.enter();
+
         let expected_ret = self.bind_locals(&expected);
         self.alloc_prophecies();
         self.analyze_statements();

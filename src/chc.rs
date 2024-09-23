@@ -71,11 +71,12 @@ where
             Sort::Tuple(ss) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ss.len() == 1 {
-                    ss[0].pretty(allocator).append(separator).parens()
+                    ss[0].pretty(allocator).append(separator).parens().group()
                 } else {
                     allocator
                         .intersperse(ss.iter().map(|s| s.pretty(allocator)), separator)
                         .parens()
+                        .group()
                 }
             }
             Sort::Datatype(symbol) => symbol.pretty(allocator),
