@@ -828,7 +828,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let drop_points = DropPoints::default();
         let body = tcx.optimized_mir(local_def_id.to_def_id());
-        let env = Env::default();
+        let enum_defs = ctx
+            .enum_defs()
+            .map(|(_, d)| (d.name.clone(), d.clone()))
+            .collect();
+        let env = Env::new(enum_defs);
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
         let elaborated_locals = Default::default();

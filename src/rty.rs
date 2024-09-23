@@ -374,6 +374,13 @@ impl Type {
         }
     }
 
+    pub fn into_enum(self) -> Option<EnumType> {
+        match self {
+            Type::Enum(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
     pub fn into_pointer(self) -> Option<PointerType> {
         match self {
             Type::Pointer(ty) => Some(ty),
