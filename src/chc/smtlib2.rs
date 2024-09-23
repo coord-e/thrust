@@ -216,7 +216,7 @@ impl<'a> std::fmt::Display for Term<'a> {
                 write!(
                     f,
                     "({} {})",
-                    sym,
+                    DatatypeSymbol::new(sym),
                     List::open(args.iter().map(|t| Term::new(self.clause, t)))
                 )
             }
@@ -299,7 +299,12 @@ pub struct DatatypeSelector<'a> {
 
 impl<'a> std::fmt::Display for DatatypeSelector<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({} {})", self.inner.symbol, Sort::new(&self.inner.sort))
+        write!(
+            f,
+            "({} {})",
+            DatatypeSymbol::new(&self.inner.symbol),
+            Sort::new(&self.inner.sort)
+        )
     }
 }
 
@@ -317,7 +322,12 @@ pub struct DatatypeCtor<'a> {
 impl<'a> std::fmt::Display for DatatypeCtor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let selectors = self.inner.selectors.iter().map(DatatypeSelector::new);
-        write!(f, "({} {})", self.inner.symbol, List::open(selectors))
+        write!(
+            f,
+            "({} {})",
+            DatatypeSymbol::new(&self.inner.symbol),
+            List::open(selectors)
+        )
     }
 }
 
