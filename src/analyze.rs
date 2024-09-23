@@ -81,10 +81,10 @@ impl<'tcx> Analyzer<'tcx> {
                 if got.kind == expected.kind =>
             {
                 match got.kind {
-                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut) => {
+                    rty::PointerKind::Ref(rty::RefKind::Immut) => {
                         self.relate_sub_type(&got.elem, &expected.elem);
                     }
-                    rty::PointerKind::Ref(rty::RefKind::Mut) => {
+                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Mut) => {
                         self.relate_equal_type(&got.elem, &expected.elem);
                     }
                 }
