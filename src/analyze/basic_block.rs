@@ -165,6 +165,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::UnaryOp(op, operand) => {
+                let operand_ty = self.operand_type(operand);
+                match (&operand_ty.ty, op) {
+                    (rty::Type::Bool, mir::UnOp::Not) => {
+                        operand_ty.replace(|_, term| (rty::Type::Bool, term.not()))
+                    }
+                    (rty::Type::Int, mir::UnOp::Neg) => {
+                        operand_ty.replace(|_, term| (rty::Type::Int, term.neg()))
+                    }
+                    _ => unimplemented!("ty={}, op={:?}", operand_ty.display(), op),
+                }
+            }
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = *operands;
                 let lhs_ty = self.operand_type(lhs);
@@ -749,6 +761,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.type_goto(*target, &expected_ret);
             }
             TerminatorKind::UnwindResume {} => {}
+            TerminatorKind::Unreachable {} => {}
             _ => unimplemented!("term={:?}", term.kind),
         }
     }

@@ -113,7 +113,7 @@ impl<'a> std::fmt::Display for Sort<'a> {
             chc::Sort::Box(s) => write!(f, "Box{}", List::sorts(std::iter::once(Sort::new(s)))),
             chc::Sort::Mut(s) => write!(f, "Mut{}", List::sorts(std::iter::once(Sort::new(s)))),
             chc::Sort::Tuple(ss) => write!(f, "Tuple{}", List::sorts(ss.iter().map(Sort::new))),
-            chc::Sort::Datatype(s) => write!(f, "{}", DatatypeSymbol::new(s)),
+            chc::Sort::Datatype(s) => write!(f, "{}", s),
         }
     }
 }

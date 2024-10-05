@@ -851,16 +851,18 @@ impl Env {
                 })
                 .collect(),
         };
-        let mut pred_args: Vec<_> = variants
-            .iter()
-            .map(|&v| {
-                let ty = self.var_type(v.into());
-                // TODO: FIXME!!!!
-                assert!(ty.existentials.is_empty());
-                assert!(ty.conds.is_empty());
-                ty.term
-            })
-            .collect();
+        let mut pred_args: Vec<_> =
+            variants
+                .iter()
+                .map(|&v| {
+                    let ty = self.var_type(v.into());
+                    assumption.conds.extend(ty.conds.into_iter().map(|a| {
+                        a.map_var(|v| v.shift_existential(assumption.existentials.len()))
+                    }));
+                    assumption.existentials.extend(ty.existentials);
+                    ty.term
+                })
+                .collect();
         pred_args.push(chc::Term::var(value_var_ev.into()));
         assumption
             .conds

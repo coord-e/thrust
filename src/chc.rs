@@ -252,6 +252,7 @@ impl Function {
             Self::LE => Sort::bool(),
             Self::LT => Sort::bool(),
             Self::NOT => Sort::bool(),
+            Self::NEG => Sort::int(),
             _ => unimplemented!(),
         }
     }
@@ -265,6 +266,7 @@ impl Function {
     pub const LE: Function = Function::infix("<=");
     pub const LT: Function = Function::infix("<");
     pub const NOT: Function = Function::new("not");
+    pub const NEG: Function = Function::new("-");
 }
 
 #[derive(Debug, Clone)]
@@ -543,6 +545,14 @@ impl<V> Term<V> {
 
     pub fn lt(self, other: Self) -> Self {
         Term::App(Function::LT, vec![self, other])
+    }
+
+    pub fn not(self) -> Self {
+        Term::App(Function::NOT, vec![self])
+    }
+
+    pub fn neg(self) -> Self {
+        Term::App(Function::NEG, vec![self])
     }
 
     pub fn tuple(ts: Vec<Term<V>>) -> Self {
