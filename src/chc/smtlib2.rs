@@ -338,19 +338,30 @@ impl<'a> DatatypeCtor<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Datatype<'a> {
-    inner: &'a chc::Datatype,
+pub struct Datatypes<'a> {
+    inner: &'a Vec<chc::Datatype>,
 }
 
-impl<'a> std::fmt::Display for Datatype<'a> {
+impl<'a> std::fmt::Display for Datatypes<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let ctors = self.inner.ctors.iter().map(DatatypeCtor::new);
-        write!(f, "({} {})", self.inner.symbol, List::open(ctors))
+        let datatypes = self.inner.iter().map(|d| format!("({} 0)", &d.symbol));
+        let ctors = self.inner.iter().map(|d| {
+            format!(
+                "(par () {})",
+                List::multiline_closed(d.ctors.iter().map(DatatypeCtor::new))
+            )
+        });
+        write!(
+            f,
+            "(declare-datatypes {} {})",
+            List::closed(datatypes),
+            List::multiline_closed(ctors)
+        )
     }
 }
 
-impl<'a> Datatype<'a> {
-    pub fn new(inner: &'a chc::Datatype) -> Self {
+impl<'a> Datatypes<'a> {
+    pub fn new(inner: &'a Vec<chc::Datatype>) -> Self {
         Self { inner }
     }
 }
@@ -364,13 +375,17 @@ impl<'a> std::fmt::Display for DatatypeDiscrFun<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sym = &self.inner.symbol;
         let tsym = DatatypeSymbol::new(sym);
-        let cases = self.inner.ctors.iter().rfold("-1".to_owned(), |acc, ctor| {
-            format!(
-                "(ite ((_ is {ctor}) x) {discr} {acc})",
-                ctor = DatatypeSymbol::new(&ctor.symbol),
-                discr = ctor.discriminant,
-            )
-        });
+        let cases = self
+            .inner
+            .ctors
+            .iter()
+            .rfold("(- 1)".to_owned(), |acc, ctor| {
+                format!(
+                    "(ite ((_ is {ctor}) x) {discr} {acc})",
+                    ctor = DatatypeSymbol::new(&ctor.symbol),
+                    discr = ctor.discriminant,
+                )
+            });
         writeln!(
             f,
             "(define-fun |datatype_discr{sym}| ((x {tsym})) Int {cases})"
@@ -392,14 +407,9 @@ pub struct System<'a> {
 impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)")?;
-        let builtins = self.collect_builtin_datatypes();
-        let datatypes = List::multiline_closed(
-            builtins
-                .iter()
-                .chain(&self.inner.datatypes)
-                .map(Datatype::new),
-        );
-        writeln!(f, "(declare-datatypes () {datatypes})")?;
+        let mut datatypes = self.inner.datatypes.clone();
+        datatypes.extend(self.collect_builtin_datatypes());
+        writeln!(f, "{}", Datatypes::new(&datatypes))?;
         for datatype in &self.inner.datatypes {
             writeln!(f, "{}", DatatypeDiscrFun::new(datatype))?;
         }
