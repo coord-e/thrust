@@ -229,9 +229,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             Rvalue::Aggregate(kind, fields) => {
                 let fields_ty = PlaceType::tuple(
+                    // elaboration: all fields are boxed
                     fields
                         .into_iter()
-                        .map(|operand| self.operand_type(operand))
+                        .map(|operand| self.operand_type(operand).boxed())
                         .collect(),
                 );
                 match *kind {
@@ -487,7 +488,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if self.is_mut_local(place.local) {
             projection.push(mir::PlaceElem::Deref);
         }
-        projection.extend_from_slice(place.projection.as_slice());
+        for elem in place.projection {
+            projection.push(elem);
+            // elaboration: all fields are boxed
+            if matches!(elem, mir::PlaceElem::Field { .. }) {
+                projection.push(mir::PlaceElem::Deref);
+            }
+        }
 
         let mut p = place.clone();
         p.projection = self.tcx.mk_place_elems(&projection);

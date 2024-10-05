@@ -157,7 +157,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .map(|field| {
                             // TODO: generic args
                             let field_ty = field.ty(self.tcx, self.tcx.mk_args(&[]));
-                            self.ctx.mir_ty(field_ty)
+                            // elaboration: all fields are boxed
+                            rty::PointerType::own(self.ctx.mir_ty(field_ty)).into()
                         })
                         .collect();
                     let ty = rty::TupleType::new(field_tys).into();
