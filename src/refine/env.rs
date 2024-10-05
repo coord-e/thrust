@@ -183,6 +183,22 @@ where
     }
 }
 
+impl PlaceTypeVar {
+    pub fn into_var(self) -> Option<Var> {
+        match self {
+            PlaceTypeVar::Var(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn shift_existential(self, amount: usize) -> Self {
+        match self {
+            PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+            PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + amount),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlaceType {
     pub ty: rty::Type,
@@ -641,6 +657,18 @@ where
                 .append(allocator.text("."))
                 .append(allocator.line().append(atoms).nest(2))
                 .group()
+        }
+    }
+}
+
+impl UnboundAssumption {
+    pub fn new(
+        existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+        conds: Vec<chc::Atom<PlaceTypeVar>>,
+    ) -> Self {
+        UnboundAssumption {
+            existentials,
+            conds,
         }
     }
 }

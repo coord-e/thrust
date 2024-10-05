@@ -13,7 +13,8 @@ use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, BasicBlockType, Env, PlaceType, TempVarIdx, TemplateTypeGenerator, UnboundAssumption, Var,
+    self, BasicBlockType, Env, PlaceType, PredVarGenerator, TempVarIdx, TemplateTypeGenerator,
+    UnboundAssumption, Var,
 };
 use crate::rty::{self, ClauseBuilderExt as _};
 
@@ -64,74 +65,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn basic_block_ty(&self, bb: BasicBlock) -> &BasicBlockType {
         &self.ctx.basic_block_ty(self.local_def_id, bb)
-    }
-
-    // TODO: reconsider API
-    fn bind_locals(&mut self, ty: &BasicBlockType) -> rty::RefinedType<Var> {
-        let subst_refinement = |env: &Env,
-                                refinement: rty::Refinement<rty::FunctionParamIdx>|
-         -> rty::Refinement<Var> {
-            let rty::Refinement {
-                mut existentials,
-                atoms,
-            } = refinement;
-
-            let mut param_local_terms = HashMap::new();
-            let mut param_atoms = Vec::new();
-            for param_idx in ty.as_ref().params.indices() {
-                let Some(local) = ty.local_of_param(param_idx) else {
-                    continue;
-                };
-                if !env.contains_local(local) {
-                    continue;
-                }
-                let local_ty = env.local_type(local);
-                let local_term = local_ty.term.map_var(|v| match v.into() {
-                    rty::RefinedTypeVar::Existential(v) => (v + existentials.len()).into(),
-                    v => v,
-                });
-                param_atoms.extend(local_ty.conds.into_iter().map(|a| {
-                    a.map_var(|v| match v.into() {
-                        rty::RefinedTypeVar::Existential(v) => (v + existentials.len()).into(),
-                        v => v,
-                    })
-                }));
-                existentials.extend(local_ty.existentials);
-                param_local_terms.insert(param_idx, local_term);
-            }
-
-            let atoms = atoms
-                .into_iter()
-                .map(|a| {
-                    a.subst_var(|v| match v {
-                        rty::RefinedTypeVar::Value => chc::Term::var(rty::RefinedTypeVar::Value),
-                        rty::RefinedTypeVar::Free(idx) => param_local_terms[&idx].clone(),
-                        rty::RefinedTypeVar::Existential(ev) => {
-                            chc::Term::var(rty::RefinedTypeVar::Existential(ev))
-                        }
-                    })
-                })
-                .chain(param_atoms)
-                .collect();
-            rty::Refinement::new(existentials, atoms)
-        };
-        for (param_idx, param_ty) in ty.as_ref().params.iter_enumerated() {
-            let param_refinement = subst_refinement(&self.env, param_ty.refinement.clone());
-            let param_ty = rty::RefinedType::new(param_ty.ty.clone(), param_refinement);
-            if let Some(local) = ty.local_of_param(param_idx) {
-                self.env.bind(local, param_ty);
-            } else {
-                // non-local basic block function param must not mention value var or existential
-                for atom in param_ty.refinement.instantiate().into_atoms() {
-                    self.env.assume(atom);
-                }
-            }
-        }
-        let ret_ty = ty.as_ref().ret.clone();
-        let ret_refinement = subst_refinement(&self.env, ret_ty.refinement);
-        let ret_rty = rty::RefinedType::new(ret_ty.ty, ret_refinement);
-        tracing::debug!(ret_rty = %ret_rty.display(), "bind_locals");
-        ret_rty
     }
 
     fn mir_refined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<Var> {
@@ -738,7 +671,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn analyze_terminator(&mut self, expected_ret: &rty::RefinedType<Var>) {
+    fn elaborated_terminator(&mut self) -> mir::Terminator<'tcx> {
         let mut term = self.body.basic_blocks[self.basic_block]
             .terminator()
             .clone();
@@ -746,6 +679,39 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .visit_terminator(&mut term);
         self.reborrow_visitor().visit_terminator(&mut term);
         tracing::debug!(term = ?term.kind);
+        term
+    }
+
+    fn analyze_terminator_binds(&mut self, term: &mir::Terminator<'tcx>) {
+        match &term.kind {
+            TerminatorKind::Call {
+                func,
+                args,
+                destination,
+                ..
+            } => {
+                let destination = match destination {
+                    p if p.projection.len() == 0 => p.local,
+                    _ => unimplemented!(),
+                };
+                if self.is_defined(destination) {
+                    unimplemented!()
+                }
+
+                let decl = self.local_decls[destination].clone();
+                let rty = self.mir_refined_ty(decl.ty);
+                self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
+                self.bind_local(destination, rty, decl.mutability);
+            }
+            _ => {}
+        }
+    }
+
+    fn analyze_terminator_goto(
+        &mut self,
+        term: &mir::Terminator<'tcx>,
+        expected_ret: &rty::RefinedType<Var>,
+    ) {
         match &term.kind {
             TerminatorKind::Return => {
                 self.type_return(&expected_ret);
@@ -766,25 +732,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     },
                 );
             }
-            TerminatorKind::Call {
-                func,
-                args,
-                destination,
-                target,
-                ..
-            } => {
-                let destination = match destination {
-                    p if p.projection.len() == 0 => p.local,
-                    _ => unimplemented!(),
-                };
-                if self.is_defined(destination) {
-                    unimplemented!()
-                }
-
-                let decl = self.local_decls[destination].clone();
-                let rty = self.mir_refined_ty(decl.ty);
-                self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
-                self.bind_local(destination, rty, decl.mutability);
+            TerminatorKind::Call { target, .. } => {
                 if let Some(target) = target {
                     for local in self.drop_points.after_terminator(target).iter() {
                         tracing::info!(?local, "implicitly dropped after call");
@@ -805,6 +753,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    fn ret_template(&mut self) -> rty::RefinedType<Var> {
+        let bb_ty = self.basic_block_ty(self.basic_block);
+        let ret_ty = bb_ty.as_ref().ret.ty.clone();
+        let mut builder = rty::TemplateBuilder::default();
+        for (v, sort) in self.env.dependencies() {
+            builder.add_dependency(v, sort);
+        }
+        let tmpl = builder.build(ret_ty);
+        self.ctx.register_template(tmpl)
+    }
+
     // TODO: remove this
     fn alloc_prophecies(&mut self) {
         for (stmt_idx, stmt) in self.body.basic_blocks[self.basic_block]
@@ -822,6 +781,160 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.add_prophecy_var(stmt_idx, inner_ty);
             }
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnbindAtoms<T> {
+    existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+    atoms: Vec<chc::Atom<rty::RefinedTypeVar<Var>>>,
+    target_equations: Vec<(rty::RefinedTypeVar<T>, chc::Term<rty::RefinedTypeVar<Var>>)>,
+}
+
+impl<T> Default for UnbindAtoms<T> {
+    fn default() -> Self {
+        UnbindAtoms {
+            existentials: Default::default(),
+            atoms: Default::default(),
+            target_equations: Default::default(),
+        }
+    }
+}
+
+impl<T> UnbindAtoms<T> {
+    pub fn push(&mut self, target: rty::RefinedTypeVar<T>, var_ty: PlaceType) {
+        self.atoms.extend(
+            var_ty
+                .conds
+                .into_iter()
+                .map(|a| a.map_var(|v| v.shift_existential(self.existentials.len()).into())),
+        );
+        self.target_equations.push((
+            target,
+            var_ty
+                .term
+                .map_var(|v| v.shift_existential(self.existentials.len()).into()),
+        ));
+        self.existentials.extend(var_ty.existentials);
+    }
+
+    pub fn unbind(mut self, env: &Env, ty: rty::RefinedType<Var>) -> rty::RefinedType<T> {
+        let rty::RefinedType {
+            ty: src_ty,
+            refinement,
+        } = ty;
+        let rty::Refinement {
+            existentials,
+            atoms,
+        } = refinement;
+
+        self.atoms.extend(
+            atoms
+                .into_iter()
+                .map(|a| a.map_var(|v| v.shift_existential(self.existentials.len()))),
+        );
+        self.existentials.extend(existentials);
+
+        let mut substs = HashMap::new();
+        for (v, sort) in env.dependencies() {
+            let ev = self.existentials.push(sort);
+            substs.insert(v, ev);
+        }
+
+        let atoms = self
+            .atoms
+            .into_iter()
+            .map(|a| {
+                a.map_var(|v| match v {
+                    rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
+                    rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
+                    rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
+                })
+            })
+            .chain(self.target_equations.into_iter().map(|(t, term)| {
+                chc::Term::var(t).equal_to(term.map_var(|v| match v {
+                    rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
+                    rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
+                    rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
+                }))
+            }))
+            .collect();
+        let refinement = rty::Refinement::new(self.existentials, atoms);
+        rty::RefinedType::new(src_ty, refinement)
+    }
+}
+
+impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    fn bind_locals(
+        &mut self,
+    ) -> IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>> {
+        let mut params_template = IndexVec::new();
+        let mut template_pred_sig = Vec::new();
+        let mut template_pred_args = Vec::new();
+        let mut env_pred_existentials = IndexVec::new();
+        let mut env_pred_args = Vec::new();
+        let mut env_pred_conds = Vec::new();
+
+        let bb_ty = self.basic_block_ty(self.basic_block).clone();
+        let params = &bb_ty.as_ref().params;
+        assert!(params.len() >= 1);
+        for (param_idx, param_rty) in params.iter_enumerated() {
+            let param_ty = &param_rty.ty;
+            params_template.push(rty::RefinedType::unrefined(param_ty.clone()).vacuous());
+            if let Some(local) = bb_ty.local_of_param(param_idx) {
+                template_pred_sig.push(param_ty.to_sort());
+                template_pred_args.push(chc::Term::var(rty::RefinedTypeVar::Free(param_idx)));
+
+                self.env.bind(
+                    local,
+                    rty::RefinedType::unrefined(param_ty.clone()).vacuous(),
+                );
+                let local_ty = self.env.local_type(local);
+                env_pred_args.push(
+                    local_ty
+                        .term
+                        .map_var(|v| v.shift_existential(env_pred_existentials.len())),
+                );
+                env_pred_conds.extend(
+                    local_ty
+                        .conds
+                        .into_iter()
+                        .map(|a| a.map_var(|v| v.shift_existential(env_pred_existentials.len()))),
+                );
+                env_pred_existentials.extend(local_ty.existentials);
+            }
+        }
+
+        tracing::debug!(?template_pred_sig, "bind_locals");
+        let pvar = self.ctx.generate_pred_var(template_pred_sig);
+        if let Some(last) = template_pred_args.last_mut() {
+            *last = chc::Term::var(rty::RefinedTypeVar::Value);
+        }
+        params_template.iter_mut().last().unwrap().refinement =
+            chc::Atom::new(pvar.into(), template_pred_args).into();
+
+        env_pred_conds.push(chc::Atom::new(pvar.into(), env_pred_args));
+        let assumption = UnboundAssumption::new(env_pred_existentials, env_pred_conds);
+        tracing::debug!(assumption = %assumption.display(), ?params_template, "bind_locals");
+        self.env.assume(assumption);
+
+        params_template
+    }
+
+    fn unbind_atoms(&self) -> UnbindAtoms<rty::FunctionParamIdx> {
+        let bb_ty = self.basic_block_ty(self.basic_block);
+        let mut atoms = UnbindAtoms::default();
+        if self.is_defined(mir::RETURN_PLACE.into()) {
+            let r_ty = self.operand_type(Operand::Move(mir::RETURN_PLACE.into()));
+            atoms.push(rty::RefinedTypeVar::Value, r_ty);
+        }
+        for param_idx in bb_ty.as_ref().params.indices() {
+            if let Some(local) = bb_ty.local_of_param(param_idx) {
+                let local_ty = self.env.local_type(local);
+                atoms.push(rty::RefinedTypeVar::Free(param_idx), local_ty);
+            }
+        }
+        atoms
     }
 }
 
@@ -870,9 +983,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let span = tracing::debug_span!("bb", bb = ?self.basic_block);
         let _guard = span.enter();
 
-        let expected_ret = self.bind_locals(&expected);
+        let param_templates = self.bind_locals();
+        let unbind_atoms = self.unbind_atoms();
         self.alloc_prophecies();
         self.analyze_statements();
-        self.analyze_terminator(&expected_ret);
+
+        let term = self.elaborated_terminator();
+        self.analyze_terminator_binds(&term);
+        let ret_template = self.ret_template();
+        self.analyze_terminator_goto(&term, &ret_template);
+
+        let got_ret_ty = unbind_atoms.unbind(&self.env, ret_template);
+        let got_ty = rty::FunctionType::new(param_templates, got_ret_ty);
+        self.ctx
+            .relate_sub_type(&got_ty.into(), &expected.to_function_ty().into());
     }
 }

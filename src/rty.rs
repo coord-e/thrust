@@ -515,6 +515,15 @@ where
     }
 }
 
+impl<T> RefinedTypeVar<T> {
+    pub fn shift_existential(self, offset: usize) -> Self {
+        match self {
+            RefinedTypeVar::Existential(v) => RefinedTypeVar::Existential(v + offset),
+            v => v,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Refinement<FV = Closed> {
     pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
