@@ -10,6 +10,8 @@ use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::rty;
 
+const BIND_EXPANSION_DEPTH_LIMIT: usize = 10;
+
 rustc_index::newtype_index! {
     #[debug_format = "t{}"]
     pub struct TempVarIdx { }
@@ -701,7 +703,13 @@ impl Env {
     }
 
     // when var = Var::Temp(idx), idx must be temp_vars.next_index() in bind_*
-    fn bind_own(&mut self, var: Var, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
+    fn bind_own(
+        &mut self,
+        var: Var,
+        ty: rty::PointerType,
+        refinement: rty::Refinement<Var>,
+        depth: usize,
+    ) {
         // note that the given var is unbound here, so be careful of using indices around temp_vars
         let current_refinement = refinement
             .subst_value_var(|| chc::Term::box_(chc::Term::var(rty::RefinedTypeVar::Value)));
@@ -719,13 +727,20 @@ impl Env {
                 current
             }
         };
-        self.bind_var(
+        self.bind_impl(
             current.into(),
             rty::RefinedType::new((*ty.elem).into(), current_refinement),
+            depth + 1,
         );
     }
 
-    fn bind_mut(&mut self, var: Var, ty: rty::PointerType, refinement: rty::Refinement<Var>) {
+    fn bind_mut(
+        &mut self,
+        var: Var,
+        ty: rty::PointerType,
+        refinement: rty::Refinement<Var>,
+        depth: usize,
+    ) {
         // note that the given var is unbound here, so be careful of using indices around temp_vars
         let next_index = self.temp_vars.next_index();
         let (final_, current) = if var.is_temp() {
@@ -754,13 +769,20 @@ impl Env {
                 rty::RefinedType::unrefined(*ty.elem.clone()).vacuous()
             ))
         );
-        self.bind_var(
+        self.bind_impl(
             current.into(),
             rty::RefinedType::new((*ty.elem).into(), current_refinement),
+            depth + 1,
         );
     }
 
-    fn bind_tuple(&mut self, var: Var, ty: rty::TupleType, refinement: rty::Refinement<Var>) {
+    fn bind_tuple(
+        &mut self,
+        var: Var,
+        ty: rty::TupleType,
+        refinement: rty::Refinement<Var>,
+        depth: usize,
+    ) {
         if let Var::Temp(temp) = var {
             // XXX: allocate `temp` once to invoke bind_var recursively
             let dummy = FlowBinding::Tuple(Vec::new());
@@ -771,9 +793,10 @@ impl Env {
         for elem in &ty.elems {
             let x = self.temp_vars.next_index();
             xs.push(x);
-            self.bind_var(
+            self.bind_impl(
                 x.into(),
                 rty::RefinedType::unrefined(elem.clone()).vacuous(),
+                depth + 1,
             );
         }
         let assumption = {
@@ -816,7 +839,13 @@ impl Env {
         }
     }
 
-    fn bind_enum(&mut self, var: Var, ty: rty::EnumType, refinement: rty::Refinement<Var>) {
+    fn bind_enum(
+        &mut self,
+        var: Var,
+        ty: rty::EnumType,
+        refinement: rty::Refinement<Var>,
+        depth: usize,
+    ) {
         if let Var::Temp(temp) = var {
             // XXX: allocate `temp` once to invoke bind_var recursively
             let dummy = FlowBinding::Tuple(Vec::new());
@@ -829,9 +858,10 @@ impl Env {
         for v in &def.variants {
             let x = self.temp_vars.next_index();
             variants.push(x);
-            self.bind_var(
+            self.bind_impl(
                 x.into(),
                 rty::RefinedType::unrefined(v.ty.clone()).vacuous(),
+                depth + 1,
             );
         }
 
@@ -899,25 +929,35 @@ impl Env {
     }
 
     fn bind_var(&mut self, var: Var, rty: rty::RefinedType<Var>) {
+        match var {
+            Var::Local(local) => {
+                self.locals.insert(local, rty);
+            }
+            Var::Temp(temp) => {
+                assert_eq!(temp, self.temp_vars.push(TempVarBinding::Type(rty)));
+            }
+        }
+    }
+
+    fn bind_impl(&mut self, var: Var, rty: rty::RefinedType<Var>, depth: usize) {
+        if depth > BIND_EXPANSION_DEPTH_LIMIT {
+            self.bind_var(var, rty);
+            return;
+        }
         match rty.ty {
-            rty::Type::Pointer(ty) if ty.is_own() => self.bind_own(var, ty, rty.refinement),
-            rty::Type::Pointer(ty) if ty.is_mut() => self.bind_mut(var, ty, rty.refinement),
-            rty::Type::Tuple(ty) if !ty.is_unit() => self.bind_tuple(var, ty, rty.refinement),
-            rty::Type::Enum(ty) => self.bind_enum(var, ty, rty.refinement),
-            _ => match var {
-                Var::Local(local) => {
-                    self.locals.insert(local, rty);
-                }
-                Var::Temp(temp) => {
-                    assert_eq!(temp, self.temp_vars.push(TempVarBinding::Type(rty)));
-                }
-            },
+            rty::Type::Pointer(ty) if ty.is_own() => self.bind_own(var, ty, rty.refinement, depth),
+            rty::Type::Pointer(ty) if ty.is_mut() => self.bind_mut(var, ty, rty.refinement, depth),
+            rty::Type::Tuple(ty) if !ty.is_unit() => {
+                self.bind_tuple(var, ty, rty.refinement, depth)
+            }
+            rty::Type::Enum(ty) => self.bind_enum(var, ty, rty.refinement, depth),
+            _ => self.bind_var(var, rty),
         }
     }
 
     pub fn bind(&mut self, local: Local, rty: rty::RefinedType<Var>) {
         let rty_disp = rty.clone();
-        self.bind_var(local.into(), rty);
+        self.bind_impl(local.into(), rty, 0);
         tracing::debug!(local = ?local, rty = %rty_disp.display(), place_type = %self.local_type(local).display(), "bind");
     }
 
