@@ -3,6 +3,8 @@ use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
 mod clause_builder;
+mod format_context;
+mod hoice;
 mod smtlib2;
 mod solver;
 
@@ -96,6 +98,23 @@ impl Sort {
         match &self {
             Sort::Box(_) | Sort::Mut(_) => self.pretty(allocator).parens(),
             _ => self.pretty(allocator),
+        }
+    }
+
+    fn walk<'a>(&'a self, f: impl FnMut(&'a Sort)) {
+        self.walk_impl(Box::new(f))
+    }
+
+    fn walk_impl<'a, 'b>(&'a self, mut f: Box<dyn FnMut(&'a Sort) + 'b>) {
+        f(self);
+        match self {
+            Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
+            Sort::Tuple(ss) => {
+                for s in ss {
+                    s.walk(Box::new(&mut f));
+                }
+            }
+            _ => {}
         }
     }
 
