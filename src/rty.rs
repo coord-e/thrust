@@ -146,8 +146,8 @@ pub struct PointerType<T> {
 
 impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PointerType<T>
 where
+    T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-    &'b T: Pretty<'a, D, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
@@ -229,8 +229,8 @@ pub struct TupleType<T> {
 
 impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TupleType<T>
 where
+    T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-    &'b T: Pretty<'a, D, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
@@ -370,8 +370,8 @@ impl<T> From<EnumType> for Type<T> {
 
 impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Type<T>
 where
+    T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-    &'b T: Pretty<'a, D, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
@@ -394,8 +394,8 @@ impl<T> Type<T> {
         allocator: &'a D,
     ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
     where
+        T: chc::Var,
         D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-        &'b T: Pretty<'a, D, termcolor::ColorSpec>,
         D::Doc: Clone,
     {
         match self {
@@ -638,14 +638,14 @@ where
 
 impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b RefinedTypeVar<FV>
 where
-    &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             RefinedTypeVar::Value => allocator.text("ν"),
             RefinedTypeVar::Existential(v) => v.pretty(allocator),
-            RefinedTypeVar::Free(v) => v.pretty(allocator),
+            RefinedTypeVar::Free(v) => allocator.text(format!("{v:?}")),
         }
     }
 }
@@ -676,7 +676,7 @@ impl<FV> From<chc::Atom<RefinedTypeVar<FV>>> for Refinement<FV> {
 
 impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b Refinement<FV>
 where
-    &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -875,7 +875,7 @@ pub struct RefinedType<FV = Closed> {
 
 impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b RefinedType<FV>
 where
-    &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -903,8 +903,8 @@ impl<FV> RefinedType<FV> {
         allocator: &'a D,
     ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
     where
+        FV: chc::Var,
         D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-        &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
         D::Doc: Clone,
     {
         if self.refinement.is_top() {

@@ -54,9 +54,9 @@ where
         T: chc::Var,
         U: chc::Var,
     {
-        let mut clauses = Vec::new();
-        // tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
+        tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
 
+        let mut clauses = Vec::new();
         match (got, expected) {
             (Type::Int, Type::Int)
             | (Type::Bool, Type::Bool)
@@ -96,12 +96,11 @@ where
                 let cs = builder.relate_sub_refined_type(&got.ret, &expected.ret);
                 clauses.extend(cs);
             }
-            _ => panic!("inconsistent"),
-            // _ => panic!(
-            //     "inconsistent types: got={}, expected={}",
-            //     got.display(),
-            //     expected.display()
-            // ),
+            _ => panic!(
+                "inconsistent types: got={}, expected={}",
+                got.display(),
+                expected.display()
+            ),
         }
         clauses
     }
@@ -115,7 +114,7 @@ where
         T: chc::Var,
         U: chc::Var,
     {
-        // tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_refined_type");
+        tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_refined_type");
 
         let mut clauses = self.relate_sub_type(&got.ty, &expected.ty);
 
@@ -137,7 +136,7 @@ where
         T: chc::Var,
         U: chc::Var,
     {
-        // tracing::debug!(got = %got.display(), expected = %expected.display(), "equal_refined_type");
+        tracing::debug!(got = %got.display(), expected = %expected.display(), "equal_refined_type");
 
         let mut clauses = self.relate_sub_refined_type(got, expected);
         clauses.extend(self.relate_sub_refined_type(expected, got));

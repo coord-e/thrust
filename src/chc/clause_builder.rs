@@ -12,7 +12,7 @@ pub trait Var: Eq + Hash + Copy + Debug + 'static {}
 impl<T: Eq + Hash + Copy + Debug + 'static> Var for T {}
 
 // https://stackoverflow.com/questions/64838355/how-do-i-create-a-hashmap-with-type-erased-keys
-pub trait Key {
+trait Key {
     fn eq(&self, other: &dyn Key) -> bool;
     fn hash(&self) -> u64;
     fn as_any(&self) -> &dyn Any;

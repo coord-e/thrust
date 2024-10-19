@@ -309,14 +309,14 @@ pub enum Term<V = TermVarIdx> {
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
 where
-    &'b V: Pretty<'a, D, termcolor::ColorSpec>,
+    V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             Term::Null => allocator.text("null"),
-            Term::Var(var) => var.pretty(allocator),
+            Term::Var(var) => allocator.text(format!("{var:?}")),
             Term::Int(n) => allocator.as_string(n),
             Term::Bool(b) => allocator.as_string(b),
             Term::String(s) => allocator.text(s.clone()).double_quotes(),
@@ -384,7 +384,7 @@ impl<V> Term<V> {
         allocator: &'a D,
     ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
     where
-        &'b V: Pretty<'a, D, termcolor::ColorSpec>,
+        V: Var,
         D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
         D::Doc: Clone,
     {
@@ -779,7 +779,7 @@ pub struct Atom<V = TermVarIdx> {
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Atom<V>
 where
-    &'b V: Pretty<'a, D, termcolor::ColorSpec>,
+    V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {

@@ -8,7 +8,7 @@ pub struct FunctionType<'a, FV> {
 
 impl<'a, 'b, 'c, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b FunctionType<'c, FV>
 where
-    &'c FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: crate::chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
