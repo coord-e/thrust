@@ -8,8 +8,11 @@ use rustc_index::IndexVec;
 
 use super::{Atom, Clause, Sort, TermVarIdx};
 
+pub trait Var: Eq + Hash + Copy + Debug + 'static {}
+impl<T: Eq + Hash + Copy + Debug + 'static> Var for T {}
+
 // https://stackoverflow.com/questions/64838355/how-do-i-create-a-hashmap-with-type-erased-keys
-trait Key {
+pub trait Key {
     fn eq(&self, other: &dyn Key) -> bool;
     fn hash(&self) -> u64;
     fn as_any(&self) -> &dyn Any;
@@ -61,7 +64,7 @@ pub struct ClauseBuilder {
 impl ClauseBuilder {
     pub fn add_mapped_var<T>(&mut self, v: T, sort: Sort)
     where
-        T: Hash + Eq + 'static,
+        T: Var,
     {
         let idx = self.vars.push(sort);
         self.mapped_var_indices.insert(Rc::new(v), idx);
@@ -73,7 +76,7 @@ impl ClauseBuilder {
 
     pub fn find_mapped_var<T>(&self, v: T) -> Option<TermVarIdx>
     where
-        T: Hash + Eq + 'static,
+        T: Var,
     {
         let k: &dyn Key = &v;
         self.mapped_var_indices.get(k).copied()
@@ -81,7 +84,7 @@ impl ClauseBuilder {
 
     pub fn mapped_var<T>(&self, v: T) -> TermVarIdx
     where
-        T: Hash + Eq + Debug + 'static,
+        T: Var + Debug,
     {
         let k: &dyn Key = &v;
         self.mapped_var_indices
@@ -97,7 +100,7 @@ impl ClauseBuilder {
 
     pub fn add_body_mapped<T>(&mut self, atom: Atom<T>) -> &mut Self
     where
-        T: Hash + Eq + Debug + 'static,
+        T: Var + Debug,
     {
         self.add_body(atom.map_var(|v| self.mapped_var(v)))
     }
@@ -110,7 +113,7 @@ impl ClauseBuilder {
 
     pub fn head_mapped<T>(&self, head: Atom<T>) -> Clause
     where
-        T: Hash + Eq + Debug + 'static,
+        T: Var + Debug,
     {
         self.head(head.map_var(|v| self.mapped_var(v)))
     }

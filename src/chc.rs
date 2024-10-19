@@ -8,7 +8,7 @@ mod hoice;
 mod smtlib2;
 mod solver;
 
-pub use clause_builder::ClauseBuilder;
+pub use clause_builder::{ClauseBuilder, Var};
 pub use solver::{CheckSatError, Config};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

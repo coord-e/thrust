@@ -160,7 +160,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 while analyze::local_of_function_param(params.next_index()) != param_local {
                     tracing::debug!(next_idx = ?params.next_index(), param_local = ?param_local, "elaborate_unused_args");
                     let mock_ty = expected_ty.params[params.next_index()].ty.clone();
-                    params.push(rty::RefinedType::unrefined(mock_ty).vacuous());
+                    params.push(rty::RefinedType::unrefined(mock_ty));
                 }
             }
             subst.insert(param_idx, params.next_index());
@@ -178,7 +178,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let entry_ty = self.elaborate_unused_args(&entry_ty, &expected);
 
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry after");
-        self.ctx.relate_sub_type(&entry_ty.into(), &expected.into());
+        let clauses = rty::relate_sub_closed_type(&entry_ty.into(), &expected.into());
+        self.ctx.extend_clauses(clauses);
     }
 }
 

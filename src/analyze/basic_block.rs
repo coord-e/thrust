@@ -16,7 +16,7 @@ use crate::refine::{
     self, BasicBlockType, Env, PlaceType, PredVarGenerator, TempVarIdx, TemplateTypeGenerator,
     UnboundAssumption, Var,
 };
-use crate::rty::{self, ClauseBuilderExt as _};
+use crate::rty::{self, ClauseBuilderExt as _, ClauseScope as _, Subtyping as _};
 
 mod drop_point;
 mod visitor;
@@ -73,7 +73,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for (v, sort) in self.env.dependencies() {
             builder.add_dependency(v, sort);
         }
-        let tmpl = builder.build(ty);
+        let tmpl = builder.build(ty.vacuous());
         self.ctx.register_template(tmpl)
     }
 
@@ -91,31 +91,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.bind(local, elaborated_rty);
     }
 
-    fn relate_sub_refined_type(
-        &mut self,
-        got: &rty::RefinedType<Var>,
-        expected: &rty::RefinedType<Var>,
-    ) {
-        tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_refined_type");
-
-        self.ctx.relate_sub_type(&got.ty, &expected.ty);
-
-        let clause = self
-            .env
-            .build_clause()
-            .with_value_var(&got.ty)
-            .add_body(got.refinement.clone())
-            .head(expected.refinement.clone());
-        self.ctx.add_clause(clause);
-    }
-
     // this can't be implmeneted in relate_sub_type because rty::FunctionType is free from Var
     fn relate_fn_sub_type(
         &mut self,
         got: rty::FunctionType,
         mut expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
         expected_ret: rty::RefinedType<Var>,
-    ) {
+    ) -> Vec<chc::Clause> {
+        let mut clauses = Vec::new();
+
         if expected_args.is_empty() {
             // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
             expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
@@ -138,19 +122,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .with_value_var(&got_ty.ty)
                 .add_body(expected_ty.refinement.clone())
                 .head(got_ty.refinement.clone());
-            self.ctx.add_clause(clause);
+            clauses.push(clause);
             builder
                 .with_mapped_value_var(param_idx)
                 .add_body(expected_ty.refinement.clone());
-            self.ctx.relate_sub_type(&expected_ty.ty, &got_ty.ty);
+            clauses.extend(self.env.relate_sub_type(&expected_ty.ty, &got_ty.ty));
         }
 
         let clause = builder
             .with_value_var(&got.ret.ty)
             .add_body(got.ret.refinement)
             .head(expected_ret.refinement);
-        self.ctx.add_clause(clause);
-        self.ctx.relate_sub_type(&got.ret.ty, &expected_ret.ty);
+        clauses.push(clause);
+        clauses.extend(self.env.relate_sub_type(&got.ret.ty, &expected_ret.ty));
+        clauses
     }
 
     fn operand_type(&self, mut operand: Operand<'tcx>) -> PlaceType {
@@ -270,7 +255,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     }
                     _ => unimplemented!(),
                 };
-                PlaceType::with_ty_and_term(func_ty.into(), chc::Term::null())
+                PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
             }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
@@ -299,12 +284,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return ty.into();
         }
 
-        rty::RefinedType::unrefined(ty.ty).vacuous()
+        rty::RefinedType::unrefined(ty.ty)
     }
 
     fn type_rvalue(&mut self, rvalue: Rvalue<'tcx>, expected: &rty::RefinedType<Var>) {
         let got = self.rvalue_refined_type(rvalue);
-        self.relate_sub_refined_type(&got, expected);
+        let clauses = self.env.relate_sub_refined_type(&got, expected);
+        self.ctx.extend_clauses(clauses);
     }
 
     fn operand_refined_type(&mut self, operand: Operand<'tcx>) -> rty::RefinedType<Var> {
@@ -333,14 +319,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     if !rty.ty.to_sort().is_singleton() {
                         arg_local_ty.into()
                     } else {
-                        rty::RefinedType::unrefined(arg_local_ty.ty).vacuous()
+                        rty::RefinedType::unrefined(arg_local_ty.ty)
                     }
                 } else {
-                    rty::RefinedType::unrefined(rty.ty.clone()).vacuous()
+                    rty::RefinedType::unrefined(rty.ty.clone().assert_closed().vacuous())
                 }
             })
             .collect();
-        self.relate_fn_sub_type(bty.to_function_ty(), expected_args, expected_ret.clone());
+        let clauses =
+            self.relate_fn_sub_type(bty.to_function_ty(), expected_args, expected_ret.clone());
+        self.ctx.extend_clauses(clauses);
     }
 
     fn with_assumptions<F, T>(
@@ -435,7 +423,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let ret_term =
                     chc::Term::box_(chc::Term::var(rty::FunctionParamIdx::from(0_usize)));
                 let ret = rty::RefinedType::refined_with_term(
-                    rty::PointerType::own(inner_ty).into(),
+                    rty::PointerType::own(inner_ty.vacuous()).into(),
                     ret_term,
                 );
                 rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret).into()
@@ -468,7 +456,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 if !args.is_empty() {
                     tracing::warn!(?args, ?def_id, "generic args ignored");
                 }
-                self.ctx.def_ty(def_id).expect("unknown def").ty.clone()
+                self.ctx
+                    .def_ty(def_id)
+                    .expect("unknown def")
+                    .ty
+                    .clone()
+                    .vacuous()
             }
             _ => self.env.operand_type(func.clone()).ty,
         };
@@ -477,7 +470,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .map(|op| self.operand_refined_type(op))
             .collect();
         if let rty::Type::Function(func_ty) = func_ty {
-            self.relate_fn_sub_type(func_ty, expected_args, expected_ret.clone());
+            let clauses = self.relate_fn_sub_type(func_ty, expected_args, expected_ret.clone());
+            self.ctx.extend_clauses(clauses);
         } else {
             panic!("unexpected def type: {:?}", func_ty);
         }
@@ -528,7 +522,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'tcx>) {
         let ty = self.ctx.mir_ty(ty);
-        let temp_var = self.env.push_temp_var(ty);
+        let temp_var = self.env.push_temp_var(ty.vacuous());
         self.prophecy_vars.insert(statement_index, temp_var);
         tracing::debug!(stmt_idx = %statement_index, temp_var = ?temp_var, "add_prophecy_var");
     }
@@ -549,7 +543,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         prophecy_ty: mir_ty::Ty<'tcx>,
     ) -> rty::RefinedType<Var> {
         let prophecy_ty = self.ctx.mir_ty(prophecy_ty);
-        let prophecy = self.env.push_temp_var(prophecy_ty);
+        let prophecy = self.env.push_temp_var(prophecy_ty.vacuous());
         let place = self.elaborate_place_for_borrow(&referent);
         self.env.borrow_place(place, prophecy).into()
     }
@@ -780,7 +774,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for (v, sort) in self.env.dependencies() {
             builder.add_dependency(v, sort);
         }
-        let tmpl = builder.build(ret_ty);
+        // TODO: polymorphic datatypes: template needed?
+        let tmpl = builder.build(ret_ty.strip_refinement().vacuous());
         self.ctx.register_template(tmpl)
     }
 
@@ -880,7 +875,8 @@ impl<T> UnbindAtoms<T> {
             }))
             .collect();
         let refinement = rty::Refinement::new(self.existentials, atoms);
-        rty::RefinedType::new(src_ty, refinement)
+        // TODO: polymorphic datatypes: template needed?
+        rty::RefinedType::new(src_ty.assert_closed().vacuous(), refinement)
     }
 }
 
@@ -900,14 +896,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         assert!(params.len() >= 1);
         for (param_idx, param_rty) in params.iter_enumerated() {
             let param_ty = &param_rty.ty;
-            params_template.push(rty::RefinedType::unrefined(param_ty.clone()).vacuous());
+            params_template.push(rty::RefinedType::unrefined(param_ty.clone()));
             if let Some(local) = bb_ty.local_of_param(param_idx) {
                 template_pred_sig.push(param_ty.to_sort());
                 template_pred_args.push(chc::Term::var(rty::RefinedTypeVar::Free(param_idx)));
 
                 self.env.bind(
                     local,
-                    rty::RefinedType::unrefined(param_ty.clone()).vacuous(),
+                    // TODO: polymorphic datatypes: template needed?
+                    rty::RefinedType::unrefined(param_ty.clone().strip_refinement().vacuous()),
                 );
                 let local_ty = self.env.local_type(local);
                 env_pred_args.push(
@@ -1014,8 +1011,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.analyze_terminator_goto(&term, &ret_template);
 
         let got_ret_ty = unbind_atoms.unbind(&self.env, ret_template);
-        let got_ty = rty::FunctionType::new(param_templates, got_ret_ty);
-        self.ctx
-            .relate_sub_type(&got_ty.into(), &expected.to_function_ty().into());
+        let got_ty = rty::FunctionType::new(param_templates, got_ret_ty).into_closed_ty();
+        let clauses = self
+            .env
+            .relate_sub_type(&got_ty, &expected.to_function_ty().into_closed_ty());
+        self.ctx.extend_clauses(clauses);
     }
 }
