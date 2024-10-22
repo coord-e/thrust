@@ -610,7 +610,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefinedTypeVar<FV> {
     Value,
     Existential(ExistentialVarIdx),
@@ -627,6 +627,16 @@ impl<FV> std::fmt::Display for RefinedTypeVar<FV>
 where
     FV: std::fmt::Display,
 {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            RefinedTypeVar::Value => f.write_str("ν"),
+            RefinedTypeVar::Existential(v) => v.fmt(f),
+            RefinedTypeVar::Free(v) => v.fmt(f),
+        }
+    }
+}
+
+impl<T> std::fmt::Debug for RefinedTypeVar<T> where T: std::fmt::Debug {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             RefinedTypeVar::Value => f.write_str("ν"),

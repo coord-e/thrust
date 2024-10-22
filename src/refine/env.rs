@@ -140,7 +140,7 @@ impl TempVarBinding {
     }
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub enum PlaceTypeVar {
     Var(Var),
     Existential(rty::ExistentialVarIdx),
@@ -169,6 +169,15 @@ impl From<PlaceTypeVar> for rty::RefinedTypeVar<Var> {
         match v {
             PlaceTypeVar::Var(v) => rty::RefinedTypeVar::Free(v),
             PlaceTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
+        }
+    }
+}
+
+impl std::fmt::Debug for PlaceTypeVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            PlaceTypeVar::Var(v) => v.fmt(f),
+            PlaceTypeVar::Existential(v) => v.fmt(f),
         }
     }
 }
