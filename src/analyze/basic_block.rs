@@ -463,7 +463,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .clone()
                     .vacuous()
             }
-            _ => self.env.operand_type(func.clone()).ty,
+            _ => self.operand_type(func.clone()).ty,
         };
         let expected_args: IndexVec<_, _> = args
             .into_iter()

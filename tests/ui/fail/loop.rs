@@ -6,7 +6,8 @@
 
 #[thrust::requires(true)]
 #[thrust::ensures(true)]
-fn rand() -> i64 { 1 }
+#[thrust::trusted]
+fn rand() -> i64 { unimplemented!() }
 
 fn main() {
   let mut x = 1_i64;

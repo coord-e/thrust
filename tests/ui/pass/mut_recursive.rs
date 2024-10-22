@@ -7,7 +7,8 @@
 
 #[thrust::requires(true)]
 #[thrust::ensures(true)]
-fn rand() -> i64 { 0 }
+#[thrust::trusted]
+fn rand() -> i64 { unimplemented!() }
 
 fn sum(a: &mut i64, i: i64) {
     if i == 0 {
