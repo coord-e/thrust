@@ -7,9 +7,11 @@ mod format_context;
 mod hoice;
 mod smtlib2;
 mod solver;
+mod unbox;
 
 pub use clause_builder::{ClauseBuilder, Var};
 pub use solver::{CheckSatError, Config};
+pub use unbox::unbox;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DatatypeSymbol {
@@ -948,12 +950,13 @@ impl System {
     }
 
     pub fn solve(&self) -> Result<(), CheckSatError> {
+        let system = unbox(self.clone());
         let mut f = std::fs::File::create("refinement-analyzer.txt").unwrap();
-        for (idx, c) in self.clauses.iter_enumerated() {
+        for (idx, c) in system.clauses.iter_enumerated() {
             use crate::pretty::PrettyDisplayExt as _;
             use std::io::Write as _;
             write!(f, "{:?}: {}\n", idx, c.display()).unwrap();
         }
-        Config::load_env().check_sat(self.smtlib2())
+        Config::load_env().check_sat(system.smtlib2())
     }
 }

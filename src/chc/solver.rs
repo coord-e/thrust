@@ -87,6 +87,9 @@ impl Config {
             .suffix(".smt2")
             .tempfile_in(&self.temp_dir)?;
         write!(file, "{}", smt2)?;
+        if let Some(path) = &self.smtlib2_output {
+            std::fs::copy(file.path(), path)?;
+        }
 
         let child = std::process::Command::new(&self.solver)
             .args(&self.solver_args)
@@ -96,11 +99,7 @@ impl Config {
         tracing::info!(solver = self.solver, args = ?self.solver_args, path = %file.path().display(), pid = child.id(), "spawned solver");
 
         let (output, elapsed) = self.wait_solver(child)?;
-        if let Some(path) = &self.smtlib2_output {
-            file.persist(path).map_err(|e| e.error)?;
-        } else {
-            drop(file);
-        }
+        drop(file);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         tracing::info!(status = %output.status, stdout = stdout.trim(), stderr = stderr.trim(), ?elapsed, "solver exited");
