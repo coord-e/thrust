@@ -459,17 +459,13 @@ impl PlaceType {
         } = other;
         let atom = f(
             term1,
-            term2.map_var(|v| match v {
-                PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + existentials.len()),
-            }),
+            term2.map_var(|v| v.shift_existential(existentials.len())),
         );
-        conds.extend(conds2.into_iter().map(|c| {
-            c.map_var(|v| match v {
-                PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + existentials.len()),
-            })
-        }));
+        conds.extend(
+            conds2
+                .into_iter()
+                .map(|c| c.map_var(|v| v.shift_existential(existentials.len()))),
+        );
         conds.push(atom);
         existentials.extend(evs2);
         UnboundAssumption {
@@ -501,20 +497,14 @@ impl PlaceType {
             (ty1, term1),
             (
                 ty2,
-                term2.map_var(|v| match v {
-                    PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                    PlaceTypeVar::Existential(ev) => {
-                        PlaceTypeVar::Existential(ev + existentials.len())
-                    }
-                }),
+                term2.map_var(|v| v.shift_existential(existentials.len())),
             ),
         );
-        conds.extend(conds2.into_iter().map(|c| {
-            c.map_var(|v| match v {
-                PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + existentials.len()),
-            })
-        }));
+        conds.extend(
+            conds2
+                .into_iter()
+                .map(|c| c.map_var(|v| v.shift_existential(existentials.len()))),
+        );
         existentials.extend(evs2);
         PlaceType {
             ty,
@@ -558,20 +548,13 @@ impl PlaceType {
                     conds,
                 } = ty;
                 st.tys.push(ty);
-                st.terms.push(term.map_var(|v| match v {
-                    PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                    PlaceTypeVar::Existential(ev) => {
-                        PlaceTypeVar::Existential(ev + st.existentials.len())
-                    }
-                }));
-                st.conds.extend(conds.into_iter().map(|c| {
-                    c.map_var(|v| match v {
-                        PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                        PlaceTypeVar::Existential(ev) => {
-                            PlaceTypeVar::Existential(ev + st.existentials.len())
-                        }
-                    })
-                }));
+                st.terms
+                    .push(term.map_var(|v| v.shift_existential(st.existentials.len())));
+                st.conds.extend(
+                    conds
+                        .into_iter()
+                        .map(|c| c.map_var(|v| v.shift_existential(st.existentials.len()))),
+                );
                 st.existentials.extend(existentials);
                 st
             });
@@ -610,20 +593,13 @@ impl PlaceType {
                     term,
                     conds,
                 } = ty;
-                st.terms.push(term.map_var(|v| match v {
-                    PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                    PlaceTypeVar::Existential(ev) => {
-                        PlaceTypeVar::Existential(ev + st.existentials.len())
-                    }
-                }));
-                st.conds.extend(conds.into_iter().map(|c| {
-                    c.map_var(|v| match v {
-                        PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-                        PlaceTypeVar::Existential(ev) => {
-                            PlaceTypeVar::Existential(ev + st.existentials.len())
-                        }
-                    })
-                }));
+                st.terms
+                    .push(term.map_var(|v| v.shift_existential(st.existentials.len())));
+                st.conds.extend(
+                    conds
+                        .into_iter()
+                        .map(|c| c.map_var(|v| v.shift_existential(st.existentials.len()))),
+                );
                 st.existentials.extend(existentials);
                 st
             });
