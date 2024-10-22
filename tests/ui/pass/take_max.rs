@@ -6,7 +6,8 @@
 
 #[thrust::requires(true)]
 #[thrust::ensures(true)]
-fn rand() -> i64 { 0 }
+#[thrust::trusted]
+fn rand() -> i64 { unimplemented!() }
 
 fn take_max<'a>(ma: &'a mut i64, mb: &'a mut i64) -> &'a mut i64 {
   if *ma >= *mb {

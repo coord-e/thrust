@@ -6,7 +6,8 @@
 
 #[thrust::requires(true)]
 #[thrust::ensures(true)]
-fn rand() -> i64 { 0 }
+#[thrust::trusted]
+fn rand() -> i64 { unimplemented!() }
 
 fn sum(i: i64) -> i64 {
     if i == 0 {
