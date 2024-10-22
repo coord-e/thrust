@@ -12,6 +12,9 @@ pub use template::{Template, TemplateBuilder};
 mod clause_builder;
 pub use clause_builder::ClauseBuilderExt;
 
+mod subtyping;
+pub use subtyping::{relate_sub_closed_type, ClauseScope, Subtyping};
+
 rustc_index::newtype_index! {
     #[debug_format = "${}"]
     pub struct FunctionParamIdx { }
@@ -65,6 +68,10 @@ impl FunctionType {
             params,
             ret: Box::new(ret),
         }
+    }
+
+    pub fn into_closed_ty(self) -> Type<Closed> {
+        Type::Function(self)
     }
 }
 
@@ -132,13 +139,14 @@ impl PointerKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct PointerType {
+pub struct PointerType<T> {
     pub kind: PointerKind,
-    pub elem: Box<Type>,
+    pub elem: Box<RefinedType<T>>,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PointerType
+impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PointerType<T>
 where
+    T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -150,18 +158,18 @@ where
     }
 }
 
-impl PointerType {
-    pub fn mut_to(ty: Type) -> Self {
+impl<T> PointerType<T> {
+    pub fn mut_to(ty: Type<T>) -> Self {
         PointerType {
             kind: PointerKind::Ref(RefKind::Mut),
-            elem: Box::new(ty),
+            elem: Box::new(RefinedType::unrefined(ty)),
         }
     }
 
-    pub fn immut_to(ty: Type) -> Self {
+    pub fn immut_to(ty: Type<T>) -> Self {
         PointerType {
             kind: PointerKind::Ref(RefKind::Immut),
-            elem: Box::new(ty),
+            elem: Box::new(RefinedType::unrefined(ty)),
         }
     }
 
@@ -179,21 +187,49 @@ impl PointerType {
         }
     }
 
-    pub fn own(ty: Type) -> Self {
+    pub fn own(ty: Type<T>) -> Self {
         PointerType {
             kind: PointerKind::Own,
-            elem: Box::new(ty),
+            elem: Box::new(RefinedType::unrefined(ty)),
+        }
+    }
+
+    pub fn subst_var<F, U>(self, f: F) -> PointerType<U>
+    where
+        F: FnMut(T) -> chc::Term<U>,
+    {
+        PointerType {
+            kind: self.kind,
+            elem: Box::new(self.elem.subst_var(f)),
+        }
+    }
+
+    pub fn map_var<F, U>(self, f: F) -> PointerType<U>
+    where
+        F: FnMut(T) -> U,
+    {
+        PointerType {
+            kind: self.kind,
+            elem: Box::new(self.elem.map_var(f)),
+        }
+    }
+
+    pub fn strip_refinement(self) -> PointerType<Closed> {
+        PointerType {
+            kind: self.kind,
+            elem: Box::new(RefinedType::unrefined(self.elem.strip_refinement())),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TupleType {
-    pub elems: Vec<Type>,
+pub struct TupleType<T> {
+    pub elems: Vec<RefinedType<T>>,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TupleType
+impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TupleType<T>
 where
+    T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -209,9 +245,11 @@ where
     }
 }
 
-impl TupleType {
-    pub fn new(elems: Vec<Type>) -> Self {
-        TupleType { elems }
+impl<T> TupleType<T> {
+    pub fn new(elems: Vec<Type<T>>) -> Self {
+        TupleType {
+            elems: elems.into_iter().map(RefinedType::unrefined).collect(),
+        }
     }
 
     pub fn unit() -> Self {
@@ -221,13 +259,49 @@ impl TupleType {
     pub fn is_unit(&self) -> bool {
         self.elems.is_empty()
     }
+
+    pub fn subst_var<F, U>(self, mut f: F) -> TupleType<U>
+    where
+        F: FnMut(T) -> chc::Term<U>,
+    {
+        TupleType {
+            elems: self
+                .elems
+                .into_iter()
+                .map(|ty| ty.subst_var(&mut f))
+                .collect(),
+        }
+    }
+
+    pub fn map_var<F, U>(self, mut f: F) -> TupleType<U>
+    where
+        F: FnMut(T) -> U,
+    {
+        TupleType {
+            elems: self
+                .elems
+                .into_iter()
+                .map(|ty| ty.map_var(&mut f))
+                .collect(),
+        }
+    }
+
+    pub fn strip_refinement(self) -> TupleType<Closed> {
+        TupleType {
+            elems: self
+                .elems
+                .into_iter()
+                .map(|ty| RefinedType::unrefined(ty.strip_refinement()))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct EnumVariantDef {
     pub name: chc::DatatypeSymbol,
     pub discr: u32,
-    pub ty: Type,
+    pub ty: Type<Closed>,
 }
 
 #[derive(Debug, Clone)]
@@ -252,46 +326,51 @@ impl EnumType {
     pub fn new(symbol: chc::DatatypeSymbol) -> Self {
         EnumType { symbol }
     }
+
+    pub fn into_closed_ty(self) -> Type<Closed> {
+        Type::Enum(self)
+    }
 }
 
 #[derive(Debug, Clone)]
-pub enum Type {
+pub enum Type<T> {
     Int,
     Bool,
     String,
     Never,
-    Pointer(PointerType),
+    Pointer(PointerType<T>),
     Function(FunctionType),
-    Tuple(TupleType),
+    Tuple(TupleType<T>),
     Enum(EnumType),
 }
 
-impl From<FunctionType> for Type {
-    fn from(t: FunctionType) -> Type {
+impl<T> From<FunctionType> for Type<T> {
+    fn from(t: FunctionType) -> Type<T> {
         Type::Function(t)
     }
 }
 
-impl From<PointerType> for Type {
-    fn from(t: PointerType) -> Type {
+impl<T> From<PointerType<T>> for Type<T> {
+    fn from(t: PointerType<T>) -> Type<T> {
         Type::Pointer(t)
     }
 }
 
-impl From<TupleType> for Type {
-    fn from(t: TupleType) -> Type {
+impl<T> From<TupleType<T>> for Type<T> {
+    fn from(t: TupleType<T>) -> Type<T> {
         Type::Tuple(t)
     }
 }
 
-impl From<EnumType> for Type {
-    fn from(t: EnumType) -> Type {
+impl<T> From<EnumType> for Type<T> {
+    fn from(t: EnumType) -> Type<T> {
         Type::Enum(t)
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Type
+impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Type<T>
 where
+    T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -309,12 +388,13 @@ where
     }
 }
 
-impl Type {
-    fn pretty_atom<'a, D>(
-        &self,
+impl<T> Type<T> {
+    fn pretty_atom<'a, 'b, D>(
+        &'b self,
         allocator: &'a D,
     ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
     where
+        T: chc::Var,
         D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
         D::Doc: Clone,
     {
@@ -348,7 +428,7 @@ impl Type {
         Type::Function(ty)
     }
 
-    pub fn deref(self) -> Type {
+    pub fn deref(self) -> RefinedType<T> {
         if let Type::Pointer(ty) = self {
             *ty.elem
         } else {
@@ -381,14 +461,14 @@ impl Type {
         }
     }
 
-    pub fn into_pointer(self) -> Option<PointerType> {
+    pub fn into_pointer(self) -> Option<PointerType<T>> {
         match self {
             Type::Pointer(ty) => Some(ty),
             _ => None,
         }
     }
 
-    pub fn into_tuple(self) -> Option<TupleType> {
+    pub fn into_tuple(self) -> Option<TupleType<T>> {
         match self {
             Type::Tuple(ty) => Some(ty),
             _ => None,
@@ -418,7 +498,7 @@ impl Type {
             Type::String => chc::Sort::null(),
             Type::Never => chc::Sort::null(),
             Type::Pointer(ty) => {
-                let elem_sort = ty.elem.to_sort();
+                let elem_sort = ty.elem.ty.to_sort();
                 let sort = match ty.kind {
                     PointerKind::Ref(RefKind::Immut) | PointerKind::Own => {
                         chc::Sort::box_(elem_sort)
@@ -429,11 +509,66 @@ impl Type {
             }
             Type::Function { .. } => chc::Sort::null(),
             Type::Tuple(ty) => {
-                let elem_sorts = ty.elems.iter().map(|ty| ty.to_sort()).collect();
+                let elem_sorts = ty.elems.iter().map(|ty| ty.ty.to_sort()).collect();
                 chc::Sort::tuple(elem_sorts)
             }
             Type::Enum(ty) => chc::Sort::datatype(ty.symbol.clone()),
         }
+    }
+
+    pub fn subst_var<F, U>(self, f: F) -> Type<U>
+    where
+        F: FnMut(T) -> chc::Term<U>,
+    {
+        match self {
+            Type::Int => Type::Int,
+            Type::Bool => Type::Bool,
+            Type::String => Type::String,
+            Type::Never => Type::Never,
+            Type::Pointer(ty) => Type::Pointer(ty.subst_var(f)),
+            Type::Function(ty) => Type::Function(ty),
+            Type::Tuple(ty) => Type::Tuple(ty.subst_var(f)),
+            Type::Enum(ty) => Type::Enum(ty),
+        }
+    }
+
+    pub fn map_var<F, U>(self, f: F) -> Type<U>
+    where
+        F: FnMut(T) -> U,
+    {
+        match self {
+            Type::Int => Type::Int,
+            Type::Bool => Type::Bool,
+            Type::String => Type::String,
+            Type::Never => Type::Never,
+            Type::Pointer(ty) => Type::Pointer(ty.map_var(f)),
+            Type::Function(ty) => Type::Function(ty),
+            Type::Tuple(ty) => Type::Tuple(ty.map_var(f)),
+            Type::Enum(ty) => Type::Enum(ty),
+        }
+    }
+
+    pub fn assert_closed(self) -> Type<Closed> {
+        self.map_var(|_v| panic!("unexpected variable"))
+    }
+
+    pub fn strip_refinement(self) -> Type<Closed> {
+        match self {
+            Type::Int => Type::Int,
+            Type::Bool => Type::Bool,
+            Type::String => Type::String,
+            Type::Never => Type::Never,
+            Type::Pointer(ty) => Type::Pointer(ty.strip_refinement()),
+            Type::Function(ty) => Type::Function(ty),
+            Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
+            Type::Enum(ty) => Type::Enum(ty),
+        }
+    }
+}
+
+impl Type<Closed> {
+    pub fn vacuous<FV>(self) -> Type<FV> {
+        self.map_var(|v| match v {})
     }
 }
 
@@ -503,14 +638,14 @@ where
 
 impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b RefinedTypeVar<FV>
 where
-    &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             RefinedTypeVar::Value => allocator.text("ν"),
             RefinedTypeVar::Existential(v) => v.pretty(allocator),
-            RefinedTypeVar::Free(v) => v.pretty(allocator),
+            RefinedTypeVar::Free(v) => allocator.text(format!("{v:?}")),
         }
     }
 }
@@ -541,7 +676,7 @@ impl<FV> From<chc::Atom<RefinedTypeVar<FV>>> for Refinement<FV> {
 
 impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b Refinement<FV>
 where
-    &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -602,6 +737,19 @@ impl<FV> Refinement<FV> {
 
     pub fn bottom() -> Self {
         chc::Atom::bottom().into()
+    }
+
+    pub fn extend(&mut self, other: Refinement<FV>) {
+        let Refinement {
+            atoms,
+            existentials,
+        } = other;
+        self.atoms.extend(
+            atoms
+                .into_iter()
+                .map(|a| a.map_var(|v| v.shift_existential(self.existentials.len()))),
+        );
+        self.existentials.extend(existentials);
     }
 
     pub fn subst_var<F, W>(self, mut f: F) -> Refinement<W>
@@ -721,13 +869,13 @@ impl<T> Instantiator<T> {
 
 #[derive(Debug, Clone)]
 pub struct RefinedType<FV = Closed> {
-    pub ty: Type,
+    pub ty: Type<FV>,
     pub refinement: Refinement<FV>,
 }
 
 impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b RefinedType<FV>
 where
-    &'b FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -750,33 +898,49 @@ where
 }
 
 impl<FV> RefinedType<FV> {
-    pub fn new(ty: Type, refinement: Refinement<FV>) -> Self {
+    fn pretty_atom<'a, 'b, D>(
+        &'b self,
+        allocator: &'a D,
+    ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
+    where
+        FV: chc::Var,
+        D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+        D::Doc: Clone,
+    {
+        if self.refinement.is_top() {
+            self.ty.pretty_atom(allocator)
+        } else {
+            self.pretty(allocator)
+        }
+    }
+
+    pub fn new(ty: Type<FV>, refinement: Refinement<FV>) -> Self {
         RefinedType { ty, refinement }
     }
 
-    pub fn refined_with_term(ty: Type, term: chc::Term<FV>) -> Self {
+    pub fn refined_with_term(ty: Type<FV>, term: chc::Term<FV>) -> Self {
         let term = term.map_var(RefinedTypeVar::Free);
         let refinement = chc::Term::var(RefinedTypeVar::Value).equal_to(term);
         RefinedType::new(ty, refinement.into())
     }
 
-    pub fn subst_var<F, W>(self, f: F) -> RefinedType<W>
+    pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> chc::Term<W>,
     {
         RefinedType {
-            ty: self.ty,
-            refinement: self.refinement.subst_var(f),
+            ty: self.ty.subst_var(&mut f),
+            refinement: self.refinement.subst_var(&mut f),
         }
     }
 
-    pub fn map_var<F, W>(self, f: F) -> RefinedType<W>
+    pub fn map_var<F, W>(self, mut f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> W,
     {
         RefinedType {
-            ty: self.ty,
-            refinement: self.refinement.map_var(f),
+            ty: self.ty.map_var(Box::new(&mut f) as Box<dyn FnMut(FV) -> W>),
+            refinement: self.refinement.map_var(&mut f),
         }
     }
 
@@ -784,8 +948,16 @@ impl<FV> RefinedType<FV> {
         !self.refinement.is_top()
     }
 
-    pub fn unrefined(ty: Type) -> Self {
+    pub fn unrefined(ty: Type<FV>) -> Self {
         RefinedType::new(ty, chc::Atom::top().into())
+    }
+
+    pub fn extend_refinement(&mut self, refinement: Refinement<FV>) {
+        self.refinement.extend(refinement);
+    }
+
+    pub fn strip_refinement(self) -> Type<Closed> {
+        self.ty.strip_refinement()
     }
 }
 

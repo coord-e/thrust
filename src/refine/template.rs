@@ -11,7 +11,11 @@ pub trait PredVarGenerator {
     fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId;
 }
 
-fn mir_function_ty_impl<'tcx, T, I>(g: &mut T, params: I, ret_ty: rty::Type) -> rty::FunctionType
+fn mir_function_ty_impl<'tcx, T, I>(
+    g: &mut T,
+    params: I,
+    ret_ty: rty::Type<rty::Closed>,
+) -> rty::FunctionType
 where
     T: TemplateTypeGenerator<'tcx> + ?Sized,
     I: IntoIterator<Item = mir_ty::TypeAndMut<'tcx>>,
@@ -36,7 +40,7 @@ where
                 param_rtys.push(rty::RefinedType::unrefined(param_ty.clone()).vacuous());
             builder.add_dependency(param_idx.into(), param_ty.to_sort());
         }
-        let tmpl = builder.clone().build(param_ty.clone());
+        let tmpl = builder.clone().build(param_ty.clone().vacuous());
         let param_rty = g.register_template(tmpl);
         let param_idx = param_rtys.push(param_rty);
         builder.add_dependency(param_idx.into(), param_ty.to_sort());
@@ -47,7 +51,7 @@ where
         param_rtys.push(param_rty);
     }
 
-    let tmpl = builder.build(ret_ty);
+    let tmpl = builder.build(ret_ty.vacuous());
     let ret_rty = g.register_template(tmpl);
     rty::FunctionType::new(param_rtys, ret_rty)
 }
@@ -59,7 +63,7 @@ pub trait TemplateTypeGenerator<'tcx>: PredVarGenerator {
         tmpl.into_refined_type(|pred_sig| self.generate_pred_var(pred_sig))
     }
 
-    fn mir_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type {
+    fn mir_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
             mir_ty::TyKind::Int(_) => rty::Type::int(),

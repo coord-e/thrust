@@ -8,7 +8,7 @@ use rustc_span::def_id::{DefId, LocalDefId};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::BasicBlockType;
-use crate::rty::{self, ClauseBuilderExt as _};
+use crate::rty;
 
 mod annot;
 mod basic_block;
@@ -66,7 +66,7 @@ impl<'tcx> Analyzer<'tcx> {
     fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
     where
         F: FnMut(FV) -> chc::Sort,
-        FV: std::hash::Hash + Eq + Clone + std::fmt::Debug + 'static,
+        FV: chc::Var + std::fmt::Debug + Clone,
     {
         let fvs: Vec<_> = atoms.iter().flat_map(|a| a.fv()).cloned().collect();
         let mut builder = chc::ClauseBuilder::default();
@@ -84,72 +84,6 @@ impl<'tcx> Analyzer<'tcx> {
         let clause = builder.head_mapped(head.clone());
         self.add_clause(clause);
         head
-    }
-
-    fn relate_sub_type(&mut self, got: &rty::Type, expected: &rty::Type) {
-        tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
-
-        match (got, expected) {
-            (rty::Type::Int, rty::Type::Int)
-            | (rty::Type::Bool, rty::Type::Bool)
-            | (rty::Type::String, rty::Type::String)
-            | (rty::Type::Never, rty::Type::Never) => {}
-            (rty::Type::Enum(got), rty::Type::Enum(expected)) if got == expected => {}
-            (rty::Type::Tuple(got), rty::Type::Tuple(expected))
-                if got.elems.len() == expected.elems.len() =>
-            {
-                for (got_ty, expected_ty) in got.elems.iter().zip(expected.elems.iter()) {
-                    self.relate_sub_type(got_ty, expected_ty);
-                }
-            }
-            (rty::Type::Pointer(got), rty::Type::Pointer(expected))
-                if got.kind == expected.kind =>
-            {
-                match got.kind {
-                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut) => {
-                        self.relate_sub_type(&got.elem, &expected.elem);
-                    }
-                    rty::PointerKind::Ref(rty::RefKind::Mut) => {
-                        self.relate_equal_type(&got.elem, &expected.elem);
-                    }
-                }
-            }
-            (rty::Type::Function(got), rty::Type::Function(expected)) => {
-                // TODO: check sty and length is equal
-                // TODO: add value_var dependency
-                let mut builder = chc::ClauseBuilder::default();
-                for (param_idx, param_rty) in got.params.iter_enumerated() {
-                    builder.add_mapped_var(param_idx, param_rty.ty.to_sort());
-                }
-                for (got_ty, expected_ty) in got.params.iter().zip(expected.params.clone()) {
-                    let clause = builder
-                        .clone()
-                        .with_value_var(&got_ty.ty)
-                        .add_body(expected_ty.refinement)
-                        .head(got_ty.refinement.clone());
-                    self.add_clause(clause);
-                    self.relate_sub_type(&expected_ty.ty, &got_ty.ty);
-                }
-                let clause = builder
-                    .with_value_var(&got.ret.ty)
-                    .add_body(got.ret.refinement.clone())
-                    .head(expected.ret.refinement.clone());
-                self.add_clause(clause);
-                self.relate_sub_type(&got.ret.ty, &expected.ret.ty);
-            }
-            _ => panic!(
-                "inconsistent types: got={}, expected={}",
-                got.display(),
-                expected.display()
-            ),
-        }
-    }
-
-    fn relate_equal_type(&mut self, got: &rty::Type, expected: &rty::Type) {
-        tracing::debug!(got = %got.display(), expected = %expected.display(), "equal_type");
-
-        self.relate_sub_type(got, expected);
-        self.relate_sub_type(expected, got);
     }
 }
 
@@ -172,6 +106,12 @@ impl<'tcx> Analyzer<'tcx> {
     pub fn add_clause(&mut self, clause: chc::Clause) {
         tracing::debug!(clause = %clause.display(), id = ?self.system.clauses.next_index(), "add_clause");
         self.system.clauses.push(clause);
+    }
+
+    pub fn extend_clauses(&mut self, clauses: impl IntoIterator<Item = chc::Clause>) {
+        for clause in clauses {
+            self.add_clause(clause);
+        }
     }
 
     pub fn register_enum_def(&mut self, def_id: DefId, enum_def: rty::EnumDatatypeDef) {

@@ -8,7 +8,7 @@ use super::{RefinedType, RefinedTypeVar, Type};
 pub struct Template<FV> {
     pred_sig: chc::PredSig,
     atom_args: Vec<chc::Term<RefinedTypeVar<FV>>>,
-    ty: Type,
+    ty: Type<FV>,
 }
 
 impl<FV> Template<FV> {
@@ -39,13 +39,13 @@ impl<FV> Default for TemplateBuilder<FV> {
 
 impl<FV> TemplateBuilder<FV>
 where
-    FV: Eq + std::hash::Hash,
+    FV: chc::Var,
 {
     pub fn add_dependency(&mut self, v: FV, sort: chc::Sort) {
         self.dependencies.insert(RefinedTypeVar::Free(v), sort);
     }
 
-    pub fn build(mut self, ty: Type) -> Template<FV> {
+    pub fn build(mut self, ty: Type<FV>) -> Template<FV> {
         self.dependencies
             .insert(RefinedTypeVar::Value, ty.to_sort());
         let mut atom_args = Vec::new();

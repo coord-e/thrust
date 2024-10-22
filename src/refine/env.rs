@@ -140,7 +140,7 @@ impl TempVarBinding {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum PlaceTypeVar {
     Var(Var),
     Existential(rty::ExistentialVarIdx),
@@ -203,7 +203,7 @@ impl PlaceTypeVar {
 
 #[derive(Debug, Clone)]
 pub struct PlaceType {
-    pub ty: rty::Type,
+    pub ty: rty::Type<Var>,
     pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
     pub term: chc::Term<PlaceTypeVar>,
     pub conds: Vec<chc::Atom<PlaceTypeVar>>,
@@ -275,7 +275,7 @@ where
 }
 
 impl PlaceType {
-    pub fn with_ty_and_term(ty: rty::Type, term: chc::Term<Var>) -> Self {
+    pub fn with_ty_and_term(ty: rty::Type<Var>, term: chc::Term<Var>) -> Self {
         PlaceType {
             ty,
             existentials: IndexVec::new(),
@@ -304,13 +304,29 @@ impl PlaceType {
     pub fn deref(self) -> PlaceType {
         let PlaceType {
             ty: inner_ty,
-            existentials,
+            mut existentials,
             term: inner_term,
-            conds,
+            mut conds,
         } = self;
         let inner_ty = inner_ty.into_pointer().unwrap();
-        let term = inner_ty.kind.deref_term(inner_term);
-        let ty = *inner_ty.elem;
+        let rty::RefinedType { ty, refinement } = *inner_ty.elem;
+        let rty::Refinement {
+            existentials: inner_existentials,
+            atoms: inner_atoms,
+        } = refinement;
+        let value_var_ex = existentials.push(ty.to_sort());
+        let term = chc::Term::var(value_var_ex.into());
+        conds.push(term.clone().equal_to(inner_ty.kind.deref_term(inner_term)));
+        conds.extend(inner_atoms.into_iter().map(|a| {
+            a.map_var(|v| match v {
+                rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ex),
+                rty::RefinedTypeVar::Existential(ev) => {
+                    PlaceTypeVar::Existential(ev + existentials.len())
+                }
+                rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
+            })
+        }));
+        existentials.extend(inner_existentials);
         PlaceType {
             ty,
             existentials,
@@ -322,13 +338,29 @@ impl PlaceType {
     pub fn tuple_proj(self, idx: usize) -> PlaceType {
         let PlaceType {
             ty: inner_ty,
-            existentials,
+            mut existentials,
             term: inner_term,
-            conds,
+            mut conds,
         } = self;
         let inner_ty = inner_ty.into_tuple().unwrap();
-        let term = inner_term.tuple_proj(idx);
-        let ty = inner_ty.elems[idx].clone();
+        let rty::RefinedType { ty, refinement } = inner_ty.elems[idx].clone();
+        let rty::Refinement {
+            existentials: inner_existentials,
+            atoms: inner_atoms,
+        } = refinement;
+        let value_var_ex = existentials.push(ty.to_sort());
+        let term = chc::Term::var(value_var_ex.into());
+        conds.push(term.clone().equal_to(inner_term.tuple_proj(idx)));
+        conds.extend(inner_atoms.into_iter().map(|a| {
+            a.map_var(|v| match v {
+                rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ex),
+                rty::RefinedTypeVar::Existential(ev) => {
+                    PlaceTypeVar::Existential(ev + existentials.len())
+                }
+                rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
+            })
+        }));
+        existentials.extend(inner_existentials);
         PlaceType {
             ty,
             existentials,
@@ -360,7 +392,7 @@ impl PlaceType {
             )
             .equal_to(inner_term),
         );
-        let ty = variant.ty.clone();
+        let ty = variant.ty.clone().vacuous();
         let term = chc::Term::var(value_var_ex.into());
         PlaceType {
             ty,
@@ -389,7 +421,10 @@ impl PlaceType {
 
     pub fn replace<F>(self, f: F) -> PlaceType
     where
-        F: FnOnce(rty::Type, chc::Term<PlaceTypeVar>) -> (rty::Type, chc::Term<PlaceTypeVar>),
+        F: FnOnce(
+            rty::Type<Var>,
+            chc::Term<PlaceTypeVar>,
+        ) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>),
     {
         let PlaceType {
             ty,
@@ -446,9 +481,9 @@ impl PlaceType {
     pub fn merge<F>(self, other: PlaceType, f: F) -> PlaceType
     where
         F: FnOnce(
-            (rty::Type, chc::Term<PlaceTypeVar>),
-            (rty::Type, chc::Term<PlaceTypeVar>),
-        ) -> (rty::Type, chc::Term<PlaceTypeVar>),
+            (rty::Type<Var>, chc::Term<PlaceTypeVar>),
+            (rty::Type<Var>, chc::Term<PlaceTypeVar>),
+        ) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>),
     {
         let PlaceType {
             ty: ty1,
@@ -503,7 +538,7 @@ impl PlaceType {
     pub fn tuple(tys: Vec<PlaceType>) -> PlaceType {
         #[derive(Default)]
         struct State {
-            tys: Vec<rty::Type>,
+            tys: Vec<rty::Type<Var>>,
             terms: Vec<chc::Term<PlaceTypeVar>>,
             existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
             conds: Vec<chc::Atom<PlaceTypeVar>>,
@@ -592,7 +627,7 @@ impl PlaceType {
                 st.existentials.extend(existentials);
                 st
             });
-        let ty: rty::Type = rty::EnumType::new(sym.clone()).into();
+        let ty: rty::Type<_> = rty::EnumType::new(sym.clone()).into();
         let value_var_ev = existentials.push(ty.to_sort());
         let term = chc::Term::var(value_var_ev.into());
         let mut pred_args = terms;
@@ -685,6 +720,44 @@ pub struct Env {
     enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
 }
 
+impl rty::ClauseScope for Env {
+    fn build_clause(&self) -> chc::ClauseBuilder {
+        let mut builder = chc::ClauseBuilder::default();
+        for (v, sort) in self.dependencies() {
+            builder.add_mapped_var(v, sort);
+        }
+        for (var, rty) in self.vars() {
+            let mut instantiator = rty
+                .refinement
+                .clone()
+                .map_var(|v| builder.mapped_var(v))
+                .instantiate();
+            for (ev, sort) in rty.refinement.existentials() {
+                let tv = builder.add_var(sort.clone());
+                instantiator.existential(ev, tv);
+            }
+            instantiator.value_var(builder.mapped_var(var));
+            for atom in instantiator.into_atoms() {
+                builder.add_body(atom);
+            }
+        }
+        for assumption in &self.unbound_assumptions {
+            let mut evs = HashMap::new();
+            for (ev, sort) in assumption.existentials.iter_enumerated() {
+                let tv = builder.add_var(sort.clone());
+                evs.insert(ev, tv);
+            }
+            for atom in &assumption.conds {
+                builder.add_body(atom.clone().map_var(|v| match v {
+                    PlaceTypeVar::Var(v) => builder.mapped_var(v),
+                    PlaceTypeVar::Existential(ev) => evs[&ev],
+                }));
+            }
+        }
+        builder
+    }
+}
+
 impl Env {
     pub fn new(enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>) -> Self {
         Env {
@@ -696,17 +769,16 @@ impl Env {
         }
     }
 
-    pub fn push_temp_var(&mut self, ty: rty::Type) -> TempVarIdx {
-        self.temp_vars.push(TempVarBinding::Type(
-            rty::RefinedType::unrefined(ty).vacuous(),
-        ))
+    pub fn push_temp_var(&mut self, ty: rty::Type<Var>) -> TempVarIdx {
+        self.temp_vars
+            .push(TempVarBinding::Type(rty::RefinedType::unrefined(ty)))
     }
 
     // when var = Var::Temp(idx), idx must be temp_vars.next_index() in bind_*
     fn bind_own(
         &mut self,
         var: Var,
-        ty: rty::PointerType,
+        ty: rty::PointerType<Var>,
         refinement: rty::Refinement<Var>,
         depth: usize,
     ) {
@@ -727,17 +799,15 @@ impl Env {
                 current
             }
         };
-        self.bind_impl(
-            current.into(),
-            rty::RefinedType::new((*ty.elem).into(), current_refinement),
-            depth + 1,
-        );
+        let mut inner_ty = *ty.elem;
+        inner_ty.extend_refinement(current_refinement);
+        self.bind_impl(current.into(), inner_ty, depth + 1);
     }
 
     fn bind_mut(
         &mut self,
         var: Var,
-        ty: rty::PointerType,
+        ty: rty::PointerType<Var>,
         refinement: rty::Refinement<Var>,
         depth: usize,
     ) {
@@ -765,21 +835,17 @@ impl Env {
         };
         assert_eq!(
             final_,
-            self.temp_vars.push(TempVarBinding::Type(
-                rty::RefinedType::unrefined(*ty.elem.clone()).vacuous()
-            ))
+            self.temp_vars.push(TempVarBinding::Type(*ty.elem.clone()))
         );
-        self.bind_impl(
-            current.into(),
-            rty::RefinedType::new((*ty.elem).into(), current_refinement),
-            depth + 1,
-        );
+        let mut inner_ty = *ty.elem;
+        inner_ty.extend_refinement(current_refinement);
+        self.bind_impl(current.into(), inner_ty, depth + 1);
     }
 
     fn bind_tuple(
         &mut self,
         var: Var,
-        ty: rty::TupleType,
+        ty: rty::TupleType<Var>,
         refinement: rty::Refinement<Var>,
         depth: usize,
     ) {
@@ -793,11 +859,7 @@ impl Env {
         for elem in &ty.elems {
             let x = self.temp_vars.next_index();
             xs.push(x);
-            self.bind_impl(
-                x.into(),
-                rty::RefinedType::unrefined(elem.clone()).vacuous(),
-                depth + 1,
-            );
+            self.bind_impl(x.into(), elem.clone(), depth + 1);
         }
         let assumption = {
             let tuple_ty = PlaceType::tuple(
@@ -866,7 +928,7 @@ impl Env {
         }
 
         let mut existentials = refinement.existentials;
-        let value_var_ev = existentials.push(rty::Type::from(ty).to_sort());
+        let value_var_ev = existentials.push(ty.into_closed_ty().to_sort());
         let mut assumption = UnboundAssumption {
             existentials,
             conds: refinement
@@ -995,42 +1057,6 @@ impl Env {
                     .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), rty))),
             )
             .filter(|(_var, rty)| rty.is_refined())
-    }
-
-    pub fn build_clause(&self) -> chc::ClauseBuilder {
-        let mut builder = chc::ClauseBuilder::default();
-        for (v, sort) in self.dependencies() {
-            builder.add_mapped_var(v, sort);
-        }
-        for (var, rty) in self.vars() {
-            let mut instantiator = rty
-                .refinement
-                .clone()
-                .map_var(|v| builder.mapped_var(v))
-                .instantiate();
-            for (ev, sort) in rty.refinement.existentials() {
-                let tv = builder.add_var(sort.clone());
-                instantiator.existential(ev, tv);
-            }
-            instantiator.value_var(builder.mapped_var(var));
-            for atom in instantiator.into_atoms() {
-                builder.add_body(atom);
-            }
-        }
-        for assumption in &self.unbound_assumptions {
-            let mut evs = HashMap::new();
-            for (ev, sort) in assumption.existentials.iter_enumerated() {
-                let tv = builder.add_var(sort.clone());
-                evs.insert(ev, tv);
-            }
-            for atom in &assumption.conds {
-                builder.add_body(atom.clone().map_var(|v| match v {
-                    PlaceTypeVar::Var(v) => builder.mapped_var(v),
-                    PlaceTypeVar::Existential(ev) => evs[&ev],
-                }));
-            }
-        }
-        builder
     }
 
     pub fn contains_local(&self, local: Local) -> bool {
