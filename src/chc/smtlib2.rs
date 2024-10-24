@@ -139,12 +139,16 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
             }
             chc::Term::Tuple(ts) => {
                 let ss: Vec<_> = ts.iter().map(|t| self.clause.term_sort(t)).collect();
-                write!(
-                    f,
-                    "({} {})",
-                    self.ctx.tuple_ctor(&ss),
-                    List::open(ts.iter().map(|t| Term::new(self.ctx, self.clause, t)))
-                )
+                if ss.is_empty() {
+                    write!(f, "{}", self.ctx.tuple_ctor(&ss),)
+                } else {
+                    write!(
+                        f,
+                        "({} {})",
+                        self.ctx.tuple_ctor(&ss),
+                        List::open(ts.iter().map(|t| Term::new(self.ctx, self.clause, t)))
+                    )
+                }
             }
             chc::Term::TupleProj(t, i) => {
                 let s = self.clause.term_sort(t);
@@ -156,12 +160,16 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 )
             }
             chc::Term::DatatypeCtor(_, sym, args) => {
-                write!(
-                    f,
-                    "({} {})",
-                    sym,
-                    List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
-                )
+                if args.is_empty() {
+                    write!(f, "{}", sym)
+                } else {
+                    write!(
+                        f,
+                        "({} {})",
+                        sym,
+                        List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
+                    )
+                }
             }
             chc::Term::DatatypeDiscr(s, t) => {
                 write!(
