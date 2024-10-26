@@ -947,7 +947,9 @@ impl Env {
                     assumption.conds.extend(ty.conds.into_iter().map(|a| {
                         a.map_var(|v| v.shift_existential(assumption.existentials.len()))
                     }));
-                    let term = ty.term.map_var(|v| v.shift_existential(assumption.existentials.len()));
+                    let term = ty
+                        .term
+                        .map_var(|v| v.shift_existential(assumption.existentials.len()));
                     assumption.existentials.extend(ty.existentials);
                     term
                 })
