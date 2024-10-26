@@ -41,13 +41,13 @@ where
     let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
     for (idx, param_ty) in params.iter().enumerate() {
         let param_rty = if idx == params.len() - 1 {
-            rty::RefinedType::unrefined(g.build_template_ty(&builder).ty(param_ty.ty))
-        } else {
             g.build_template_ty(&builder).refined_ty(param_ty.ty)
+        } else {
+            rty::RefinedType::unrefined(g.build_template_ty(&builder).ty(param_ty.ty))
         };
         let param_rty = if param_ty.mutbl.is_mut() {
             // elaboration: treat mutabully declared variables as own
-            rty::RefinedType::unrefined(rty::PointerType::own_refined(param_rty).into())
+            param_rty.boxed()
         } else {
             param_rty
         };

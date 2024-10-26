@@ -941,6 +941,17 @@ impl<FV> RefinedType<FV> {
         RefinedType::new(ty, refinement.into())
     }
 
+    pub fn boxed(self) -> Self {
+        let RefinedType {
+            ty: inner_ty,
+            refinement: inner_refinement,
+        } = self;
+        let ty = PointerType::own(inner_ty).into();
+        let refinement = inner_refinement
+            .subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).box_current());
+        RefinedType { ty, refinement }
+    }
+
     pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> chc::Term<W>,
