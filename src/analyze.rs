@@ -50,19 +50,21 @@ pub struct Analyzer<'tcx> {
     enum_datatypes: HashMap<DefId, rty::EnumDatatypeDef>,
 }
 
-impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
-    fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId {
-        self.system.new_pred_var(pred_sig)
-    }
-}
-
 impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }
+
+    fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V> {
+        tmpl.into_refined_type(|pred_sig| self.generate_pred_var(pred_sig))
+    }
 }
 
 impl<'tcx> Analyzer<'tcx> {
+    pub fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId {
+        self.system.new_pred_var(pred_sig)
+    }
+
     fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
     where
         F: FnMut(FV) -> chc::Sort,

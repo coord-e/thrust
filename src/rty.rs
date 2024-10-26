@@ -188,9 +188,13 @@ impl<T> PointerType<T> {
     }
 
     pub fn own(ty: Type<T>) -> Self {
+        PointerType::own_refined(RefinedType::unrefined(ty))
+    }
+
+    pub fn own_refined(ty: RefinedType<T>) -> Self {
         PointerType {
             kind: PointerKind::Own,
-            elem: Box::new(RefinedType::unrefined(ty)),
+            elem: Box::new(ty),
         }
     }
 

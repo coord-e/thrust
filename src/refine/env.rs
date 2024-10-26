@@ -8,6 +8,7 @@ use rustc_target::abi::VariantIdx;
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
+use crate::refine;
 use crate::rty;
 
 const BIND_EXPANSION_DEPTH_LIMIT: usize = 10;
@@ -738,6 +739,16 @@ impl rty::ClauseScope for Env {
                     PlaceTypeVar::Existential(ev) => evs[&ev],
                 }));
             }
+        }
+        builder
+    }
+}
+
+impl refine::TemplateScope<Var> for Env {
+    fn build_template(&self) -> rty::TemplateBuilder<Var> {
+        let mut builder = rty::TemplateBuilder::default();
+        for (v, sort) in self.dependencies() {
+            builder.add_dependency(v, sort);
         }
         builder
     }

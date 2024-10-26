@@ -7,110 +7,83 @@ use crate::chc;
 use crate::refine;
 use crate::rty;
 
-pub trait PredVarGenerator {
-    fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId;
+pub trait TemplateScope<T> {
+    fn build_template(&self) -> rty::TemplateBuilder<T>;
 }
 
-fn mir_function_ty_impl<'tcx, T, I>(
-    g: &mut T,
-    params: I,
-    ret_ty: rty::Type<rty::Closed>,
+impl<T, U> TemplateScope<T> for &U
+where
+    U: TemplateScope<T>,
+{
+    fn build_template(&self) -> rty::TemplateBuilder<T> {
+        U::build_template(self)
+    }
+}
+
+impl<T> TemplateScope<T> for rty::TemplateBuilder<T>
+where
+    T: chc::Var,
+{
+    fn build_template(&self) -> rty::TemplateBuilder<T> {
+        self.clone()
+    }
+}
+
+fn function_ty_impl<'a, 'tcx, T>(
+    g: &'a mut T,
+    params: Vec<mir_ty::TypeAndMut<'tcx>>,
+    ret_ty: mir_ty::Ty<'tcx>,
 ) -> rty::FunctionType
 where
     T: TemplateTypeGenerator<'tcx> + ?Sized,
-    I: IntoIterator<Item = mir_ty::TypeAndMut<'tcx>>,
 {
-    let param_tys: Vec<_> = params
-        .into_iter()
-        .map(|param_ty| {
-            // elaboration: treat mutabully declared variables as own
-            if param_ty.mutbl.is_mut() {
-                rty::PointerType::own(g.mir_ty(param_ty.ty)).into()
-            } else {
-                g.mir_ty(param_ty.ty)
-            }
-        })
-        .collect();
-
     let mut builder = rty::TemplateBuilder::default();
     let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
-    if let Some(param_ty) = param_tys.last() {
-        for param_ty in param_tys.iter().take(param_tys.len() - 1) {
-            let param_idx =
-                param_rtys.push(rty::RefinedType::unrefined(param_ty.clone()).vacuous());
-            builder.add_dependency(param_idx.into(), param_ty.to_sort());
-        }
-        let tmpl = builder.clone().build(param_ty.clone().vacuous());
-        let param_rty = g.register_template(tmpl);
+    for (idx, param_ty) in params.iter().enumerate() {
+        let param_rty = if idx == params.len() - 1 {
+            rty::RefinedType::unrefined(g.build_template_ty(&builder).ty(param_ty.ty))
+        } else {
+            g.build_template_ty(&builder).refined_ty(param_ty.ty)
+        };
+        let param_rty = if param_ty.mutbl.is_mut() {
+            // elaboration: treat mutabully declared variables as own
+            rty::RefinedType::unrefined(rty::PointerType::own_refined(param_rty).into())
+        } else {
+            param_rty
+        };
+        let param_sort = param_rty.ty.to_sort();
         let param_idx = param_rtys.push(param_rty);
-        builder.add_dependency(param_idx.into(), param_ty.to_sort());
-    } else {
-        // elaboration: we need at least one predicate variable in parameter
-        let tmpl = builder.clone().build(rty::Type::unit());
-        let param_rty = g.register_template(tmpl);
+        builder.add_dependency(param_idx, param_sort);
+    }
+
+    // elaboration: we need at least one predicate variable in parameter
+    if params.is_empty() {
+        let unit_ty = mir_ty::Ty::new_unit(g.tcx());
+        let param_rty = g.build_template_ty(&builder).refined_ty(unit_ty);
         param_rtys.push(param_rty);
     }
 
-    let tmpl = builder.build(ret_ty.vacuous());
-    let ret_rty = g.register_template(tmpl);
+    let ret_rty = g.build_template_ty(&builder).refined_ty(ret_ty);
     rty::FunctionType::new(param_rtys, ret_rty)
 }
 
-pub trait TemplateTypeGenerator<'tcx>: PredVarGenerator {
+pub trait TemplateTypeGenerator<'tcx> {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
+    fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V>;
 
-    fn register_template<FV>(&mut self, tmpl: rty::Template<FV>) -> rty::RefinedType<FV> {
-        tmpl.into_refined_type(|pred_sig| self.generate_pred_var(pred_sig))
-    }
-
-    fn mir_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
-        match ty.kind() {
-            mir_ty::TyKind::Bool => rty::Type::bool(),
-            mir_ty::TyKind::Int(_) => rty::Type::int(),
-            mir_ty::TyKind::Str => rty::Type::string(),
-            mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
-                let elem_ty = self.mir_ty(*elem_ty);
-                match mutbl {
-                    mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
-                    mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
-                }
-            }
-            mir_ty::TyKind::Tuple(ts) => {
-                let elems = ts.iter().map(|ty| self.mir_ty(ty)).collect();
-                rty::TupleType::new(elems).into()
-            }
-            mir_ty::TyKind::Never => rty::Type::never(),
-            mir_ty::TyKind::FnPtr(sig) => {
-                // TODO: justification for skip_binder
-                let sig = sig.skip_binder();
-                let ty = self.mir_function_ty(sig);
-                rty::Type::function(ty)
-            }
-            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
-                rty::PointerType::own(self.mir_ty(params.type_at(0))).into()
-            }
-            mir_ty::TyKind::Adt(def, params) => {
-                if def.is_enum() {
-                    let sym = refine::datatype_symbol(self.tcx(), def.did());
-                    rty::EnumType::new(sym).into()
-                } else if def.is_struct() {
-                    let elem_tys = def
-                        .all_fields()
-                        .map(|field| {
-                            let ty = field.ty(self.tcx(), params);
-                            self.mir_ty(ty)
-                        })
-                        .collect();
-                    rty::TupleType::new(elem_tys).into()
-                } else {
-                    unimplemented!("unsupported ADT: {:?}", ty);
-                }
-            }
-            kind => unimplemented!("mir_ty: {:?}", kind),
+    fn build_template_ty<T, V>(&mut self, scope: T) -> TemplateTypeBuilder<Self, T, V> {
+        TemplateTypeBuilder {
+            gen: self,
+            scope,
+            _marker: std::marker::PhantomData,
         }
     }
 
-    fn mir_basic_block_ty<I>(&mut self, live_locals: I, ret_ty: mir_ty::Ty<'tcx>) -> BasicBlockType
+    fn basic_block_template_ty<I>(
+        &mut self,
+        live_locals: I,
+        ret_ty: mir_ty::Ty<'tcx>,
+    ) -> BasicBlockType
     where
         I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
     {
@@ -121,20 +94,158 @@ pub trait TemplateTypeGenerator<'tcx>: PredVarGenerator {
             locals.push((local, ty.mutbl));
             tys.push(ty);
         }
-        let ret_ty = self.mir_ty(ret_ty);
-        let ty = mir_function_ty_impl(self, tys, ret_ty);
+        let ty = function_ty_impl(self, tys, ret_ty);
         BasicBlockType { ty, locals }
     }
 
-    fn mir_function_ty(&mut self, sig: mir_ty::FnSig<'tcx>) -> rty::FunctionType {
-        let ret_ty = self.mir_ty(sig.output());
-        mir_function_ty_impl(
+    fn function_template_ty(&mut self, sig: mir_ty::FnSig<'tcx>) -> rty::FunctionType {
+        function_ty_impl(
             self,
-            sig.inputs().iter().map(|ty| mir_ty::TypeAndMut {
-                ty: *ty,
-                mutbl: Mutability::Not,
-            }),
-            ret_ty,
+            sig.inputs()
+                .iter()
+                .map(|ty| mir_ty::TypeAndMut {
+                    ty: *ty,
+                    mutbl: Mutability::Not,
+                })
+                .collect(),
+            sig.output(),
         )
+    }
+}
+
+impl<'tcx, T> TemplateTypeGenerator<'tcx> for &mut T
+where
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
+{
+    fn tcx(&self) -> mir_ty::TyCtxt<'tcx> {
+        T::tcx(self)
+    }
+
+    fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V> {
+        T::register_template(self, tmpl)
+    }
+}
+
+#[derive(Debug)]
+pub struct TemplateTypeBuilder<'a, T: ?Sized, U, V> {
+    // can't use T: TemplateTypeGenerator<'tcx> directly because of recursive instantiation
+    gen: &'a mut T,
+    scope: U,
+    _marker: std::marker::PhantomData<fn() -> V>,
+}
+
+impl<'a, 'tcx, T, U, V> TemplateTypeBuilder<'a, T, U, V>
+where
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
+    U: TemplateScope<V>,
+    V: chc::Var,
+{
+    pub fn ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<V> {
+        match ty.kind() {
+            mir_ty::TyKind::Bool => rty::Type::bool(),
+            mir_ty::TyKind::Int(_) => rty::Type::int(),
+            mir_ty::TyKind::Str => rty::Type::string(),
+            mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
+                let elem_ty = self.ty(*elem_ty);
+                match mutbl {
+                    mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
+                    mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
+                }
+            }
+            mir_ty::TyKind::Tuple(ts) => {
+                let elems = ts.iter().map(|ty| self.ty(ty)).collect();
+                rty::TupleType::new(elems).into()
+            }
+            mir_ty::TyKind::Never => rty::Type::never(),
+            mir_ty::TyKind::FnPtr(sig) => {
+                // TODO: justification for skip_binder
+                let sig = sig.skip_binder();
+                let ty = self.gen.function_template_ty(sig);
+                rty::Type::function(ty)
+            }
+            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
+                rty::PointerType::own(self.ty(params.type_at(0))).into()
+            }
+            mir_ty::TyKind::Adt(def, params) => {
+                if def.is_enum() {
+                    let sym = refine::datatype_symbol(self.gen.tcx(), def.did());
+                    rty::EnumType::new(sym).into()
+                } else if def.is_struct() {
+                    let elem_tys = def
+                        .all_fields()
+                        .map(|field| {
+                            let ty = field.ty(self.gen.tcx(), params);
+                            self.ty(ty)
+                        })
+                        .collect();
+                    rty::TupleType::new(elem_tys).into()
+                } else {
+                    unimplemented!("unsupported ADT: {:?}", ty);
+                }
+            }
+            kind => unimplemented!("ty: {:?}", kind),
+        }
+    }
+
+    pub fn refined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<V> {
+        let ty = self.ty(ty);
+        let tmpl = self.scope.build_template().build(ty);
+        self.gen.register_template(tmpl)
+    }
+}
+
+// TODO: consolidate two defs
+pub fn unrefined_ty<'tcx>(
+    tcx: mir_ty::TyCtxt<'tcx>,
+    ty: mir_ty::Ty<'tcx>,
+) -> rty::Type<rty::Closed> {
+    match ty.kind() {
+        mir_ty::TyKind::Bool => rty::Type::bool(),
+        mir_ty::TyKind::Int(_) => rty::Type::int(),
+        mir_ty::TyKind::Str => rty::Type::string(),
+        mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
+            let elem_ty = unrefined_ty(tcx, *elem_ty);
+            match mutbl {
+                mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
+                mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
+            }
+        }
+        mir_ty::TyKind::Tuple(ts) => {
+            let elems = ts.iter().map(|ty| unrefined_ty(tcx, ty)).collect();
+            rty::TupleType::new(elems).into()
+        }
+        mir_ty::TyKind::Never => rty::Type::never(),
+        mir_ty::TyKind::FnPtr(sig) => {
+            // TODO: justification for skip_binder
+            let sig = sig.skip_binder();
+            let params = sig
+                .inputs()
+                .iter()
+                .map(|ty| rty::RefinedType::unrefined(unrefined_ty(tcx, *ty)).vacuous())
+                .collect();
+            let ret = rty::RefinedType::unrefined(unrefined_ty(tcx, sig.output()));
+            rty::FunctionType::new(params, ret.vacuous()).into()
+        }
+        mir_ty::TyKind::Adt(def, params) if def.is_box() => {
+            rty::PointerType::own(unrefined_ty(tcx, params.type_at(0))).into()
+        }
+        mir_ty::TyKind::Adt(def, params) => {
+            if def.is_enum() {
+                let sym = refine::datatype_symbol(tcx, def.did());
+                rty::EnumType::new(sym).into()
+            } else if def.is_struct() {
+                let elem_tys = def
+                    .all_fields()
+                    .map(|field| {
+                        let ty = field.ty(tcx, params);
+                        unrefined_ty(tcx, ty)
+                    })
+                    .collect();
+                rty::TupleType::new(elem_tys).into()
+            } else {
+                unimplemented!("unsupported ADT: {:?}", ty);
+            }
+        }
+        kind => unimplemented!("unrefined_ty: {:?}", kind),
     }
 }

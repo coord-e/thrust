@@ -71,7 +71,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
-            let rty = self.ctx.mir_basic_block_ty(live_locals, ret_ty);
+            let rty = self.ctx.basic_block_template_ty(live_locals, ret_ty);
             self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
         }
     }

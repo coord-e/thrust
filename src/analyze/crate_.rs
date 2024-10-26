@@ -8,7 +8,7 @@ use rustc_span::def_id::DefId;
 use crate::analyze;
 use crate::annot::{AnnotAtom, AnnotParser};
 use crate::chc;
-use crate::refine::{self, PredVarGenerator, TemplateTypeGenerator};
+use crate::refine::{self, TemplateTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 pub struct Analyzer<'tcx, 'ctx> {
@@ -31,7 +31,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
 
         // TODO: merge this into FunctionTemplateBuilder or something like that
-        let mut rty = self.ctx.mir_function_ty(sig);
+        let mut rty = self.ctx.function_template_ty(sig);
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).into_iter().zip(sig.inputs()) {
@@ -158,7 +158,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             // TODO: generic args
                             let field_ty = field.ty(self.tcx, self.tcx.mk_args(&[]));
                             // elaboration: all fields are boxed
-                            rty::PointerType::own(self.ctx.mir_ty(field_ty)).into()
+                            rty::PointerType::own(refine::unrefined_ty(self.tcx, field_ty)).into()
                         })
                         .collect();
                     let ty = rty::TupleType::new(field_tys).into();
