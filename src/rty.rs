@@ -640,7 +640,10 @@ where
     }
 }
 
-impl<T> std::fmt::Debug for RefinedTypeVar<T> where T: std::fmt::Debug {
+impl<T> std::fmt::Debug for RefinedTypeVar<T>
+where
+    T: std::fmt::Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             RefinedTypeVar::Value => f.write_str("ν"),
