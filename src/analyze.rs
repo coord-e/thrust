@@ -57,6 +57,18 @@ pub struct Analyzer<'tcx> {
     enum_datatypes: HashMap<DefId, EnumDatatype>,
 }
 
+impl<'tcx> crate::refine::MatcherPredGenerator for Analyzer<'tcx> {
+    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId {
+        let (did, enum_datatype) = self.find_enum_datatype(ty_sym).unwrap();
+        if let Some(matcher_pred) = enum_datatype.matcher_pred {
+            return matcher_pred;
+        }
+        let matcher_pred = self.create_matcher_pred(did);
+        self.enum_datatypes.get_mut(&did).unwrap().matcher_pred = Some(matcher_pred);
+        matcher_pred
+    }
+}
+
 impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
@@ -67,15 +79,9 @@ impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
     }
 }
 
-impl<'tcx> crate::refine::MatcherPredGenerator for Analyzer<'tcx> {
-    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId {
-        let (did, enum_datatype) = self.find_enum_datatype(ty_sym).unwrap();
-        if let Some(matcher_pred) = enum_datatype.matcher_pred {
-            return matcher_pred;
-        }
-        let matcher_pred = self.create_matcher_pred(did);
-        self.enum_datatypes.get_mut(&did).unwrap().matcher_pred = Some(matcher_pred);
-        matcher_pred
+impl<'tcx> crate::refine::UnrefinedTypeGenerator<'tcx> for Analyzer<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
     }
 }
 

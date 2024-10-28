@@ -14,7 +14,7 @@ use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
     self, BasicBlockType, Env, MatcherPredGenerator, PlaceType, TempVarIdx, TemplateTypeGenerator,
-    UnboundAssumption, Var,
+    UnboundAssumption, UnrefinedTypeGenerator, Var,
 };
 use crate::rty::{self, ClauseBuilderExt as _, ClauseScope as _, Subtyping as _};
 
@@ -409,8 +409,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let func_ty = match func.const_fn_def() {
             // TODO: move this to well-known defs?
             Some((def_id, args)) if self.is_box_new(def_id) => {
-                let inner_ty =
-                    refine::unrefined_ty(self.tcx, &mut self.ctx, args.type_at(0)).vacuous();
+                let inner_ty = self.ctx.unrefined_ty(args.type_at(0)).vacuous();
                 let param = rty::RefinedType::unrefined(inner_ty.clone());
                 let ret_term =
                     chc::Term::box_(chc::Term::var(rty::FunctionParamIdx::from(0_usize)));
@@ -421,8 +420,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 rty::FunctionType::new([param].into_iter().collect(), ret).into()
             }
             Some((def_id, args)) if self.is_mem_swap(def_id) => {
-                let inner_ty =
-                    refine::unrefined_ty(self.tcx, &mut self.ctx, args.type_at(0)).vacuous();
+                let inner_ty = self.ctx.unrefined_ty(args.type_at(0)).vacuous();
                 let param1 =
                     rty::RefinedType::unrefined(rty::PointerType::mut_to(inner_ty.clone()).into());
                 let param2 =
@@ -510,7 +508,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'tcx>) {
-        let ty = refine::unrefined_ty(self.tcx, &mut self.ctx, ty);
+        let ty = self.ctx.unrefined_ty(ty);
         let temp_var = self.env.push_temp_var(ty.vacuous());
         self.prophecy_vars.insert(statement_index, temp_var);
         tracing::debug!(stmt_idx = %statement_index, temp_var = ?temp_var, "add_prophecy_var");
@@ -531,7 +529,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         referent: mir::Place<'tcx>,
         prophecy_ty: mir_ty::Ty<'tcx>,
     ) -> rty::RefinedType<Var> {
-        let prophecy_ty = refine::unrefined_ty(self.tcx, &mut self.ctx, prophecy_ty);
+        let prophecy_ty = self.ctx.unrefined_ty(prophecy_ty);
         let prophecy = self.env.push_temp_var(prophecy_ty.vacuous());
         let place = self.elaborate_place_for_borrow(&referent);
         self.env.borrow_place(place, prophecy).into()

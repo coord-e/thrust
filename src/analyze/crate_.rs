@@ -8,7 +8,7 @@ use rustc_span::def_id::DefId;
 use crate::analyze;
 use crate::annot::{AnnotAtom, AnnotParser};
 use crate::chc;
-use crate::refine::{self, TemplateTypeGenerator};
+use crate::refine::{self, TemplateTypeGenerator, UnrefinedTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 pub struct Analyzer<'tcx, 'ctx> {
@@ -157,13 +157,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .map(|field| {
                             // TODO: generic args
                             let field_ty = field.ty(self.tcx, self.tcx.mk_args(&[]));
+                            let field_ty = self.ctx.unrefined_ty(field_ty);
                             // elaboration: all fields are boxed
-                            rty::PointerType::own(refine::unrefined_ty(
-                                self.tcx,
-                                &mut self.ctx,
-                                field_ty,
-                            ))
-                            .into()
+                            rty::PointerType::own(field_ty).into()
                         })
                         .collect();
                     let ty = rty::TupleType::new(field_tys).into();

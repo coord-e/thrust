@@ -208,63 +208,60 @@ where
     }
 }
 
-// TODO: consolidate two defs, redesign API
-pub fn unrefined_ty<'tcx, T>(
-    tcx: mir_ty::TyCtxt<'tcx>,
-    gen: &mut T,
-    ty: mir_ty::Ty<'tcx>,
-) -> rty::Type<rty::Closed>
-where
-    T: MatcherPredGenerator,
-{
-    match ty.kind() {
-        mir_ty::TyKind::Bool => rty::Type::bool(),
-        mir_ty::TyKind::Int(_) => rty::Type::int(),
-        mir_ty::TyKind::Str => rty::Type::string(),
-        mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
-            let elem_ty = unrefined_ty(tcx, gen, *elem_ty);
-            match mutbl {
-                mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
-                mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
+pub trait UnrefinedTypeGenerator<'tcx>: MatcherPredGenerator {
+    fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
+
+    // TODO: consolidate two defs
+    fn unrefined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
+        match ty.kind() {
+            mir_ty::TyKind::Bool => rty::Type::bool(),
+            mir_ty::TyKind::Int(_) => rty::Type::int(),
+            mir_ty::TyKind::Str => rty::Type::string(),
+            mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
+                let elem_ty = self.unrefined_ty(*elem_ty);
+                match mutbl {
+                    mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
+                    mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
+                }
             }
-        }
-        mir_ty::TyKind::Tuple(ts) => {
-            let elems = ts.iter().map(|ty| unrefined_ty(tcx, gen, ty)).collect();
-            rty::TupleType::new(elems).into()
-        }
-        mir_ty::TyKind::Never => rty::Type::never(),
-        mir_ty::TyKind::FnPtr(sig) => {
-            // TODO: justification for skip_binder
-            let sig = sig.skip_binder();
-            let params = sig
-                .inputs()
-                .iter()
-                .map(|ty| rty::RefinedType::unrefined(unrefined_ty(tcx, gen, *ty)).vacuous())
-                .collect();
-            let ret = rty::RefinedType::unrefined(unrefined_ty(tcx, gen, sig.output()));
-            rty::FunctionType::new(params, ret.vacuous()).into()
-        }
-        mir_ty::TyKind::Adt(def, params) if def.is_box() => {
-            rty::PointerType::own(unrefined_ty(tcx, gen, params.type_at(0))).into()
-        }
-        mir_ty::TyKind::Adt(def, params) => {
-            if def.is_enum() {
-                let sym = refine::datatype_symbol(tcx, def.did());
-                let matcher_pred = gen.get_or_create_matcher_pred(&sym);
-                rty::EnumType::new(sym, matcher_pred).into()
-            } else if def.is_struct() {
-                let elem_tys = def
-                    .all_fields()
-                    .map(|field| {
-                        let ty = field.ty(tcx, params);
-                        unrefined_ty(tcx, gen, ty)
-                    })
+            mir_ty::TyKind::Tuple(ts) => {
+                let elems = ts.iter().map(|ty| self.unrefined_ty(ty)).collect();
+                rty::TupleType::new(elems).into()
+            }
+            mir_ty::TyKind::Never => rty::Type::never(),
+            mir_ty::TyKind::FnPtr(sig) => {
+                // TODO: justification for skip_binder
+                let sig = sig.skip_binder();
+                let params = sig
+                    .inputs()
+                    .iter()
+                    .map(|ty| rty::RefinedType::unrefined(self.unrefined_ty(*ty)).vacuous())
                     .collect();
-                rty::TupleType::new(elem_tys).into()
-            } else {
-                unimplemented!("unsupported ADT: {:?}", ty);
+                let ret = rty::RefinedType::unrefined(self.unrefined_ty(sig.output()));
+                rty::FunctionType::new(params, ret.vacuous()).into()
             }
+            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
+                rty::PointerType::own(self.unrefined_ty(params.type_at(0))).into()
+            }
+            mir_ty::TyKind::Adt(def, params) => {
+                if def.is_enum() {
+                    let sym = refine::datatype_symbol(self.tcx(), def.did());
+                    let matcher_pred = self.get_or_create_matcher_pred(&sym);
+                    rty::EnumType::new(sym, matcher_pred).into()
+                } else if def.is_struct() {
+                    let elem_tys = def
+                        .all_fields()
+                        .map(|field| {
+                            let ty = field.ty(self.tcx(), params);
+                            self.unrefined_ty(ty)
+                        })
+                        .collect();
+                    rty::TupleType::new(elem_tys).into()
+                } else {
+                    unimplemented!("unsupported ADT: {:?}", ty);
+                }
+            }
+            kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
-        kind => unimplemented!("unrefined_ty: {:?}", kind),
     }
 }
