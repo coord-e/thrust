@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use rustc_hir::lang_items::LangItem;
+use rustc_index::IndexVec;
 use rustc_middle::mir::{BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
@@ -30,6 +31,12 @@ pub fn resolve_discr<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::VariantDiscr) -> u3
     }
 }
 
+#[derive(Debug, Clone)]
+struct EnumDatatype {
+    def: rty::EnumDatatypeDef,
+    matcher_pred: Option<chc::PredVarId>,
+}
+
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -47,7 +54,7 @@ pub struct Analyzer<'tcx> {
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
-    enum_datatypes: HashMap<DefId, rty::EnumDatatypeDef>,
+    enum_datatypes: HashMap<DefId, EnumDatatype>,
 }
 
 impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
@@ -57,6 +64,18 @@ impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
 
     fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V> {
         tmpl.into_refined_type(|pred_sig| self.generate_pred_var(pred_sig))
+    }
+}
+
+impl<'tcx> crate::refine::MatcherPredGenerator for Analyzer<'tcx> {
+    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId {
+        let (did, enum_datatype) = self.find_enum_datatype(ty_sym).unwrap();
+        if let Some(matcher_pred) = enum_datatype.matcher_pred {
+            return matcher_pred;
+        }
+        let matcher_pred = self.create_matcher_pred(did);
+        self.enum_datatypes.get_mut(&did).unwrap().matcher_pred = Some(matcher_pred);
+        matcher_pred
     }
 }
 
@@ -86,6 +105,46 @@ impl<'tcx> Analyzer<'tcx> {
         let clause = builder.head_mapped(head.clone());
         self.add_clause(clause);
         head
+    }
+
+    fn find_enum_datatype(&self, ty_sym: &chc::DatatypeSymbol) -> Option<(DefId, &EnumDatatype)> {
+        self.enum_datatypes
+            .iter()
+            .find(|(_, d)| &d.def.name == ty_sym)
+            .map(|(did, d)| (*did, d))
+    }
+
+    fn create_matcher_pred(&mut self, did: DefId) -> chc::PredVarId {
+        let def = self.enum_datatypes[&did].def.clone();
+        let mut matcher_pred_sig: chc::PredSig =
+            def.variants.iter().map(|v| v.ty.to_sort()).collect();
+        matcher_pred_sig.push(chc::Sort::datatype(def.name.clone()));
+        let matcher_pred = self.generate_pred_var(matcher_pred_sig.clone());
+
+        let vars = IndexVec::<chc::TermVarIdx, _>::from_raw(matcher_pred_sig);
+        let head = chc::Atom::new(
+            matcher_pred.into(),
+            vars.indices().map(chc::Term::var).collect(),
+        );
+        for (variant_idx, variant) in def.variants.iter().enumerate() {
+            let ctor_term = chc::Term::datatype_ctor(
+                def.name.clone(),
+                variant.name.clone(),
+                vec![chc::Term::var(variant_idx.into())],
+            );
+            let data_var: chc::TermVarIdx = (vars.len() - 1).into();
+            let body1 = chc::Term::var(data_var).equal_to(ctor_term);
+            let body2 = chc::Term::datatype_discr(def.name.clone(), chc::Term::var(data_var))
+                .equal_to(chc::Term::int(variant.discr as i64));
+            let clause = chc::Clause {
+                vars: vars.clone(),
+                head: head.clone(),
+                body: vec![body1, body2],
+            };
+            self.add_clause(clause);
+        }
+
+        matcher_pred
     }
 }
 
@@ -134,12 +193,20 @@ impl<'tcx> Analyzer<'tcx> {
             symbol: enum_def.name.clone(),
             ctors,
         };
-        self.enum_datatypes.insert(def_id, enum_def);
+        self.enum_datatypes.insert(
+            def_id,
+            EnumDatatype {
+                def: enum_def,
+                matcher_pred: None,
+            },
+        );
         self.system.datatypes.push(datatype);
     }
 
     pub fn enum_defs(&self) -> impl Iterator<Item = (&DefId, &rty::EnumDatatypeDef)> {
-        self.enum_datatypes.iter()
+        self.enum_datatypes
+            .iter()
+            .map(|(did, enum_datatype)| (did, &enum_datatype.def))
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {

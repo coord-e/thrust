@@ -7,6 +7,19 @@ use crate::chc;
 use crate::refine;
 use crate::rty;
 
+pub trait MatcherPredGenerator {
+    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId;
+}
+
+impl<T> MatcherPredGenerator for &mut T
+where
+    T: MatcherPredGenerator + ?Sized,
+{
+    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId {
+        T::get_or_create_matcher_pred(self, ty_sym)
+    }
+}
+
 pub trait TemplateScope<T> {
     fn build_template(&self) -> rty::TemplateBuilder<T>;
 }
@@ -35,7 +48,7 @@ fn function_ty_impl<'a, 'tcx, T>(
     ret_ty: mir_ty::Ty<'tcx>,
 ) -> rty::FunctionType
 where
-    T: TemplateTypeGenerator<'tcx> + ?Sized,
+    T: TemplateTypeGenerator<'tcx> + MatcherPredGenerator + ?Sized,
 {
     let mut builder = rty::TemplateBuilder::default();
     let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
@@ -67,7 +80,7 @@ where
     rty::FunctionType::new(param_rtys, ret_rty)
 }
 
-pub trait TemplateTypeGenerator<'tcx> {
+pub trait TemplateTypeGenerator<'tcx>: MatcherPredGenerator {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
     fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V>;
 
@@ -115,7 +128,7 @@ pub trait TemplateTypeGenerator<'tcx> {
 
 impl<'tcx, T> TemplateTypeGenerator<'tcx> for &mut T
 where
-    T: TemplateTypeGenerator<'tcx> + ?Sized,
+    T: TemplateTypeGenerator<'tcx> + MatcherPredGenerator + ?Sized,
 {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx> {
         T::tcx(self)
@@ -136,7 +149,7 @@ pub struct TemplateTypeBuilder<'a, T: ?Sized, U, V> {
 
 impl<'a, 'tcx, T, U, V> TemplateTypeBuilder<'a, T, U, V>
 where
-    T: TemplateTypeGenerator<'tcx> + ?Sized,
+    T: TemplateTypeGenerator<'tcx> + MatcherPredGenerator + ?Sized,
     U: TemplateScope<V>,
     V: chc::Var,
 {
@@ -169,7 +182,8 @@ where
             mir_ty::TyKind::Adt(def, params) => {
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.gen.tcx(), def.did());
-                    rty::EnumType::new(sym).into()
+                    let matcher_pred = self.gen.get_or_create_matcher_pred(&sym);
+                    rty::EnumType::new(sym, matcher_pred).into()
                 } else if def.is_struct() {
                     let elem_tys = def
                         .all_fields()
@@ -194,24 +208,28 @@ where
     }
 }
 
-// TODO: consolidate two defs
-pub fn unrefined_ty<'tcx>(
+// TODO: consolidate two defs, redesign API
+pub fn unrefined_ty<'tcx, T>(
     tcx: mir_ty::TyCtxt<'tcx>,
+    gen: &mut T,
     ty: mir_ty::Ty<'tcx>,
-) -> rty::Type<rty::Closed> {
+) -> rty::Type<rty::Closed>
+where
+    T: MatcherPredGenerator,
+{
     match ty.kind() {
         mir_ty::TyKind::Bool => rty::Type::bool(),
         mir_ty::TyKind::Int(_) => rty::Type::int(),
         mir_ty::TyKind::Str => rty::Type::string(),
         mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
-            let elem_ty = unrefined_ty(tcx, *elem_ty);
+            let elem_ty = unrefined_ty(tcx, gen, *elem_ty);
             match mutbl {
                 mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
                 mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
             }
         }
         mir_ty::TyKind::Tuple(ts) => {
-            let elems = ts.iter().map(|ty| unrefined_ty(tcx, ty)).collect();
+            let elems = ts.iter().map(|ty| unrefined_ty(tcx, gen, ty)).collect();
             rty::TupleType::new(elems).into()
         }
         mir_ty::TyKind::Never => rty::Type::never(),
@@ -221,24 +239,25 @@ pub fn unrefined_ty<'tcx>(
             let params = sig
                 .inputs()
                 .iter()
-                .map(|ty| rty::RefinedType::unrefined(unrefined_ty(tcx, *ty)).vacuous())
+                .map(|ty| rty::RefinedType::unrefined(unrefined_ty(tcx, gen, *ty)).vacuous())
                 .collect();
-            let ret = rty::RefinedType::unrefined(unrefined_ty(tcx, sig.output()));
+            let ret = rty::RefinedType::unrefined(unrefined_ty(tcx, gen, sig.output()));
             rty::FunctionType::new(params, ret.vacuous()).into()
         }
         mir_ty::TyKind::Adt(def, params) if def.is_box() => {
-            rty::PointerType::own(unrefined_ty(tcx, params.type_at(0))).into()
+            rty::PointerType::own(unrefined_ty(tcx, gen, params.type_at(0))).into()
         }
         mir_ty::TyKind::Adt(def, params) => {
             if def.is_enum() {
                 let sym = refine::datatype_symbol(tcx, def.did());
-                rty::EnumType::new(sym).into()
+                let matcher_pred = gen.get_or_create_matcher_pred(&sym);
+                rty::EnumType::new(sym, matcher_pred).into()
             } else if def.is_struct() {
                 let elem_tys = def
                     .all_fields()
                     .map(|field| {
                         let ty = field.ty(tcx, params);
-                        unrefined_ty(tcx, ty)
+                        unrefined_ty(tcx, gen, ty)
                     })
                     .collect();
                 rty::TupleType::new(elem_tys).into()

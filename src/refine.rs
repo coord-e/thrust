@@ -1,5 +1,5 @@
 mod template;
-pub use template::{unrefined_ty, TemplateScope, TemplateTypeGenerator};
+pub use template::{unrefined_ty, MatcherPredGenerator, TemplateScope, TemplateTypeGenerator};
 
 mod basic_block;
 pub use basic_block::BasicBlockType;

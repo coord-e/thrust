@@ -613,7 +613,7 @@ impl PlaceType {
                 st.existentials.extend(existentials);
                 st
             });
-        let ty: rty::Type<_> = rty::EnumType::new(sym.clone()).into();
+        let ty: rty::Type<_> = rty::EnumType::new(sym.clone(), matcher_pred).into();
         let value_var_ev = existentials.push(ty.to_sort());
         let term = chc::Term::var(value_var_ev.into());
         let mut pred_args = terms;
@@ -924,7 +924,7 @@ impl Env {
         }
 
         let mut existentials = refinement.existentials;
-        let value_var_ev = existentials.push(ty.into_closed_ty().to_sort());
+        let value_var_ev = existentials.push(ty.clone().into_closed_ty().to_sort());
         let mut assumption = UnboundAssumption {
             existentials,
             conds: refinement
@@ -957,7 +957,7 @@ impl Env {
         pred_args.push(chc::Term::var(value_var_ev.into()));
         assumption
             .conds
-            .push(chc::Atom::new(def.matcher_pred.into(), pred_args));
+            .push(chc::Atom::new(ty.matcher_pred.into(), pred_args));
         let discr_var = self
             .temp_vars
             .push(TempVarBinding::Type(rty::RefinedType::unrefined(
@@ -977,7 +977,7 @@ impl Env {
             discr: discr_var,
             variants,
             sym: def.name.clone(),
-            matcher_pred: def.matcher_pred,
+            matcher_pred: ty.matcher_pred,
         };
         match var {
             Var::Local(local) => {

@@ -312,6 +312,11 @@ pub struct EnumVariantDef {
 pub struct EnumDatatypeDef {
     pub name: chc::DatatypeSymbol,
     pub variants: IndexVec<VariantIdx, EnumVariantDef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnumType {
+    pub symbol: chc::DatatypeSymbol,
 
     // A predicate variable p with the following implications:
     // p(v1, v2, ..., vn, x) <= x = V1(v1)
@@ -321,14 +326,12 @@ pub struct EnumDatatypeDef {
     pub matcher_pred: chc::PredVarId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumType {
-    pub symbol: chc::DatatypeSymbol,
-}
-
 impl EnumType {
-    pub fn new(symbol: chc::DatatypeSymbol) -> Self {
-        EnumType { symbol }
+    pub fn new(symbol: chc::DatatypeSymbol, matcher_pred: chc::PredVarId) -> Self {
+        EnumType {
+            symbol,
+            matcher_pred,
+        }
     }
 
     pub fn into_closed_ty(self) -> Type<Closed> {
