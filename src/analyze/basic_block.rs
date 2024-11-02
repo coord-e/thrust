@@ -214,18 +214,33 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     mir::AggregateKind::Adt(did, variant_id, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
                     {
-                        if !args.is_empty() {
-                            tracing::warn!(?args, ?did, ?variant_id, "generic args ignored");
-                        }
                         let adt = self.tcx.adt_def(did);
                         let ty_sym = refine::datatype_symbol(self.tcx, did);
                         let variant = adt.variant(variant_id);
                         let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
 
-                        let matcher_pred = self.ctx.get_or_create_matcher_pred(&ty_sym);
-                        let ty = rty::EnumType::new(ty_sym.clone(), matcher_pred).into();
+                        let rty_args = args
+                            .types()
+                            .map(|ty| self.ctx.build_template_ty(&self.env).refined_ty(ty))
+                            .collect();
+                        let enum_variant_def = self.ctx.find_enum_variant(&ty_sym, &v_sym).unwrap();
+                        let mut variant_rty =
+                            rty::RefinedType::unrefined(enum_variant_def.ty.clone().vacuous());
+                        variant_rty.instantiate_params(&rty_args);
+                        self.env
+                            .relate_sub_refined_type(&fields_ty.clone().into(), &variant_rty);
+
+                        let sort_args: Vec<_> =
+                            rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
+                        let matcher_pred = self.ctx.get_or_create_matcher_pred(&ty_sym, &sort_args);
+                        let ty = rty::EnumType::new(ty_sym.clone(), rty_args, matcher_pred).into();
                         fields_ty.replace(|_, fields_term| {
-                            let term = chc::Term::datatype_ctor(ty_sym, v_sym, vec![fields_term]);
+                            let term = chc::Term::datatype_ctor(
+                                ty_sym,
+                                sort_args,
+                                v_sym,
+                                vec![fields_term],
+                            );
                             (ty, term)
                         })
                     }

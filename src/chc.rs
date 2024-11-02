@@ -40,15 +40,53 @@ impl DatatypeSymbol {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DatatypeSort {
+    symbol: DatatypeSymbol,
+    args: Vec<Sort>,
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b DatatypeSort
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let inner = allocator.intersperse(
+            self.args.iter().map(|t| t.pretty_atom(allocator)),
+            allocator.line(),
+        );
+        let sym = self.symbol.pretty(allocator);
+        if self.args.is_empty() {
+            sym
+        } else {
+            sym.append(allocator.line()).append(inner.nest(2)).group()
+        }
+    }
+}
+
+impl DatatypeSort {
+    pub fn new(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
+        DatatypeSort { symbol, args }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
     Null,
     Int,
     Bool,
     String,
+    Param(usize),
     Box(Box<Sort>),
     Mut(Box<Sort>),
     Tuple(Vec<Sort>),
-    Datatype(DatatypeSymbol),
+    Datatype(DatatypeSort),
+}
+
+impl From<DatatypeSort> for Sort {
+    fn from(sort: DatatypeSort) -> Self {
+        Sort::Datatype(sort)
+    }
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Sort
@@ -62,6 +100,7 @@ where
             Sort::Int => allocator.text("int"),
             Sort::Bool => allocator.text("bool"),
             Sort::String => allocator.text("string"),
+            Sort::Param(i) => allocator.text("T").append(allocator.as_string(i)),
             Sort::Box(s) => allocator
                 .text("box")
                 .append(allocator.line())
@@ -83,7 +122,7 @@ where
                         .group()
                 }
             }
-            Sort::Datatype(symbol) => symbol.pretty(allocator),
+            Sort::Datatype(sort) => sort.pretty(allocator),
         }
     }
 }
@@ -98,7 +137,7 @@ impl Sort {
         D::Doc: Clone,
     {
         match &self {
-            Sort::Box(_) | Sort::Mut(_) => self.pretty(allocator).parens(),
+            Sort::Box(_) | Sort::Mut(_) | Sort::Datatype { .. } => self.pretty(allocator).parens(),
             _ => self.pretty(allocator),
         }
     }
@@ -113,6 +152,11 @@ impl Sort {
             Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
             Sort::Tuple(ss) => {
                 for s in ss {
+                    s.walk(Box::new(&mut f));
+                }
+            }
+            Sort::Datatype(sort) => {
+                for s in &sort.args {
                     s.walk(Box::new(&mut f));
                 }
             }
@@ -158,6 +202,10 @@ impl Sort {
         Sort::Bool
     }
 
+    pub fn param(i: usize) -> Self {
+        Sort::Param(i)
+    }
+
     pub fn box_(sort: Sort) -> Self {
         Sort::Box(Box::new(sort))
     }
@@ -170,8 +218,8 @@ impl Sort {
         Sort::Tuple(sorts)
     }
 
-    pub fn datatype(symbol: DatatypeSymbol) -> Self {
-        Sort::Datatype(symbol)
+    pub fn datatype(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
+        Sort::Datatype(DatatypeSort { symbol, args })
     }
 
     pub fn is_singleton(&self) -> bool {
@@ -181,6 +229,25 @@ impl Sort {
             Sort::Box(s) => s.is_singleton(),
             Sort::Mut(s) => s.is_singleton(),
             _ => false,
+        }
+    }
+
+    pub fn instantiate_params(&mut self, args: &[Sort]) {
+        match self {
+            Sort::Param(i) => *self = args[*i].clone(),
+            Sort::Box(s) => s.instantiate_params(args),
+            Sort::Mut(s) => s.instantiate_params(args),
+            Sort::Tuple(ss) => {
+                for s in ss {
+                    s.instantiate_params(args);
+                }
+            }
+            Sort::Datatype(sort) => {
+                for s in &mut sort.args {
+                    s.instantiate_params(args);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -305,7 +372,7 @@ pub enum Term<V = TermVarIdx> {
     App(Function, Vec<Term<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
-    DatatypeCtor(DatatypeSymbol, DatatypeSymbol, Vec<Term<V>>),
+    DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
     DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
 }
 
@@ -416,8 +483,8 @@ impl<V> Term<V> {
             }
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
-            Term::DatatypeCtor(d_sym, c_sym, args) => Term::DatatypeCtor(
-                d_sym,
+            Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
+                sort,
                 c_sym,
                 args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
             ),
@@ -461,7 +528,7 @@ impl<V> Term<V> {
                 Sort::tuple(ts.iter().map(|t| t.sort(&mut var_sort)).collect())
             }
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
-            Term::DatatypeCtor(d_sym, _, _) => Sort::datatype(d_sym.clone()),
+            Term::DatatypeCtor(sort, _, _) => sort.clone().into(),
             Term::DatatypeDiscr(_, _) => Sort::int(),
         }
     }
@@ -584,8 +651,13 @@ impl<V> Term<V> {
         Term::TupleProj(Box::new(self), i)
     }
 
-    pub fn datatype_ctor(d_sym: DatatypeSymbol, c_sym: DatatypeSymbol, args: Vec<Term<V>>) -> Self {
-        Term::DatatypeCtor(d_sym, c_sym, args)
+    pub fn datatype_ctor(
+        d_sym: DatatypeSymbol,
+        d_args: Vec<Sort>,
+        c_sym: DatatypeSymbol,
+        args: Vec<Term<V>>,
+    ) -> Self {
+        Term::DatatypeCtor(DatatypeSort::new(d_sym, d_args), c_sym, args)
     }
 
     pub fn datatype_discr(d_sym: DatatypeSymbol, t: Term<V>) -> Self {

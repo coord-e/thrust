@@ -62,7 +62,12 @@ where
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Never, Type::Never) => {}
-            (Type::Enum(got), Type::Enum(expected)) if got == expected => {}
+            (Type::Enum(got), Type::Enum(expected)) if got.symbol() == expected.symbol() => {
+                for (got_ty, expected_ty) in got.args.iter().zip(expected.args.iter()) {
+                    let cs = self.relate_sub_refined_type(got_ty, expected_ty);
+                    clauses.extend(cs);
+                }
+            }
             (Type::Tuple(got), Type::Tuple(expected))
                 if got.elems.len() == expected.elems.len() =>
             {

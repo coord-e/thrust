@@ -73,6 +73,14 @@ impl FunctionType {
     pub fn into_closed_ty(self) -> Type<Closed> {
         Type::Function(self)
     }
+
+    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<Closed>>) {
+        let params = params.iter().map(|rty| rty.clone().vacuous()).collect();
+        for param in &mut self.params {
+            param.instantiate_params(&params);
+        }
+        self.ret.instantiate_params(&params);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +232,13 @@ impl<T> PointerType<T> {
             elem: Box::new(RefinedType::unrefined(self.elem.strip_refinement())),
         }
     }
+
+    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<T>>)
+    where
+        T: chc::Var,
+    {
+        self.elem.instantiate_params(params)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -299,6 +314,15 @@ impl<T> TupleType<T> {
                 .collect(),
         }
     }
+
+    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<T>>)
+    where
+        T: chc::Var,
+    {
+        for elem in &mut self.elems {
+            elem.instantiate_params(params);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -314,9 +338,10 @@ pub struct EnumDatatypeDef {
     pub variants: IndexVec<VariantIdx, EnumVariantDef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumType {
+#[derive(Debug, Clone)]
+pub struct EnumType<T> {
     pub symbol: chc::DatatypeSymbol,
+    pub args: IndexVec<TypeParamIdx, RefinedType<T>>,
 
     // A predicate variable p with the following implications:
     // p(v1, v2, ..., vn, x) <= x = V1(v1)
@@ -326,16 +351,146 @@ pub struct EnumType {
     pub matcher_pred: chc::PredVarId,
 }
 
-impl EnumType {
-    pub fn new(symbol: chc::DatatypeSymbol, matcher_pred: chc::PredVarId) -> Self {
+impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b EnumType<V>
+where
+    V: chc::Var,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let inner = allocator.intersperse(
+            self.args.iter().map(|t| t.pretty(allocator)),
+            allocator.text(",").append(allocator.line()),
+        );
+        let sym = self.symbol.pretty(allocator);
+        if self.args.is_empty() {
+            sym
+        } else {
+            sym.append(allocator.line())
+                .append(inner.nest(2).angles())
+                .group()
+        }
+    }
+}
+
+impl<T> EnumType<T> {
+    pub fn new(
+        symbol: chc::DatatypeSymbol,
+        args: IndexVec<TypeParamIdx, RefinedType<T>>,
+        matcher_pred: chc::PredVarId,
+    ) -> Self {
         EnumType {
             symbol,
+            args,
             matcher_pred,
         }
     }
 
+    pub fn symbol(&self) -> &chc::DatatypeSymbol {
+        &self.symbol
+    }
+
+    pub fn subst_var<F, U>(self, mut f: F) -> EnumType<U>
+    where
+        F: FnMut(T) -> chc::Term<U>,
+    {
+        EnumType {
+            symbol: self.symbol,
+            args: self
+                .args
+                .into_iter()
+                .map(|ty| ty.subst_var(&mut f))
+                .collect(),
+            matcher_pred: self.matcher_pred,
+        }
+    }
+
+    pub fn map_var<F, U>(self, mut f: F) -> EnumType<U>
+    where
+        F: FnMut(T) -> U,
+    {
+        EnumType {
+            symbol: self.symbol,
+            args: self.args.into_iter().map(|ty| ty.map_var(&mut f)).collect(),
+            matcher_pred: self.matcher_pred,
+        }
+    }
+
+    pub fn strip_refinement(self) -> EnumType<Closed> {
+        EnumType {
+            symbol: self.symbol,
+            args: self
+                .args
+                .into_iter()
+                .map(|ty| RefinedType::unrefined(ty.strip_refinement()))
+                .collect(),
+            matcher_pred: self.matcher_pred,
+        }
+    }
+
+    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<T>>)
+    where
+        T: chc::Var,
+    {
+        for arg in &mut self.args {
+            arg.instantiate_params(params);
+        }
+    }
+}
+
+rustc_index::newtype_index! {
+    #[debug_format = "T{}"]
+    pub struct TypeParamIdx { }
+}
+
+impl std::fmt::Display for TypeParamIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "T{}", self.index())
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TypeParamIdx
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator
+            .as_string(self)
+            .annotate(TypeParamIdx::color_spec())
+    }
+}
+
+impl TypeParamIdx {
+    fn color_spec() -> termcolor::ColorSpec {
+        termcolor::ColorSpec::new()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ParamType {
+    pub idx: TypeParamIdx,
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b ParamType
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        self.idx.pretty(allocator)
+    }
+}
+
+impl ParamType {
+    pub fn new(idx: TypeParamIdx) -> Self {
+        ParamType { idx }
+    }
+
+    pub fn index(&self) -> TypeParamIdx {
+        self.idx
+    }
+
     pub fn into_closed_ty(self) -> Type<Closed> {
-        Type::Enum(self)
+        Type::Param(self)
     }
 }
 
@@ -345,10 +500,17 @@ pub enum Type<T> {
     Bool,
     String,
     Never,
+    Param(ParamType),
     Pointer(PointerType<T>),
     Function(FunctionType),
     Tuple(TupleType<T>),
-    Enum(EnumType),
+    Enum(EnumType<T>),
+}
+
+impl<T> From<ParamType> for Type<T> {
+    fn from(t: ParamType) -> Type<T> {
+        Type::Param(t)
+    }
 }
 
 impl<T> From<FunctionType> for Type<T> {
@@ -369,8 +531,8 @@ impl<T> From<TupleType<T>> for Type<T> {
     }
 }
 
-impl<T> From<EnumType> for Type<T> {
-    fn from(t: EnumType) -> Type<T> {
+impl<T> From<EnumType<T>> for Type<T> {
+    fn from(t: EnumType<T>) -> Type<T> {
         Type::Enum(t)
     }
 }
@@ -387,10 +549,11 @@ where
             Type::Bool => allocator.text("bool"),
             Type::String => allocator.text("string"),
             Type::Never => allocator.text("!"),
+            Type::Param(ty) => ty.pretty(allocator),
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
             Type::Tuple(ty) => ty.pretty(allocator),
-            Type::Enum(ty) => ty.symbol.pretty(allocator),
+            Type::Enum(ty) => ty.pretty(allocator),
         }
     }
 }
@@ -454,14 +617,14 @@ impl<T> Type<T> {
         }
     }
 
-    pub fn as_enum(&self) -> Option<&EnumType> {
+    pub fn as_enum(&self) -> Option<&EnumType<T>> {
         match self {
             Type::Enum(ty) => Some(ty),
             _ => None,
         }
     }
 
-    pub fn into_enum(self) -> Option<EnumType> {
+    pub fn into_enum(self) -> Option<EnumType<T>> {
         match self {
             Type::Enum(ty) => Some(ty),
             _ => None,
@@ -504,6 +667,7 @@ impl<T> Type<T> {
             //       currently String sort seems not available in HORN logic of Z3
             Type::String => chc::Sort::null(),
             Type::Never => chc::Sort::null(),
+            Type::Param(ty) => chc::Sort::param(ty.index().into()),
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.ty.to_sort();
                 let sort = match ty.kind {
@@ -519,7 +683,10 @@ impl<T> Type<T> {
                 let elem_sorts = ty.elems.iter().map(|ty| ty.ty.to_sort()).collect();
                 chc::Sort::tuple(elem_sorts)
             }
-            Type::Enum(ty) => chc::Sort::datatype(ty.symbol.clone()),
+            Type::Enum(ty) => {
+                let arg_sorts = ty.args.iter().map(|ty| ty.ty.to_sort()).collect();
+                chc::Sort::datatype(ty.symbol.clone(), arg_sorts)
+            }
         }
     }
 
@@ -532,10 +699,11 @@ impl<T> Type<T> {
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
+            Type::Param(ty) => Type::Param(ty),
             Type::Pointer(ty) => Type::Pointer(ty.subst_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.subst_var(f)),
-            Type::Enum(ty) => Type::Enum(ty),
+            Type::Enum(ty) => Type::Enum(ty.subst_var(f)),
         }
     }
 
@@ -548,10 +716,11 @@ impl<T> Type<T> {
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
+            Type::Param(ty) => Type::Param(ty),
             Type::Pointer(ty) => Type::Pointer(ty.map_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.map_var(f)),
-            Type::Enum(ty) => Type::Enum(ty),
+            Type::Enum(ty) => Type::Enum(ty.map_var(f)),
         }
     }
 
@@ -565,10 +734,11 @@ impl<T> Type<T> {
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
+            Type::Param(ty) => Type::Param(ty),
             Type::Pointer(ty) => Type::Pointer(ty.strip_refinement()),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
-            Type::Enum(ty) => Type::Enum(ty),
+            Type::Enum(ty) => Type::Enum(ty.strip_refinement()),
         }
     }
 }
@@ -989,6 +1159,33 @@ impl<FV> RefinedType<FV> {
 
     pub fn strip_refinement(self) -> Type<Closed> {
         self.ty.strip_refinement()
+    }
+
+    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<FV>>)
+    where
+        FV: chc::Var,
+    {
+        match &mut self.ty {
+            Type::Int | Type::Bool | Type::String | Type::Never => {}
+            Type::Param(ty) => {
+                let RefinedType {
+                    ty: replacement_ty,
+                    refinement,
+                } = params[ty.index()].clone();
+                self.refinement.extend(refinement);
+                self.ty = replacement_ty;
+            }
+            Type::Pointer(ty) => ty.instantiate_params(&params),
+            Type::Function(ty) => {
+                let params = params
+                    .iter()
+                    .map(|rty| RefinedType::unrefined(rty.ty.clone().strip_refinement()))
+                    .collect();
+                ty.instantiate_params(&params)
+            }
+            Type::Tuple(ty) => ty.instantiate_params(&params),
+            Type::Enum(ty) => ty.instantiate_params(&params),
+        }
     }
 }
 

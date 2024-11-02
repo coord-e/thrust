@@ -900,7 +900,7 @@ impl Env {
     fn bind_enum(
         &mut self,
         var: Var,
-        ty: rty::EnumType,
+        ty: rty::EnumType<Var>,
         refinement: rty::Refinement<Var>,
         depth: usize,
     ) {

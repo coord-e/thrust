@@ -34,7 +34,7 @@ pub fn resolve_discr<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::VariantDiscr) -> u3
 #[derive(Debug, Clone)]
 struct EnumDatatype {
     def: rty::EnumDatatypeDef,
-    matcher_pred: Option<chc::PredVarId>,
+    matcher_preds: HashMap<Vec<chc::Sort>, chc::PredVarId>,
 }
 
 #[derive(Clone)]
@@ -58,13 +58,21 @@ pub struct Analyzer<'tcx> {
 }
 
 impl<'tcx> crate::refine::MatcherPredGenerator for Analyzer<'tcx> {
-    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId {
+    fn get_or_create_matcher_pred(
+        &mut self,
+        ty_sym: &chc::DatatypeSymbol,
+        args: &[chc::Sort],
+    ) -> chc::PredVarId {
         let (did, enum_datatype) = self.find_enum_datatype(ty_sym).unwrap();
-        if let Some(matcher_pred) = enum_datatype.matcher_pred {
-            return matcher_pred;
+        if let Some(matcher_pred) = enum_datatype.matcher_preds.get(args) {
+            return *matcher_pred;
         }
-        let matcher_pred = self.create_matcher_pred(did);
-        self.enum_datatypes.get_mut(&did).unwrap().matcher_pred = Some(matcher_pred);
+        let matcher_pred = self.create_matcher_pred(did, args);
+        self.enum_datatypes
+            .get_mut(&did)
+            .unwrap()
+            .matcher_preds
+            .insert(args.to_owned(), matcher_pred);
         matcher_pred
     }
 }
@@ -120,11 +128,18 @@ impl<'tcx> Analyzer<'tcx> {
             .map(|(did, d)| (*did, d))
     }
 
-    fn create_matcher_pred(&mut self, did: DefId) -> chc::PredVarId {
+    fn create_matcher_pred(&mut self, did: DefId, args: &[chc::Sort]) -> chc::PredVarId {
         let def = self.enum_datatypes[&did].def.clone();
-        let mut matcher_pred_sig: chc::PredSig =
-            def.variants.iter().map(|v| v.ty.to_sort()).collect();
-        matcher_pred_sig.push(chc::Sort::datatype(def.name.clone()));
+        let mut matcher_pred_sig: chc::PredSig = def
+            .variants
+            .iter()
+            .map(|v| {
+                let mut sort = v.ty.to_sort();
+                sort.instantiate_params(args);
+                sort
+            })
+            .collect();
+        matcher_pred_sig.push(chc::Sort::datatype(def.name.clone(), args.to_vec()));
         let matcher_pred = self.generate_pred_var(matcher_pred_sig.clone());
 
         let vars = IndexVec::<chc::TermVarIdx, _>::from_raw(matcher_pred_sig);
@@ -135,6 +150,7 @@ impl<'tcx> Analyzer<'tcx> {
         for (variant_idx, variant) in def.variants.iter().enumerate() {
             let ctor_term = chc::Term::datatype_ctor(
                 def.name.clone(),
+                args.to_vec(),
                 variant.name.clone(),
                 vec![chc::Term::var(variant_idx.into())],
             );
@@ -203,7 +219,7 @@ impl<'tcx> Analyzer<'tcx> {
             def_id,
             EnumDatatype {
                 def: enum_def,
-                matcher_pred: None,
+                matcher_preds: Default::default(),
             },
         );
         self.system.datatypes.push(datatype);
@@ -213,6 +229,17 @@ impl<'tcx> Analyzer<'tcx> {
         self.enum_datatypes
             .iter()
             .map(|(did, enum_datatype)| (did, &enum_datatype.def))
+    }
+
+    pub fn find_enum_variant(
+        &self,
+        ty_sym: &chc::DatatypeSymbol,
+        v_sym: &chc::DatatypeSymbol,
+    ) -> Option<&rty::EnumVariantDef> {
+        self.enum_datatypes
+            .iter()
+            .find(|(_, d)| &d.def.name == ty_sym)
+            .and_then(|(_, d)| d.def.variants.iter().find(|v| &v.name == v_sym))
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {

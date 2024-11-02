@@ -8,15 +8,23 @@ use crate::refine;
 use crate::rty;
 
 pub trait MatcherPredGenerator {
-    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId;
+    fn get_or_create_matcher_pred(
+        &mut self,
+        ty_sym: &chc::DatatypeSymbol,
+        args: &[chc::Sort],
+    ) -> chc::PredVarId;
 }
 
 impl<T> MatcherPredGenerator for &mut T
 where
     T: MatcherPredGenerator + ?Sized,
 {
-    fn get_or_create_matcher_pred(&mut self, ty_sym: &chc::DatatypeSymbol) -> chc::PredVarId {
-        T::get_or_create_matcher_pred(self, ty_sym)
+    fn get_or_create_matcher_pred(
+        &mut self,
+        ty_sym: &chc::DatatypeSymbol,
+        args: &[chc::Sort],
+    ) -> chc::PredVarId {
+        T::get_or_create_matcher_pred(self, ty_sym, args)
     }
 }
 
@@ -170,6 +178,7 @@ where
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
+            mir_ty::TyKind::Param(ty) => rty::ParamType::new(ty.index.into()).into(),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
@@ -182,8 +191,11 @@ where
             mir_ty::TyKind::Adt(def, params) => {
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.gen.tcx(), def.did());
-                    let matcher_pred = self.gen.get_or_create_matcher_pred(&sym);
-                    rty::EnumType::new(sym, matcher_pred).into()
+                    let args: IndexVec<_, _> =
+                        params.types().map(|ty| self.refined_ty(ty)).collect();
+                    let arg_sorts: Vec<_> = args.iter().map(|rty| rty.ty.to_sort()).collect();
+                    let matcher_pred = self.gen.get_or_create_matcher_pred(&sym, &arg_sorts);
+                    rty::EnumType::new(sym, args, matcher_pred).into()
                 } else if def.is_struct() {
                     let elem_tys = def
                         .all_fields()
@@ -229,6 +241,7 @@ pub trait UnrefinedTypeGenerator<'tcx>: MatcherPredGenerator {
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
+            mir_ty::TyKind::Param(ty) => rty::ParamType::new(ty.index.into()).into(),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
@@ -246,8 +259,13 @@ pub trait UnrefinedTypeGenerator<'tcx>: MatcherPredGenerator {
             mir_ty::TyKind::Adt(def, params) => {
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx(), def.did());
-                    let matcher_pred = self.get_or_create_matcher_pred(&sym);
-                    rty::EnumType::new(sym, matcher_pred).into()
+                    let args: IndexVec<_, _> = params
+                        .types()
+                        .map(|ty| rty::RefinedType::unrefined(self.unrefined_ty(ty)))
+                        .collect();
+                    let arg_sorts: Vec<_> = args.iter().map(|rty| rty.ty.to_sort()).collect();
+                    let matcher_pred = self.get_or_create_matcher_pred(&sym, &arg_sorts);
+                    rty::EnumType::new(sym, args, matcher_pred).into()
                 } else if def.is_struct() {
                     let elem_tys = def
                         .all_fields()

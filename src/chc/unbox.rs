@@ -24,16 +24,23 @@ fn unbox_atom(atom: Atom) -> Atom {
     Atom { pred, args }
 }
 
+fn unbox_datatype_sort(sort: DatatypeSort) -> DatatypeSort {
+    let DatatypeSort { symbol, args } = sort;
+    let args = args.into_iter().map(unbox_sort).collect();
+    DatatypeSort { symbol, args }
+}
+
 fn unbox_sort(sort: Sort) -> Sort {
     match sort {
         Sort::Null => Sort::Null,
         Sort::Int => Sort::Int,
         Sort::Bool => Sort::Bool,
         Sort::String => Sort::String,
+        Sort::Param(i) => Sort::Param(i),
         Sort::Box(inner) => unbox_sort(*inner),
         Sort::Mut(inner) => Sort::Mut(Box::new(unbox_sort(*inner))),
         Sort::Tuple(sorts) => Sort::Tuple(sorts.into_iter().map(unbox_sort).collect()),
-        Sort::Datatype(symbol) => Sort::Datatype(symbol),
+        Sort::Datatype(sort) => Sort::Datatype(unbox_datatype_sort(sort)),
     }
 }
 

@@ -63,10 +63,11 @@ impl<'a> std::fmt::Display for Sort<'a> {
             chc::Sort::Int => write!(f, "Int"),
             chc::Sort::Bool => write!(f, "Bool"),
             chc::Sort::String => write!(f, "String"),
+            chc::Sort::Param(i) => write!(f, "T{}", i),
             chc::Sort::Box(s) => write!(f, "Box{}", Sort::new(s).sorts()),
             chc::Sort::Mut(s) => write!(f, "Mut{}", Sort::new(s).sorts()),
             chc::Sort::Tuple(ss) => write!(f, "Tuple{}", Sorts::new(ss)),
-            chc::Sort::Datatype(s) => write!(f, "{}", s),
+            chc::Sort::Datatype(s) => write!(f, "{}{}", s.symbol, Sorts::new(&s.args)),
         }
     }
 }
