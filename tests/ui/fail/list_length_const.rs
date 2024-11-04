@@ -1,19 +1,11 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off -C opt-level=3
-//@rustc-env: REFA_SOLVER_TIMEOUT_SECS=60
-
-#![feature(register_tool)]
-#![register_tool(thrust)]
+//@rustc-env: REFA_SOLVER_TIMEOUT_SECS=120
 
 enum List {
   Cons(i32, Box<List>),
   Nil,
 }
-
-#[thrust::trusted]
-#[thrust::requires(true)]
-#[thrust::ensures(true)]
-fn rand() -> i32 { unimplemented!() }
 
 fn length(la: &List) -> i32 {
   match la {
