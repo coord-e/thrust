@@ -119,6 +119,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
     let d = match s {
         chc::Sort::Null => chc::Datatype {
             symbol,
+            params: 0,
             ctors: vec![chc::DatatypeCtor {
                 symbol: chc::DatatypeSymbol::new("null".to_string()),
                 selectors: vec![],
@@ -129,6 +130,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
             let ss = Sort::new(&inner).sorts();
             chc::Datatype {
                 symbol,
+                params: 0,
                 ctors: vec![chc::DatatypeCtor {
                     symbol: chc::DatatypeSymbol::new(format!("box{ss}")),
                     selectors: vec![chc::DatatypeSelector {
@@ -143,6 +145,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
             let ss = Sort::new(&inner).sorts();
             chc::Datatype {
                 symbol,
+                params: 0,
                 ctors: vec![chc::DatatypeCtor {
                     symbol: chc::DatatypeSymbol::new(format!("mut{ss}")),
                     selectors: vec![
@@ -171,6 +174,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
                 .collect();
             chc::Datatype {
                 symbol,
+                params: 0,
                 ctors: vec![chc::DatatypeCtor {
                     symbol: chc::DatatypeSymbol::new(format!("tuple{ss}")),
                     selectors,
@@ -201,13 +205,59 @@ fn collect_sorts(system: &chc::System) -> HashSet<chc::Sort> {
     sorts
 }
 
+fn monomorphize_datatype(
+    sort: &chc::DatatypeSort,
+    datatypes: &[chc::Datatype],
+) -> Option<chc::Datatype> {
+    let datatype = datatypes
+        .iter()
+        .find(|d| &d.symbol == &sort.symbol)
+        .unwrap();
+    if datatype.params == 0 {
+        return None;
+    }
+    let ss = Sorts::new(&sort.args);
+    let mono_datatype = chc::Datatype {
+        symbol: chc::DatatypeSymbol::new(format!("{}{}", datatype.symbol, ss)),
+        params: 0,
+        ctors: datatype
+            .ctors
+            .iter()
+            .map(|c| chc::DatatypeCtor {
+                symbol: chc::DatatypeSymbol::new(format!("{}{}", c.symbol, ss)),
+                selectors: c
+                    .selectors
+                    .iter()
+                    .map(|s| {
+                        let mut sel_sort = s.sort.clone();
+                        sel_sort.instantiate_params(&sort.args);
+                        chc::DatatypeSelector {
+                            symbol: chc::DatatypeSymbol::new(format!("{}{}", s.symbol, ss)),
+                            sort: sel_sort,
+                        }
+                    })
+                    .collect(),
+                discriminant: c.discriminant,
+            })
+            .collect(),
+    };
+    Some(mono_datatype)
+}
+
 impl FormatContext {
     pub fn from_system(system: &chc::System) -> Self {
         let sorts = collect_sorts(system);
+        let mut datatypes = system.datatypes.clone();
+        for sort in sorts.iter().flat_map(|s| s.as_datatype()) {
+            if let Some(mono_datatype) = monomorphize_datatype(sort, &datatypes) {
+                datatypes.push(mono_datatype);
+            }
+        }
         let datatypes: Vec<_> = sorts
             .into_iter()
             .flat_map(builtin_sort_datatype)
-            .chain(system.datatypes.clone())
+            .chain(datatypes)
+            .filter(|d| d.params == 0)
             .collect();
         let renamer = HoiceDatatypeRenamer::new(&datatypes);
         FormatContext { renamer, datatypes }
@@ -250,6 +300,25 @@ impl FormatContext {
     pub fn tuple_proj(&self, sorts: &[chc::Sort], idx: usize) -> impl std::fmt::Display {
         let ss = Sorts::new(sorts);
         format!("tuple_proj{ss}.{idx}")
+    }
+
+    pub fn datatype_ctor(
+        &self,
+        sort: &chc::DatatypeSort,
+        ctor_sym: &chc::DatatypeSymbol,
+    ) -> impl std::fmt::Display {
+        let ss = Sorts::new(&sort.args);
+        format!("{}{}", ctor_sym, ss)
+    }
+
+    pub fn datatype_discr(&self, sort: &chc::DatatypeSort) -> impl std::fmt::Display {
+        let ss = Sorts::new(&sort.args);
+        let sym = chc::DatatypeSymbol::new(format!("{}{}", sort.symbol, ss));
+        self.datatype_discr_def(&sym)
+    }
+
+    pub fn datatype_discr_def(&self, sym: &chc::DatatypeSymbol) -> impl std::fmt::Display {
+        format!("datatype_discr<{}>", self.fmt_datatype_symbol(sym))
     }
 
     pub fn fmt_sort(&self, sort: &chc::Sort) -> impl std::fmt::Display {

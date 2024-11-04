@@ -77,9 +77,17 @@ fn unbox_datatype_ctor(ctor: DatatypeCtor) -> DatatypeCtor {
 }
 
 fn unbox_datatype(datatype: Datatype) -> Datatype {
-    let Datatype { symbol, ctors } = datatype;
+    let Datatype {
+        symbol,
+        params,
+        ctors,
+    } = datatype;
     let ctors = ctors.into_iter().map(unbox_datatype_ctor).collect();
-    Datatype { symbol, ctors }
+    Datatype {
+        symbol,
+        params,
+        ctors,
+    }
 }
 
 pub fn unbox(system: System) -> System {

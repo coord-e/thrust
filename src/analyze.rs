@@ -145,6 +145,7 @@ impl<'tcx> Analyzer<'tcx> {
             .collect();
         let datatype = chc::Datatype {
             symbol: enum_def.name.clone(),
+            params: enum_def.ty_params,
             ctors,
         };
         self.enum_defs.borrow_mut().insert(def_id, enum_def);

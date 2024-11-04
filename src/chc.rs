@@ -224,6 +224,20 @@ impl Sort {
         Sort::Datatype(DatatypeSort { symbol, args })
     }
 
+    pub fn into_datatype(self) -> Option<DatatypeSort> {
+        match self {
+            Sort::Datatype(sort) => Some(sort),
+            _ => None,
+        }
+    }
+
+    pub fn as_datatype(&self) -> Option<&DatatypeSort> {
+        match self {
+            Sort::Datatype(sort) => Some(sort),
+            _ => None,
+        }
+    }
+
     pub fn is_singleton(&self) -> bool {
         match self {
             Sort::Null => true,
@@ -997,6 +1011,7 @@ pub struct DatatypeCtor {
 #[derive(Debug, Clone)]
 pub struct Datatype {
     pub symbol: DatatypeSymbol,
+    pub params: usize,
     pub ctors: Vec<DatatypeCtor>,
 }
 

@@ -159,23 +159,24 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, t)
                 )
             }
-            chc::Term::DatatypeCtor(_, sym, args) => {
+            chc::Term::DatatypeCtor(sort, sym, args) => {
                 if args.is_empty() {
                     write!(f, "{}", sym)
                 } else {
                     write!(
                         f,
                         "({} {})",
-                        sym,
+                        self.ctx.datatype_ctor(sort, sym),
                         List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
                     )
                 }
             }
-            chc::Term::DatatypeDiscr(s, t) => {
+            chc::Term::DatatypeDiscr(_s, t) => {
+                let s = self.clause.term_sort(t).into_datatype().unwrap();
                 write!(
                     f,
-                    "(|datatype_discr{}| {})",
-                    self.ctx.fmt_datatype_symbol(&s),
+                    "({} {})",
+                    self.ctx.datatype_discr(&s),
                     Term::new(self.ctx, self.clause, t)
                 )
             }
@@ -361,7 +362,8 @@ impl<'ctx, 'a> std::fmt::Display for DatatypeDiscrFun<'ctx, 'a> {
             });
         writeln!(
             f,
-            "(define-fun |datatype_discr{sym}| ((x {sym})) Int {cases})",
+            "(define-fun {discr} ((x {sym})) Int {cases})",
+            discr = self.ctx.datatype_discr_def(sym),
             sym = self.ctx.fmt_datatype_symbol(sym),
         )
     }
@@ -384,7 +386,7 @@ impl<'a> std::fmt::Display for System<'a> {
         writeln!(f, "(set-logic HORN)")?;
 
         writeln!(f, "{}", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
-        for datatype in &self.inner.datatypes {
+        for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
         }
         for (p, sorts) in self.inner.pred_vars.iter_enumerated() {
