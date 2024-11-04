@@ -394,7 +394,12 @@ impl PlaceType {
         let inner_ty = inner_ty.into_enum().unwrap();
         let def = &enum_defs[&inner_ty.symbol];
         let variant = &def.variants[idx];
-        let value_var_ex = existentials.push(variant.ty.to_sort());
+
+        let mut rty = rty::RefinedType::unrefined(variant.ty.clone().vacuous());
+        rty.instantiate_ty_params(inner_ty.args.clone());
+        let rty::RefinedType { ty, refinement } = rty;
+
+        let value_var_ex = existentials.push(ty.to_sort());
         conds.push(
             chc::Term::datatype_ctor(
                 def.name.clone(),
@@ -404,7 +409,17 @@ impl PlaceType {
             )
             .equal_to(inner_term),
         );
-        let ty = variant.ty.clone().vacuous();
+
+        conds.extend(refinement.atoms.into_iter().map(|a| {
+            a.map_var(|v| match v {
+                rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ex),
+                rty::RefinedTypeVar::Existential(ev) => {
+                    PlaceTypeVar::Existential(ev + existentials.len())
+                }
+                rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
+            })
+        }));
+        existentials.extend(refinement.existentials);
         let term = chc::Term::var(value_var_ex.into());
         PlaceType {
             ty,
