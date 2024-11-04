@@ -219,22 +219,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let variant = adt.variant(variant_id);
                         let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
 
-                        let rty_args: IndexVec<_, _> = args
-                            .types()
-                            .map(|ty| self.ctx.build_template_ty(&self.env).refined_ty(ty))
-                            .collect();
                         let enum_variant_def = self.ctx.find_enum_variant(&ty_sym, &v_sym).unwrap();
-                        let mut variant_rty =
+                        let variant_rty =
                             rty::RefinedType::unrefined(enum_variant_def.ty.clone().vacuous());
-                        variant_rty.instantiate_ty_params(rty_args.clone());
-                        let cs = self
-                            .env
-                            .relate_sub_refined_type(&fields_ty.clone().into(), &variant_rty);
-                        self.ctx.extend_clauses(cs);
+                        let mir_ty_args: IndexVec<_, _> = args.types().collect();
+                        let params_subst = variant_rty.unify_ty_params(fields_ty.clone().into());
+                        let params = params_subst.into_params(mir_ty_args.len(), |idx| {
+                            self.ctx
+                                .build_template_ty(&self.env)
+                                .refined_ty(mir_ty_args[idx])
+                        });
 
-                        let sort_args: Vec<_> =
-                            rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
-                        let ty = rty::EnumType::new(ty_sym.clone(), rty_args).into();
+                        let sort_args: Vec<_> = params.iter().map(|rty| rty.ty.to_sort()).collect();
+                        let ty = rty::EnumType::new(ty_sym.clone(), params).into();
                         fields_ty.replace(|_, fields_term| {
                             let term = chc::Term::datatype_ctor(
                                 ty_sym,
