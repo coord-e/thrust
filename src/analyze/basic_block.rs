@@ -225,9 +225,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let mir_ty_args: IndexVec<_, _> = args.types().collect();
                         let params_subst = variant_rty.unify_ty_params(fields_ty.clone().into());
                         let params = params_subst.into_params(mir_ty_args.len(), |idx| {
-                            self.ctx
-                                .build_template_ty(&self.env)
-                                .refined_ty(mir_ty_args[idx])
+                            rty::RefinedType::unrefined(
+                                self.ctx.unrefined_ty(mir_ty_args[idx]).vacuous(),
+                            )
                         });
 
                         let sort_args: Vec<_> = params.iter().map(|rty| rty.ty.to_sort()).collect();
