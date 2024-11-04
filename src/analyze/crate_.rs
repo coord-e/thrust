@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use rustc_hir::def::DefKind;
 use rustc_index::IndexVec;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::DefId;
 
 use crate::analyze;
@@ -155,8 +155,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .fields
                         .iter()
                         .map(|field| {
-                            // TODO: generic args
-                            let field_ty = field.ty(self.tcx, self.tcx.mk_args(&[]));
+                            let field_ty = self.tcx.type_of(field.did).instantiate_identity();
                             let field_ty = self.ctx.unrefined_ty(field_ty);
                             // elaboration: all fields are boxed
                             rty::PointerType::own(field_ty).into()
@@ -167,7 +166,26 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 })
                 .collect();
 
-            let def = rty::EnumDatatypeDef { name, variants };
+            let ty_params = adt
+                .all_fields()
+                .map(|f| self.tcx.type_of(f.did).instantiate_identity())
+                .flat_map(|ty| {
+                    if let mir_ty::TyKind::Param(p) = ty.kind() {
+                        Some(p.index as usize)
+                    } else {
+                        None
+                    }
+                })
+                .max()
+                .map(|max| max + 1)
+                .unwrap_or(0);
+            tracing::debug!(?local_def_id, ?name, ?ty_params, "ty_params count");
+
+            let def = rty::EnumDatatypeDef {
+                name,
+                ty_params,
+                variants,
+            };
             self.ctx.register_enum_def(local_def_id.to_def_id(), def);
         }
     }

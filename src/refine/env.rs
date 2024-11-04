@@ -397,6 +397,7 @@ impl PlaceType {
         conds.push(
             chc::Term::datatype_ctor(
                 def.name.clone(),
+                inner_ty.arg_sorts(),
                 variant.name.clone(),
                 vec![chc::Term::var(value_var_ex.into())],
             )
@@ -579,10 +580,9 @@ impl PlaceType {
     }
 
     pub fn enum_(
+        enum_ty: rty::EnumType<Var>,
         discr: TempVarIdx,
-        sym: chc::DatatypeSymbol,
         tys: IndexVec<VariantIdx, PlaceType>,
-        matcher_pred: chc::PredVarId,
     ) -> PlaceType {
         #[derive(Default)]
         struct State {
@@ -613,15 +613,15 @@ impl PlaceType {
                 st.existentials.extend(existentials);
                 st
             });
-        let ty: rty::Type<_> = rty::EnumType::new(sym.clone(), matcher_pred).into();
+        let ty: rty::Type<_> = enum_ty.clone().into();
         let value_var_ev = existentials.push(ty.to_sort());
         let term = chc::Term::var(value_var_ev.into());
         let mut pred_args = terms;
         pred_args.push(chc::Term::var(value_var_ev.into()));
-        conds.push(chc::Atom::new(matcher_pred.into(), pred_args));
+        conds.push(chc::Atom::new(enum_ty.matcher_pred.into(), pred_args));
         conds.push(
             chc::Term::var(discr.into()).equal_to(chc::Term::datatype_discr(
-                sym,
+                enum_ty.symbol.clone(),
                 chc::Term::var(value_var_ev.into()),
             )),
         );
@@ -916,15 +916,13 @@ impl Env {
         for v in &def.variants {
             let x = self.temp_vars.next_index();
             variants.push(x);
-            self.bind_impl(
-                x.into(),
-                rty::RefinedType::unrefined(v.ty.clone()).vacuous(),
-                depth + 1,
-            );
+            let mut v_ty = rty::RefinedType::unrefined(v.ty.clone().vacuous());
+            v_ty.instantiate_ty_params(ty.args.clone());
+            self.bind_impl(x.into(), v_ty, depth + 1);
         }
 
         let mut existentials = refinement.existentials;
-        let value_var_ev = existentials.push(ty.clone().into_closed_ty().to_sort());
+        let value_var_ev = existentials.push(rty::Type::Enum(ty.clone()).to_sort());
         let mut assumption = UnboundAssumption {
             existentials,
             conds: refinement
@@ -1106,8 +1104,23 @@ impl Env {
                 sym,
                 matcher_pred,
             }) => {
-                let tys = variants.iter().map(|&v| self.var_type(v.into())).collect();
-                PlaceType::enum_(*discr, sym.clone(), tys, *matcher_pred)
+                let tys: IndexVec<_, _> =
+                    variants.iter().map(|&v| self.var_type(v.into())).collect();
+
+                let arg_rtys = {
+                    let def = &self.enum_defs[&sym];
+                    let variant_tys = def
+                        .variants
+                        .iter()
+                        .map(|v| rty::RefinedType::unrefined(v.ty.clone().vacuous()));
+                    let got_tys = tys.iter().map(|ty| ty.clone().into());
+                    rty::unify_tys_params(variant_tys, got_tys).into_params(def.ty_params, |_| {
+                        panic!("var_type: should unify all params")
+                    })
+                };
+
+                let enum_ty = rty::EnumType::new(sym.clone(), arg_rtys, *matcher_pred);
+                PlaceType::enum_(enum_ty, *discr, tys)
             }
             None => {
                 let rty = self.var(var).expect("unbound var");

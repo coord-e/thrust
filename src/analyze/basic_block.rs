@@ -219,7 +219,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let variant = adt.variant(variant_id);
                         let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
 
-                        let rty_args = args
+                        let rty_args: IndexVec<_, _> = args
                             .types()
                             .map(|ty| self.ctx.build_template_ty(&self.env).refined_ty(ty))
                             .collect();
@@ -227,8 +227,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let mut variant_rty =
                             rty::RefinedType::unrefined(enum_variant_def.ty.clone().vacuous());
                         variant_rty.instantiate_ty_params(rty_args.clone());
-                        self.env
+                        let cs = self
+                            .env
                             .relate_sub_refined_type(&fields_ty.clone().into(), &variant_rty);
+                        self.ctx.extend_clauses(cs);
 
                         let sort_args: Vec<_> =
                             rty_args.iter().map(|rty| rty.ty.to_sort()).collect();

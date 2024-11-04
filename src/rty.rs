@@ -382,6 +382,7 @@ pub struct EnumVariantDef {
 #[derive(Debug, Clone)]
 pub struct EnumDatatypeDef {
     pub name: chc::DatatypeSymbol,
+    pub ty_params: usize,
     pub variants: IndexVec<VariantIdx, EnumVariantDef>,
 }
 
@@ -435,6 +436,10 @@ impl<T> EnumType<T> {
 
     pub fn symbol(&self) -> &chc::DatatypeSymbol {
         &self.symbol
+    }
+
+    pub fn arg_sorts(&self) -> Vec<chc::Sort> {
+        self.args.iter().map(|ty| ty.ty.to_sort()).collect()
     }
 
     pub fn subst_var<F, U>(self, mut f: F) -> EnumType<U>
