@@ -81,15 +81,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if let Some(AnnotAtom::Atom(require)) = require_annot {
             let last_idx = rty.params.last_index().unwrap();
             for (param_idx, param_ty) in rty.params.iter_enumerated_mut() {
-                if param_idx == last_idx {
-                    param_ty.refinement = require.clone().into();
+                let refinement = if param_idx == last_idx {
+                    require.clone().into()
                 } else {
-                    param_ty.refinement = rty::Refinement::top();
-                }
+                    rty::Refinement::top()
+                };
+                *param_ty = rty::RefinedType::new(
+                    param_ty.clone().strip_refinement().vacuous(),
+                    refinement,
+                );
             }
         }
         if let Some(AnnotAtom::Atom(ensure)) = ensure_annot {
-            rty.ret.refinement = ensure.into();
+            *rty.ret =
+                rty::RefinedType::new(rty.ret.clone().strip_refinement().vacuous(), ensure.into());
         }
 
         let rty = rty::RefinedType::unrefined(rty.into());
