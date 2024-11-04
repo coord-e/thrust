@@ -116,7 +116,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             builder
                 .with_mapped_value_var(param_idx)
                 .add_body(expected_ty.refinement.clone());
-            clauses.extend(self.env.relate_sub_type(&expected_ty.ty, &got_ty.ty));
+            clauses.extend(builder.relate_sub_type(&expected_ty.ty, &got_ty.ty));
         }
 
         let clause = builder
@@ -124,7 +124,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .add_body(got.ret.refinement)
             .head(expected_ret.refinement);
         clauses.push(clause);
-        clauses.extend(self.env.relate_sub_type(&got.ret.ty, &expected_ret.ty));
+        clauses.extend(builder.relate_sub_type(&got.ret.ty, &expected_ret.ty));
         clauses
     }
 
