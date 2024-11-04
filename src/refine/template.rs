@@ -7,27 +7,6 @@ use crate::chc;
 use crate::refine;
 use crate::rty;
 
-pub trait MatcherPredGenerator {
-    fn get_or_create_matcher_pred(
-        &mut self,
-        ty_sym: &chc::DatatypeSymbol,
-        args: &[chc::Sort],
-    ) -> chc::PredVarId;
-}
-
-impl<T> MatcherPredGenerator for &mut T
-where
-    T: MatcherPredGenerator + ?Sized,
-{
-    fn get_or_create_matcher_pred(
-        &mut self,
-        ty_sym: &chc::DatatypeSymbol,
-        args: &[chc::Sort],
-    ) -> chc::PredVarId {
-        T::get_or_create_matcher_pred(self, ty_sym, args)
-    }
-}
-
 pub trait TemplateScope<T> {
     fn build_template(&self) -> rty::TemplateBuilder<T>;
 }
@@ -56,7 +35,7 @@ fn function_ty_impl<'a, 'tcx, T>(
     ret_ty: mir_ty::Ty<'tcx>,
 ) -> rty::FunctionType
 where
-    T: TemplateTypeGenerator<'tcx> + MatcherPredGenerator + ?Sized,
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
 {
     let mut builder = rty::TemplateBuilder::default();
     let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
@@ -88,7 +67,7 @@ where
     rty::FunctionType::new(param_rtys, ret_rty)
 }
 
-pub trait TemplateTypeGenerator<'tcx>: MatcherPredGenerator {
+pub trait TemplateTypeGenerator<'tcx> {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
     fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V>;
 
@@ -136,7 +115,7 @@ pub trait TemplateTypeGenerator<'tcx>: MatcherPredGenerator {
 
 impl<'tcx, T> TemplateTypeGenerator<'tcx> for &mut T
 where
-    T: TemplateTypeGenerator<'tcx> + MatcherPredGenerator + ?Sized,
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
 {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx> {
         T::tcx(self)
@@ -157,7 +136,7 @@ pub struct TemplateTypeBuilder<'a, T: ?Sized, U, V> {
 
 impl<'a, 'tcx, T, U, V> TemplateTypeBuilder<'a, T, U, V>
 where
-    T: TemplateTypeGenerator<'tcx> + MatcherPredGenerator + ?Sized,
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
     U: TemplateScope<V>,
     V: chc::Var,
 {
@@ -193,9 +172,7 @@ where
                     let sym = refine::datatype_symbol(self.gen.tcx(), def.did());
                     let args: IndexVec<_, _> =
                         params.types().map(|ty| self.refined_ty(ty)).collect();
-                    let arg_sorts: Vec<_> = args.iter().map(|rty| rty.ty.to_sort()).collect();
-                    let matcher_pred = self.gen.get_or_create_matcher_pred(&sym, &arg_sorts);
-                    rty::EnumType::new(sym, args, matcher_pred).into()
+                    rty::EnumType::new(sym, args).into()
                 } else if def.is_struct() {
                     let elem_tys = def
                         .all_fields()
@@ -220,7 +197,7 @@ where
     }
 }
 
-pub trait UnrefinedTypeGenerator<'tcx>: MatcherPredGenerator {
+pub trait UnrefinedTypeGenerator<'tcx> {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
 
     // TODO: consolidate two defs
@@ -263,9 +240,7 @@ pub trait UnrefinedTypeGenerator<'tcx>: MatcherPredGenerator {
                         .types()
                         .map(|ty| rty::RefinedType::unrefined(self.unrefined_ty(ty)))
                         .collect();
-                    let arg_sorts: Vec<_> = args.iter().map(|rty| rty.ty.to_sort()).collect();
-                    let matcher_pred = self.get_or_create_matcher_pred(&sym, &arg_sorts);
-                    rty::EnumType::new(sym, args, matcher_pred).into()
+                    rty::EnumType::new(sym, args).into()
                 } else if def.is_struct() {
                     let elem_tys = def
                         .all_fields()

@@ -13,8 +13,8 @@ use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, BasicBlockType, Env, MatcherPredGenerator, PlaceType, TempVarIdx, TemplateTypeGenerator,
-    UnboundAssumption, UnrefinedTypeGenerator, Var,
+    self, BasicBlockType, Env, PlaceType, TempVarIdx, TemplateTypeGenerator, UnboundAssumption,
+    UnrefinedTypeGenerator, Var,
 };
 use crate::rty::{self, ClauseBuilderExt as _, ClauseScope as _, Subtyping as _};
 
@@ -234,8 +234,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
                         let sort_args: Vec<_> =
                             rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
-                        let matcher_pred = self.ctx.get_or_create_matcher_pred(&ty_sym, &sort_args);
-                        let ty = rty::EnumType::new(ty_sym.clone(), rty_args, matcher_pred).into();
+                        let ty = rty::EnumType::new(ty_sym.clone(), rty_args).into();
                         fields_ty.replace(|_, fields_term| {
                             let term = chc::Term::datatype_ctor(
                                 ty_sym,
@@ -968,11 +967,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let drop_points = DropPoints::default();
         let body = tcx.optimized_mir(local_def_id.to_def_id());
-        let enum_defs = ctx
-            .enum_defs()
-            .map(|(_, d)| (d.name.clone(), d.clone()))
-            .collect();
-        let env = Env::new(enum_defs);
+        let env = ctx.new_env();
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
         let elaborated_locals = Default::default();

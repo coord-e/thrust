@@ -390,13 +390,6 @@ pub struct EnumDatatypeDef {
 pub struct EnumType<T> {
     pub symbol: chc::DatatypeSymbol,
     pub args: IndexVec<TypeParamIdx, RefinedType<T>>,
-
-    // A predicate variable p with the following implications:
-    // p(v1, v2, ..., vn, x) <= x = V1(v1)
-    // p(v1, v2, ..., vn, x) <= x = V2(v2)
-    // ...
-    // p(v1, v2, ..., vn, x) <= x = Vn(vn)
-    pub matcher_pred: chc::PredVarId,
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b EnumType<V>
@@ -422,16 +415,8 @@ where
 }
 
 impl<T> EnumType<T> {
-    pub fn new(
-        symbol: chc::DatatypeSymbol,
-        args: TypeParams<T>,
-        matcher_pred: chc::PredVarId,
-    ) -> Self {
-        EnumType {
-            symbol,
-            args,
-            matcher_pred,
-        }
+    pub fn new(symbol: chc::DatatypeSymbol, args: TypeParams<T>) -> Self {
+        EnumType { symbol, args }
     }
 
     pub fn symbol(&self) -> &chc::DatatypeSymbol {
@@ -453,7 +438,6 @@ impl<T> EnumType<T> {
                 .into_iter()
                 .map(|ty| ty.subst_var(&mut f))
                 .collect(),
-            matcher_pred: self.matcher_pred,
         }
     }
 
@@ -464,7 +448,6 @@ impl<T> EnumType<T> {
         EnumType {
             symbol: self.symbol,
             args: self.args.into_iter().map(|ty| ty.map_var(&mut f)).collect(),
-            matcher_pred: self.matcher_pred,
         }
     }
 
@@ -476,7 +459,6 @@ impl<T> EnumType<T> {
                 .into_iter()
                 .map(|ty| RefinedType::unrefined(ty.strip_refinement()))
                 .collect(),
-            matcher_pred: self.matcher_pred,
         }
     }
 

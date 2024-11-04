@@ -1,14 +1,15 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
-use rustc_index::IndexVec;
 use rustc_middle::mir::{BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::BasicBlockType;
+use crate::refine::{self, BasicBlockType};
 use crate::rty;
 
 mod annot;
@@ -31,12 +32,6 @@ pub fn resolve_discr<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::VariantDiscr) -> u3
     }
 }
 
-#[derive(Debug, Clone)]
-struct EnumDatatype {
-    def: rty::EnumDatatypeDef,
-    matcher_preds: HashMap<Vec<chc::Sort>, chc::PredVarId>,
-}
-
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -49,32 +44,13 @@ pub struct Analyzer<'tcx> {
     defs: HashMap<DefId, rty::RefinedType>,
 
     /// Resulting CHC system.
-    system: chc::System,
+    system: Rc<RefCell<chc::System>>,
 
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
-    enum_datatypes: HashMap<DefId, EnumDatatype>,
-}
-
-impl<'tcx> crate::refine::MatcherPredGenerator for Analyzer<'tcx> {
-    fn get_or_create_matcher_pred(
-        &mut self,
-        ty_sym: &chc::DatatypeSymbol,
-        args: &[chc::Sort],
-    ) -> chc::PredVarId {
-        let (did, enum_datatype) = self.find_enum_datatype(ty_sym).unwrap();
-        if let Some(matcher_pred) = enum_datatype.matcher_preds.get(args) {
-            return *matcher_pred;
-        }
-        let matcher_pred = self.create_matcher_pred(did, args);
-        self.enum_datatypes
-            .get_mut(&did)
-            .unwrap()
-            .matcher_preds
-            .insert(args.to_owned(), matcher_pred);
-        matcher_pred
-    }
+    matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
+    enum_defs: Rc<RefCell<HashMap<DefId, rty::EnumDatatypeDef>>>,
 }
 
 impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
@@ -95,7 +71,7 @@ impl<'tcx> crate::refine::UnrefinedTypeGenerator<'tcx> for Analyzer<'tcx> {
 
 impl<'tcx> Analyzer<'tcx> {
     pub fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId {
-        self.system.new_pred_var(pred_sig)
+        self.system.borrow_mut().new_pred_var(pred_sig)
     }
 
     fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
@@ -114,59 +90,11 @@ impl<'tcx> Analyzer<'tcx> {
         for atom in atoms {
             builder.add_body_mapped(atom);
         }
-        let pv = self.system.new_pred_var(pred_sig);
+        let pv = self.generate_pred_var(pred_sig);
         let head = chc::Atom::new(pv.into(), fvs.into_iter().map(chc::Term::var).collect());
         let clause = builder.head_mapped(head.clone());
         self.add_clause(clause);
         head
-    }
-
-    fn find_enum_datatype(&self, ty_sym: &chc::DatatypeSymbol) -> Option<(DefId, &EnumDatatype)> {
-        self.enum_datatypes
-            .iter()
-            .find(|(_, d)| &d.def.name == ty_sym)
-            .map(|(did, d)| (*did, d))
-    }
-
-    fn create_matcher_pred(&mut self, did: DefId, args: &[chc::Sort]) -> chc::PredVarId {
-        let def = self.enum_datatypes[&did].def.clone();
-        let mut matcher_pred_sig: chc::PredSig = def
-            .variants
-            .iter()
-            .map(|v| {
-                let mut sort = v.ty.to_sort();
-                sort.instantiate_params(args);
-                sort
-            })
-            .collect();
-        matcher_pred_sig.push(chc::Sort::datatype(def.name.clone(), args.to_vec()));
-        let matcher_pred = self.generate_pred_var(matcher_pred_sig.clone());
-
-        let vars = IndexVec::<chc::TermVarIdx, _>::from_raw(matcher_pred_sig);
-        let head = chc::Atom::new(
-            matcher_pred.into(),
-            vars.indices().map(chc::Term::var).collect(),
-        );
-        for (variant_idx, variant) in def.variants.iter().enumerate() {
-            let ctor_term = chc::Term::datatype_ctor(
-                def.name.clone(),
-                args.to_vec(),
-                variant.name.clone(),
-                vec![chc::Term::var(variant_idx.into())],
-            );
-            let data_var: chc::TermVarIdx = (vars.len() - 1).into();
-            let body1 = chc::Term::var(data_var).equal_to(ctor_term);
-            let body2 = chc::Term::datatype_discr(def.name.clone(), chc::Term::var(data_var))
-                .equal_to(chc::Term::int(variant.discr as i64));
-            let clause = chc::Clause {
-                vars: vars.clone(),
-                head: head.clone(),
-                body: vec![body1, body2],
-            };
-            self.add_clause(clause);
-        }
-
-        matcher_pred
     }
 }
 
@@ -175,20 +103,24 @@ impl<'tcx> Analyzer<'tcx> {
         let defs = Default::default();
         let system = Default::default();
         let basic_blocks = Default::default();
-        let enum_datatypes = Default::default();
+        let enum_defs = Default::default();
+        let matcher_preds = Rc::new(RefCell::new(refine::MatcherPredCache::new(
+            Rc::clone(&system),
+            Rc::clone(&enum_defs),
+        )));
         Self {
             tcx,
             defs,
             system,
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
-            enum_datatypes,
+            matcher_preds,
+            enum_defs,
         }
     }
 
     pub fn add_clause(&mut self, clause: chc::Clause) {
-        tracing::debug!(clause = %clause.display(), id = ?self.system.clauses.next_index(), "add_clause");
-        self.system.clauses.push(clause);
+        self.system.borrow_mut().push_clause(clause);
     }
 
     pub fn extend_clauses(&mut self, clauses: impl IntoIterator<Item = chc::Clause>) {
@@ -215,31 +147,21 @@ impl<'tcx> Analyzer<'tcx> {
             symbol: enum_def.name.clone(),
             ctors,
         };
-        self.enum_datatypes.insert(
-            def_id,
-            EnumDatatype {
-                def: enum_def,
-                matcher_preds: Default::default(),
-            },
-        );
-        self.system.datatypes.push(datatype);
-    }
-
-    pub fn enum_defs(&self) -> impl Iterator<Item = (&DefId, &rty::EnumDatatypeDef)> {
-        self.enum_datatypes
-            .iter()
-            .map(|(did, enum_datatype)| (did, &enum_datatype.def))
+        self.enum_defs.borrow_mut().insert(def_id, enum_def);
+        self.system.borrow_mut().datatypes.push(datatype);
     }
 
     pub fn find_enum_variant(
         &self,
         ty_sym: &chc::DatatypeSymbol,
         v_sym: &chc::DatatypeSymbol,
-    ) -> Option<&rty::EnumVariantDef> {
-        self.enum_datatypes
+    ) -> Option<rty::EnumVariantDef> {
+        self.enum_defs
+            .borrow()
             .iter()
-            .find(|(_, d)| &d.def.name == ty_sym)
-            .and_then(|(_, d)| d.def.variants.iter().find(|v| &v.name == v_sym))
+            .find(|(_, d)| &d.name == ty_sym)
+            .and_then(|(_, d)| d.variants.iter().find(|v| &v.name == v_sym))
+            .cloned()
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
@@ -278,6 +200,16 @@ impl<'tcx> Analyzer<'tcx> {
         self.register_def(panic_def_id, rty::RefinedType::unrefined(panic_ty.into()));
     }
 
+    pub fn new_env(&self) -> refine::Env {
+        let defs = self
+            .enum_defs
+            .borrow()
+            .values()
+            .map(|def| (def.name.clone(), def.clone()))
+            .collect();
+        refine::Env::new(defs, Rc::clone(&self.matcher_preds))
+    }
+
     pub fn crate_analyzer(&mut self) -> crate_::Analyzer<'tcx, '_> {
         crate_::Analyzer::new(self)
     }
@@ -298,7 +230,7 @@ impl<'tcx> Analyzer<'tcx> {
     }
 
     pub fn solve(&mut self) {
-        if let Err(err) = self.system.solve() {
+        if let Err(err) = self.system.borrow().solve() {
             self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
     }

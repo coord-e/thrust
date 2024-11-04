@@ -1,10 +1,11 @@
 mod template;
-pub use template::{
-    MatcherPredGenerator, TemplateScope, TemplateTypeGenerator, UnrefinedTypeGenerator,
-};
+pub use template::{TemplateScope, TemplateTypeGenerator, UnrefinedTypeGenerator};
 
 mod basic_block;
 pub use basic_block::BasicBlockType;
+
+mod matcher_pred;
+pub use matcher_pred::MatcherPredCache;
 
 mod env;
 pub use env::{Env, PlaceType, TempVarIdx, UnboundAssumption, Var};

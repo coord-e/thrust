@@ -2,6 +2,8 @@
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
+use crate::pretty::PrettyDisplayExt as _;
+
 mod clause_builder;
 mod format_context;
 mod hoice;
@@ -1015,6 +1017,11 @@ pub struct System {
 impl System {
     pub fn new_pred_var(&mut self, sig: PredSig) -> PredVarId {
         self.pred_vars.push(sig)
+    }
+
+    pub fn push_clause(&mut self, clause: Clause) -> ClauseId {
+        tracing::debug!(clause = %clause.display(), id = ?self.clauses.next_index(), "push_clause");
+        self.clauses.push(clause)
     }
 
     pub fn smtlib2(&self) -> smtlib2::System<'_> {

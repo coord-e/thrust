@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
@@ -79,7 +81,6 @@ enum FlowBinding {
         discr: TempVarIdx,
         variants: IndexVec<VariantIdx, TempVarIdx>,
         sym: chc::DatatypeSymbol,
-        matcher_pred: chc::PredVarId,
     },
 }
 
@@ -581,6 +582,7 @@ impl PlaceType {
 
     pub fn enum_(
         enum_ty: rty::EnumType<Var>,
+        matcher_pred: chc::PredVarId,
         discr: TempVarIdx,
         tys: IndexVec<VariantIdx, PlaceType>,
     ) -> PlaceType {
@@ -618,7 +620,7 @@ impl PlaceType {
         let term = chc::Term::var(value_var_ev.into());
         let mut pred_args = terms;
         pred_args.push(chc::Term::var(value_var_ev.into()));
-        conds.push(chc::Atom::new(enum_ty.matcher_pred.into(), pred_args));
+        conds.push(chc::Atom::new(matcher_pred.into(), pred_args));
         conds.push(
             chc::Term::var(discr.into()).equal_to(chc::Term::datatype_discr(
                 enum_ty.symbol.clone(),
@@ -703,6 +705,7 @@ pub struct Env {
     temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
     unbound_assumptions: Vec<UnboundAssumption>,
 
+    matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
     enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
 }
 
@@ -755,12 +758,16 @@ impl refine::TemplateScope<Var> for Env {
 }
 
 impl Env {
-    pub fn new(enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>) -> Self {
+    pub fn new(
+        enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
+        matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
+    ) -> Self {
         Env {
             locals: HashMap::new(),
             flow_locals: HashMap::new(),
             temp_vars: IndexVec::new(),
             unbound_assumptions: Vec::new(),
+            matcher_preds,
             enum_defs,
         }
     }
@@ -911,6 +918,10 @@ impl Env {
         }
 
         let def = self.enum_defs[&ty.symbol].clone();
+        let matcher_pred = self
+            .matcher_preds
+            .borrow_mut()
+            .get_or_create(&ty.symbol, &ty.arg_sorts());
 
         let mut variants = IndexVec::new();
         for v in &def.variants {
@@ -955,7 +966,7 @@ impl Env {
         pred_args.push(chc::Term::var(value_var_ev.into()));
         assumption
             .conds
-            .push(chc::Atom::new(ty.matcher_pred.into(), pred_args));
+            .push(chc::Atom::new(matcher_pred.into(), pred_args));
         let discr_var = self
             .temp_vars
             .push(TempVarBinding::Type(rty::RefinedType::unrefined(
@@ -975,7 +986,6 @@ impl Env {
             discr: discr_var,
             variants,
             sym: def.name.clone(),
-            matcher_pred: ty.matcher_pred,
         };
         match var {
             Var::Local(local) => {
@@ -1102,7 +1112,6 @@ impl Env {
                 discr,
                 variants,
                 sym,
-                matcher_pred,
             }) => {
                 let tys: IndexVec<_, _> =
                     variants.iter().map(|&v| self.var_type(v.into())).collect();
@@ -1119,8 +1128,12 @@ impl Env {
                     })
                 };
 
-                let enum_ty = rty::EnumType::new(sym.clone(), arg_rtys, *matcher_pred);
-                PlaceType::enum_(enum_ty, *discr, tys)
+                let enum_ty = rty::EnumType::new(sym.clone(), arg_rtys);
+                let matcher_pred = self
+                    .matcher_preds
+                    .borrow_mut()
+                    .get_or_create(&sym, &enum_ty.arg_sorts());
+                PlaceType::enum_(enum_ty, matcher_pred, *discr, tys)
             }
             None => {
                 let rty = self.var(var).expect("unbound var");
