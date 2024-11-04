@@ -73,6 +73,10 @@ impl<T> TypeParamSubst<T> {
         Self { subst }
     }
 
+    pub fn get(&self, idx: TypeParamIdx) -> Option<&RefinedType<T>> {
+        self.subst.get(&idx)
+    }
+
     pub fn compose(&mut self, other: Self)
     where
         T: chc::Var,

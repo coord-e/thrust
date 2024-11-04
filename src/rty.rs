@@ -1204,12 +1204,14 @@ impl<FV> RefinedType<FV> {
         match &mut self.ty {
             Type::Int | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
-                let RefinedType {
-                    ty: replacement_ty,
-                    refinement,
-                } = subst[ty.index()].clone();
-                self.refinement.extend(refinement);
-                self.ty = replacement_ty;
+                if let Some(rty) = subst.get(ty.index()) {
+                    let RefinedType {
+                        ty: replacement_ty,
+                        refinement,
+                    } = rty.clone();
+                    self.refinement.extend(refinement);
+                    self.ty = replacement_ty;
+                }
             }
             Type::Pointer(ty) => ty.subst_ty_params(&subst),
             Type::Function(ty) => {
