@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
@@ -14,6 +14,9 @@ pub use clause_builder::ClauseBuilderExt;
 
 mod subtyping;
 pub use subtyping::{relate_sub_closed_type, ClauseScope, Subtyping};
+
+mod params;
+pub use params::{TypeParamIdx, TypeParamSubst, TypeParams};
 
 rustc_index::newtype_index! {
     #[debug_format = "${}"]
@@ -74,12 +77,29 @@ impl FunctionType {
         Type::Function(self)
     }
 
-    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<Closed>>) {
-        let params = params.iter().map(|rty| rty.clone().vacuous()).collect();
+    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
+        self.params
+            .iter()
+            .flat_map(RefinedType::free_ty_params)
+            .chain(self.ret.free_ty_params())
+            .collect()
+    }
+
+    pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<Closed>) {
+        let subst = subst.clone().vacuous();
         for param in &mut self.params {
-            param.instantiate_params(&params);
+            param.subst_ty_params(&subst);
         }
-        self.ret.instantiate_params(&params);
+        self.ret.subst_ty_params(&subst);
+    }
+
+    pub fn unify_ty_params(self, other: FunctionType) -> TypeParamSubst<FunctionParamIdx> {
+        assert_eq!(self.params.len(), other.params.len());
+        let mut tys1 = self.params;
+        tys1.push(*self.ret);
+        let mut tys2 = other.params;
+        tys2.push(*other.ret);
+        unify_tys_params(tys1, tys2)
     }
 }
 
@@ -233,11 +253,23 @@ impl<T> PointerType<T> {
         }
     }
 
-    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<T>>)
+    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
+        self.elem.free_ty_params()
+    }
+
+    pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
     {
-        self.elem.instantiate_params(params)
+        self.elem.subst_ty_params(subst)
+    }
+
+    pub fn unify_ty_params(self, other: PointerType<T>) -> TypeParamSubst<T>
+    where
+        T: chc::Var,
+    {
+        assert_eq!(self.kind, other.kind);
+        self.elem.unify_ty_params(*other.elem)
     }
 }
 
@@ -315,13 +347,28 @@ impl<T> TupleType<T> {
         }
     }
 
-    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<T>>)
+    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
+        self.elems
+            .iter()
+            .flat_map(RefinedType::free_ty_params)
+            .collect()
+    }
+
+    pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
     {
         for elem in &mut self.elems {
-            elem.instantiate_params(params);
+            elem.subst_ty_params(subst);
         }
+    }
+
+    pub fn unify_ty_params(self, other: TupleType<T>) -> TypeParamSubst<T>
+    where
+        T: chc::Var,
+    {
+        assert_eq!(self.elems.len(), other.elems.len());
+        unify_tys_params(self.elems, other.elems)
     }
 }
 
@@ -376,7 +423,7 @@ where
 impl<T> EnumType<T> {
     pub fn new(
         symbol: chc::DatatypeSymbol,
-        args: IndexVec<TypeParamIdx, RefinedType<T>>,
+        args: TypeParams<T>,
         matcher_pred: chc::PredVarId,
     ) -> Self {
         EnumType {
@@ -428,41 +475,28 @@ impl<T> EnumType<T> {
         }
     }
 
-    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<T>>)
+    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
+        self.args
+            .iter()
+            .flat_map(RefinedType::free_ty_params)
+            .collect()
+    }
+
+    pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
     {
         for arg in &mut self.args {
-            arg.instantiate_params(params);
+            arg.subst_ty_params(subst);
         }
     }
-}
 
-rustc_index::newtype_index! {
-    #[debug_format = "T{}"]
-    pub struct TypeParamIdx { }
-}
-
-impl std::fmt::Display for TypeParamIdx {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "T{}", self.index())
-    }
-}
-
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TypeParamIdx
-where
-    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-{
-    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        allocator
-            .as_string(self)
-            .annotate(TypeParamIdx::color_spec())
-    }
-}
-
-impl TypeParamIdx {
-    fn color_spec() -> termcolor::ColorSpec {
-        termcolor::ColorSpec::new()
+    pub fn unify_ty_params(self, other: EnumType<T>) -> TypeParamSubst<T>
+    where
+        T: chc::Var,
+    {
+        assert_eq!(self.symbol, other.symbol);
+        unify_tys_params(self.args, other.args)
     }
 }
 
@@ -739,6 +773,17 @@ impl<T> Type<T> {
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
             Type::Enum(ty) => Type::Enum(ty.strip_refinement()),
+        }
+    }
+
+    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
+        match self {
+            Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
+            Type::Param(ty) => std::iter::once(ty.index()).collect(),
+            Type::Pointer(ty) => ty.free_ty_params(),
+            Type::Function(ty) => ty.free_ty_params(),
+            Type::Tuple(ty) => ty.free_ty_params(),
+            Type::Enum(ty) => ty.free_ty_params(),
         }
     }
 }
@@ -1161,7 +1206,11 @@ impl<FV> RefinedType<FV> {
         self.ty.strip_refinement()
     }
 
-    pub fn instantiate_params(&mut self, params: &IndexVec<TypeParamIdx, RefinedType<FV>>)
+    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
+        self.ty.free_ty_params()
+    }
+
+    pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<FV>)
     where
         FV: chc::Var,
     {
@@ -1171,20 +1220,56 @@ impl<FV> RefinedType<FV> {
                 let RefinedType {
                     ty: replacement_ty,
                     refinement,
-                } = params[ty.index()].clone();
+                } = subst[ty.index()].clone();
                 self.refinement.extend(refinement);
                 self.ty = replacement_ty;
             }
-            Type::Pointer(ty) => ty.instantiate_params(&params),
+            Type::Pointer(ty) => ty.subst_ty_params(&subst),
             Type::Function(ty) => {
-                let params = params
-                    .iter()
-                    .map(|rty| RefinedType::unrefined(rty.ty.clone().strip_refinement()))
-                    .collect();
-                ty.instantiate_params(&params)
+                let subst = subst.clone().strip_refinement();
+                ty.subst_ty_params(&subst)
             }
-            Type::Tuple(ty) => ty.instantiate_params(&params),
-            Type::Enum(ty) => ty.instantiate_params(&params),
+            Type::Tuple(ty) => ty.subst_ty_params(&subst),
+            Type::Enum(ty) => ty.subst_ty_params(&subst),
+        }
+    }
+
+    pub fn instantiate_ty_params(&mut self, params: TypeParams<FV>)
+    where
+        FV: chc::Var,
+    {
+        self.subst_ty_params(&params.into());
+    }
+
+    pub fn unify_ty_params(self, other: RefinedType<FV>) -> TypeParamSubst<FV>
+    where
+        FV: chc::Var,
+    {
+        match (self.ty, other.ty) {
+            (Type::Int, Type::Int)
+            | (Type::Bool, Type::Bool)
+            | (Type::String, Type::String)
+            | (Type::Never, Type::Never) => Default::default(),
+            (Type::Param(pty), ty) if !ty.free_ty_params().contains(&pty.index()) => {
+                TypeParamSubst::singleton(
+                    pty.index(),
+                    RefinedType::new(ty.clone(), other.refinement.clone()),
+                )
+            }
+            (ty, Type::Param(pty)) if !ty.free_ty_params().contains(&pty.index()) => {
+                TypeParamSubst::singleton(
+                    pty.index(),
+                    RefinedType::new(ty.clone(), self.refinement.clone()),
+                )
+            }
+            (Type::Pointer(ty1), Type::Pointer(ty2)) => ty1.unify_ty_params(ty2),
+            (Type::Function(ty1), Type::Function(ty2)) => {
+                // TODO: what should we do for in-function refinement substs?
+                ty1.unify_ty_params(ty2).strip_refinement().vacuous()
+            }
+            (Type::Tuple(ty1), Type::Tuple(ty2)) => ty1.unify_ty_params(ty2),
+            (Type::Enum(ty1), Type::Enum(ty2)) => ty1.unify_ty_params(ty2),
+            (t1, t2) => panic!("unify_ty_params: mismatched types t1={:?}, t2={:?}", t1, t2),
         }
     }
 }
@@ -1193,4 +1278,21 @@ impl RefinedType<Closed> {
     pub fn vacuous<FV>(self) -> RefinedType<FV> {
         self.map_var(|v| match v {})
     }
+}
+
+pub fn unify_tys_params<I1, I2, T>(tys1: I1, tys2: I2) -> TypeParamSubst<T>
+where
+    T: chc::Var,
+    I1: IntoIterator<Item = RefinedType<T>>,
+    I2: IntoIterator<Item = RefinedType<T>>,
+{
+    tys1.into_iter()
+        .zip(tys2)
+        .fold(Default::default(), |s1, (mut t1, mut t2)| {
+            t1.subst_ty_params(&s1);
+            t2.subst_ty_params(&s1);
+            let mut s2 = t1.unify_ty_params(t2);
+            s2.compose(s1);
+            s2
+        })
 }

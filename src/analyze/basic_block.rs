@@ -226,7 +226,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let enum_variant_def = self.ctx.find_enum_variant(&ty_sym, &v_sym).unwrap();
                         let mut variant_rty =
                             rty::RefinedType::unrefined(enum_variant_def.ty.clone().vacuous());
-                        variant_rty.instantiate_params(&rty_args);
+                        variant_rty.instantiate_ty_params(rty_args.clone());
                         self.env
                             .relate_sub_refined_type(&fields_ty.clone().into(), &variant_rty);
 
