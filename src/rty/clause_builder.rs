@@ -69,9 +69,15 @@ impl<'a> RefinementClauseBuilder<'a> {
             .map_var(|v| self.builder.mapped_var(v))
             .instantiate();
         instantiator.value_var(self.value_var);
-        let mut atoms: Vec<_> = instantiator.into_atoms().collect();
+        let mut atoms: Vec<_> = instantiator.into_atoms().filter(|a| !a.is_top()).collect();
+        if atoms.is_empty() {
+            atoms.push(chc::Atom::top());
+        }
         if atoms.len() != 1 {
-            panic!("head refinement must contain exactly one atom");
+            panic!(
+                "head refinement must contain exactly one atom, but got {:?}",
+                atoms
+            );
         }
         self.builder.head(atoms.pop().unwrap())
     }
