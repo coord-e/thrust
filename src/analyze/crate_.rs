@@ -166,8 +166,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             rty::PointerType::own(field_ty).into()
                         })
                         .collect();
-                    let ty = rty::TupleType::new(field_tys).into();
-                    rty::EnumVariantDef { name, discr, ty }
+                    rty::EnumVariantDef {
+                        name,
+                        discr,
+                        field_tys,
+                    }
                 })
                 .collect();
 

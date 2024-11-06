@@ -58,10 +58,9 @@ impl MatcherPredCache {
             .unwrap()
             .clone();
         let mut matcher_pred_sig: chc::PredSig = def
-            .variants
-            .iter()
-            .map(|v| {
-                let mut sort = v.ty.to_sort();
+            .field_tys()
+            .map(|ty| {
+                let mut sort = ty.to_sort();
                 sort.instantiate_params(args);
                 sort
             })
@@ -73,18 +72,24 @@ impl MatcherPredCache {
             .new_pred_var(matcher_pred_sig.clone());
 
         let vars = IndexVec::<chc::TermVarIdx, _>::from_raw(matcher_pred_sig);
+        let data_var: chc::TermVarIdx = (vars.len() - 1).into();
         let head = chc::Atom::new(
             matcher_pred.into(),
             vars.indices().map(chc::Term::var).collect(),
         );
-        for (variant_idx, variant) in def.variants.iter().enumerate() {
+        let mut offset = 0;
+        for variant in &def.variants {
+            let ctor_args = (0..variant.field_tys.len())
+                .into_iter()
+                .map(|i| chc::Term::var((i + offset).into()))
+                .collect();
+            offset += variant.field_tys.len();
             let ctor_term = chc::Term::datatype_ctor(
                 def.name.clone(),
                 args.to_vec(),
                 variant.name.clone(),
-                vec![chc::Term::var(variant_idx.into())],
+                ctor_args,
             );
-            let data_var: chc::TermVarIdx = (vars.len() - 1).into();
             let body1 = chc::Term::var(data_var).equal_to(ctor_term);
             let body2 = chc::Term::datatype_discr(def.name.clone(), chc::Term::var(data_var))
                 .equal_to(chc::Term::int(variant.discr as i64));

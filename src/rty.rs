@@ -376,7 +376,7 @@ impl<T> TupleType<T> {
 pub struct EnumVariantDef {
     pub name: chc::DatatypeSymbol,
     pub discr: u32,
-    pub ty: Type<Closed>,
+    pub field_tys: Vec<Type<Closed>>,
 }
 
 #[derive(Debug, Clone)]
@@ -384,6 +384,12 @@ pub struct EnumDatatypeDef {
     pub name: chc::DatatypeSymbol,
     pub ty_params: usize,
     pub variants: IndexVec<VariantIdx, EnumVariantDef>,
+}
+
+impl EnumDatatypeDef {
+    pub fn field_tys(&self) -> impl Iterator<Item = &Type<Closed>> {
+        self.variants.iter().flat_map(|v| &v.field_tys)
+    }
 }
 
 #[derive(Debug, Clone)]

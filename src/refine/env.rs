@@ -6,7 +6,7 @@ use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 use rustc_middle::mir::{self, Local, Operand, Place, PlaceElem};
 use rustc_middle::ty as mir_ty;
-use rustc_target::abi::VariantIdx;
+use rustc_target::abi::{FieldIdx, VariantIdx};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
@@ -73,13 +73,18 @@ impl Var {
 }
 
 #[derive(Debug, Clone)]
+struct FlowBindingVariant {
+    pub fields: IndexVec<FieldIdx, TempVarIdx>,
+}
+
+#[derive(Debug, Clone)]
 enum FlowBinding {
     Mut(TempVarIdx, TempVarIdx),
     Box(TempVarIdx),
     Tuple(Vec<TempVarIdx>),
     Enum {
         discr: TempVarIdx,
-        variants: IndexVec<VariantIdx, TempVarIdx>,
+        variants: IndexVec<VariantIdx, FlowBindingVariant>,
         sym: chc::DatatypeSymbol,
     },
 }
@@ -108,11 +113,17 @@ impl std::fmt::Display for FlowBinding {
             } => {
                 write!(f, "#{:?} ", discr)?;
                 for (i, v) in variants.iter_enumerated() {
-                    if i.index() == 0 {
-                        write!(f, "{}::{:?}({:?})", sym, i, v)?;
-                    } else {
-                        write!(f, " | {}::{:?}({:?})", sym, i, v)?;
+                    if i.index() != 0 {
+                        write!(f, " | ")?;
                     }
+                    write!(f, "{}::{:?}(", sym, i)?;
+                    for (field_idx, field) in v.fields.iter().enumerate() {
+                        if field_idx != 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{:?}", field)?;
+                    }
+                    write!(f, ")")?;
                 }
                 Ok(())
             }
@@ -382,7 +393,8 @@ impl PlaceType {
 
     pub fn downcast(
         self,
-        idx: VariantIdx,
+        variant_idx: VariantIdx,
+        field_idx: FieldIdx,
         enum_defs: &HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
     ) -> PlaceType {
         let PlaceType {
@@ -393,34 +405,43 @@ impl PlaceType {
         } = self;
         let inner_ty = inner_ty.into_enum().unwrap();
         let def = &enum_defs[&inner_ty.symbol];
-        let variant = &def.variants[idx];
+        let variant = &def.variants[variant_idx];
 
-        let mut rty = rty::RefinedType::unrefined(variant.ty.clone().vacuous());
-        rty.instantiate_ty_params(inner_ty.args.clone());
-        let rty::RefinedType { ty, refinement } = rty;
+        let mut field_terms = Vec::new();
+        let mut field_tys = Vec::new();
+        for field_ty in variant.field_tys.clone() {
+            let mut rty = rty::RefinedType::unrefined(field_ty.vacuous());
+            rty.instantiate_ty_params(inner_ty.args.clone());
+            let rty::RefinedType { ty, refinement } = rty;
 
-        let value_var_ex = existentials.push(ty.to_sort());
+            let field_ex_var = existentials.push(ty.to_sort());
+            field_terms.push(chc::Term::var(field_ex_var.into()));
+            field_tys.push(ty);
+
+            conds.extend(refinement.atoms.into_iter().map(|a| {
+                a.map_var(|v| match v {
+                    rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(field_ex_var),
+                    rty::RefinedTypeVar::Existential(ev) => {
+                        PlaceTypeVar::Existential(ev + existentials.len())
+                    }
+                    rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
+                })
+            }));
+            existentials.extend(refinement.existentials);
+        }
+
         conds.push(
             chc::Term::datatype_ctor(
                 def.name.clone(),
                 inner_ty.arg_sorts(),
                 variant.name.clone(),
-                vec![chc::Term::var(value_var_ex.into())],
+                field_terms.clone(),
             )
             .equal_to(inner_term),
         );
 
-        conds.extend(refinement.atoms.into_iter().map(|a| {
-            a.map_var(|v| match v {
-                rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ex),
-                rty::RefinedTypeVar::Existential(ev) => {
-                    PlaceTypeVar::Existential(ev + existentials.len())
-                }
-                rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
-            })
-        }));
-        existentials.extend(refinement.existentials);
-        let term = chc::Term::var(value_var_ex.into());
+        let ty = field_tys[field_idx.index()].clone();
+        let term = field_terms[field_idx.index()].clone();
         PlaceType {
             ty,
             existentials,
@@ -552,7 +573,12 @@ impl PlaceType {
             (rty::PointerType::mut_to(ty1).into(), chc::Term::mut_(term1, term2)))
     }
 
-    pub fn tuple(tys: Vec<PlaceType>) -> PlaceType {
+    pub fn aggregate<I, F, G>(ptys: I, make_ty: F, make_term: G) -> PlaceType
+    where
+        I: IntoIterator<Item = PlaceType>,
+        F: FnOnce(Vec<rty::Type<Var>>) -> rty::Type<Var>,
+        G: FnOnce(Vec<chc::Term<PlaceTypeVar>>) -> chc::Term<PlaceTypeVar>,
+    {
         #[derive(Default)]
         struct State {
             tys: Vec<rty::Type<Var>>,
@@ -565,7 +591,7 @@ impl PlaceType {
             terms,
             existentials,
             conds,
-        } = tys
+        } = ptys
             .into_iter()
             .fold(Default::default(), |mut st: State, ty| {
                 let PlaceType {
@@ -585,8 +611,8 @@ impl PlaceType {
                 st.existentials.extend(existentials);
                 st
             });
-        let ty = rty::TupleType::new(tys).into();
-        let term = chc::Term::tuple(terms);
+        let ty = make_ty(tys);
+        let term = make_term(terms);
         PlaceType {
             ty,
             existentials,
@@ -595,11 +621,15 @@ impl PlaceType {
         }
     }
 
+    pub fn tuple(tys: Vec<PlaceType>) -> PlaceType {
+        PlaceType::aggregate(tys, |tys| rty::TupleType::new(tys).into(), chc::Term::tuple)
+    }
+
     pub fn enum_(
         enum_ty: rty::EnumType<Var>,
         matcher_pred: chc::PredVarId,
         discr: TempVarIdx,
-        tys: IndexVec<VariantIdx, PlaceType>,
+        field_tys: Vec<PlaceType>,
     ) -> PlaceType {
         #[derive(Default)]
         struct State {
@@ -611,7 +641,7 @@ impl PlaceType {
             mut existentials,
             terms,
             mut conds,
-        } = tys
+        } = field_tys
             .into_iter()
             .fold(Default::default(), |mut st: State, ty| {
                 let PlaceType {
@@ -939,12 +969,16 @@ impl Env {
             .get_or_create(&ty.symbol, &ty.arg_sorts());
 
         let mut variants = IndexVec::new();
-        for v in &def.variants {
-            let x = self.temp_vars.next_index();
-            variants.push(x);
-            let mut v_ty = rty::RefinedType::unrefined(v.ty.clone().vacuous());
-            v_ty.instantiate_ty_params(ty.args.clone());
-            self.bind_impl(x.into(), v_ty, depth + 1);
+        for variant_def in &def.variants {
+            let mut fields = IndexVec::new();
+            for field_ty in &variant_def.field_tys {
+                let x = self.temp_vars.next_index();
+                fields.push(x);
+                let mut field_ty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
+                field_ty.instantiate_ty_params(ty.args.clone());
+                self.bind_impl(x.into(), field_ty, depth + 1);
+            }
+            variants.push(FlowBindingVariant { fields });
         }
 
         let mut existentials = refinement.existentials;
@@ -966,8 +1000,9 @@ impl Env {
         let mut pred_args: Vec<_> =
             variants
                 .iter()
-                .map(|&v| {
-                    let ty = self.var_type(v.into());
+                .flat_map(|v| &v.fields)
+                .map(|&x| {
+                    let ty = self.var_type(x.into());
                     assumption.conds.extend(ty.conds.into_iter().map(|a| {
                         a.map_var(|v| v.shift_existential(assumption.existentials.len()))
                     }));
@@ -1128,17 +1163,19 @@ impl Env {
                 variants,
                 sym,
             }) => {
-                let tys: IndexVec<_, _> =
-                    variants.iter().map(|&v| self.var_type(v.into())).collect();
+                let field_tys: Vec<_> = variants
+                    .iter()
+                    .flat_map(|v| &v.fields)
+                    .map(|&v| self.var_type(v.into()))
+                    .collect();
 
                 let arg_rtys = {
                     let def = &self.enum_defs[&sym];
-                    let variant_tys = def
-                        .variants
-                        .iter()
-                        .map(|v| rty::RefinedType::unrefined(v.ty.clone().vacuous()));
-                    let got_tys = tys.iter().map(|ty| ty.clone().into());
-                    rty::unify_tys_params(variant_tys, got_tys).into_params(def.ty_params, |_| {
+                    let expected_tys = def
+                        .field_tys()
+                        .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()));
+                    let got_tys = field_tys.iter().map(|ty| ty.clone().into());
+                    rty::unify_tys_params(expected_tys, got_tys).into_params(def.ty_params, |_| {
                         panic!("var_type: should unify all params")
                     })
                 };
@@ -1148,7 +1185,7 @@ impl Env {
                     .matcher_preds
                     .borrow_mut()
                     .get_or_create(&sym, &enum_ty.arg_sorts());
-                PlaceType::enum_(enum_ty, matcher_pred, *discr, tys)
+                PlaceType::enum_(enum_ty, matcher_pred, *discr, field_tys)
             }
             None => {
                 let rty = self.var(var).expect("unbound var");
@@ -1222,13 +1259,20 @@ impl Env {
     fn locate_place(&self, place: Place<'_>) -> Var {
         let mut var = place.local.into();
 
-        for elem in place.projection {
+        let mut it = place.projection.into_iter();
+        loop {
+            let Some(elem) = it.next() else {
+                break;
+            };
             var = match (elem, self.flow_binding(var).expect("deref unbound var")) {
                 (PlaceElem::Deref, &FlowBinding::Box(x)) => x.into(),
                 (PlaceElem::Deref, &FlowBinding::Mut(x, _)) => x.into(),
                 (PlaceElem::Field(idx, _), FlowBinding::Tuple(xs)) => xs[idx.as_usize()].into(),
-                (PlaceElem::Downcast(_, idx), FlowBinding::Enum { variants, .. }) => {
-                    variants[idx].into()
+                (PlaceElem::Downcast(_, variant_idx), FlowBinding::Enum { variants, .. }) => {
+                    let Some(PlaceElem::Field(field_idx, _)) = it.next() else {
+                        panic!("downcast not followed by field")
+                    };
+                    variants[variant_idx].fields[field_idx].into()
                 }
                 _ => unimplemented!("elem={:?}", elem),
             };
@@ -1248,20 +1292,28 @@ enum Path {
     Local(Local),
     Deref(Box<Path>),
     TupleProj(Box<Path>, usize),
-    Downcast(Box<Path>, VariantIdx),
+    Downcast(Box<Path>, VariantIdx, FieldIdx),
 }
 
 impl<'tcx> From<Place<'tcx>> for Path {
     fn from(place: Place<'tcx>) -> Self {
-        place
-            .projection
-            .into_iter()
-            .fold(Path::Local(place.local), |path, elem| match elem {
-                PlaceElem::Deref => Path::Deref(Box::new(path)),
-                PlaceElem::Field(idx, _) => Path::TupleProj(Box::new(path), idx.as_usize()),
-                PlaceElem::Downcast(_, idx) => Path::Downcast(Box::new(path), idx),
+        let mut it = place.projection.into_iter();
+        let mut path = Path::Local(place.local);
+        loop {
+            path = match it.next() {
+                Some(PlaceElem::Deref) => Path::Deref(Box::new(path)),
+                Some(PlaceElem::Field(idx, _)) => Path::TupleProj(Box::new(path), idx.as_usize()),
+                Some(PlaceElem::Downcast(_, variant_idx)) => {
+                    let Some(PlaceElem::Field(field_idx, _)) = it.next() else {
+                        panic!("downcast not followed by field")
+                    };
+                    Path::Downcast(Box::new(path), variant_idx, field_idx)
+                }
+                None => break,
                 _ => unimplemented!(),
-            })
+            };
+        }
+        path
     }
 }
 
@@ -1277,7 +1329,10 @@ impl Env {
             Path::Local(local) => self.local_type(*local),
             Path::Deref(path) => self.path_type(path).deref(),
             Path::TupleProj(path, idx) => self.path_type(path).tuple_proj(*idx),
-            Path::Downcast(path, idx) => self.path_type(path).downcast(*idx, &self.enum_defs),
+            Path::Downcast(path, variant_idx, field_idx) => {
+                self.path_type(path)
+                    .downcast(*variant_idx, *field_idx, &self.enum_defs)
+            }
         }
     }
 

@@ -136,10 +136,16 @@ impl<'tcx> Analyzer<'tcx> {
             .iter()
             .map(|v| chc::DatatypeCtor {
                 symbol: v.name.clone(),
-                selectors: vec![chc::DatatypeSelector {
-                    symbol: chc::DatatypeSymbol::new(format!("_get{}", v.name)),
-                    sort: v.ty.to_sort(),
-                }],
+                selectors: v
+                    .field_tys
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, ty)| chc::DatatypeSelector {
+                        symbol: chc::DatatypeSymbol::new(format!("_get{}.{}", v.name, idx)),
+                        sort: ty.to_sort(),
+                    })
+                    .collect(),
                 discriminant: v.discr,
             })
             .collect();

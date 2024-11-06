@@ -203,13 +203,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 })
             }
             Rvalue::Aggregate(kind, fields) => {
-                let fields_ty = PlaceType::tuple(
-                    // elaboration: all fields are boxed
-                    fields
-                        .into_iter()
-                        .map(|operand| self.operand_type(operand).boxed())
-                        .collect(),
-                );
+                // elaboration: all fields are boxed
+                let field_tys: Vec<_> = fields
+                    .into_iter()
+                    .map(|operand| self.operand_type(operand).boxed())
+                    .collect();
                 match *kind {
                     mir::AggregateKind::Adt(did, variant_id, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
@@ -220,10 +218,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
 
                         let enum_variant_def = self.ctx.find_enum_variant(&ty_sym, &v_sym).unwrap();
-                        let variant_rty =
-                            rty::RefinedType::unrefined(enum_variant_def.ty.clone().vacuous());
+                        let variant_rtys = enum_variant_def
+                            .field_tys
+                            .clone()
+                            .into_iter()
+                            .map(|ty| rty::RefinedType::unrefined(ty.vacuous()));
                         let mir_ty_args: IndexVec<_, _> = args.types().collect();
-                        let params_subst = variant_rty.unify_ty_params(fields_ty.clone().into());
+                        let params_subst = rty::unify_tys_params(
+                            variant_rtys,
+                            field_tys.clone().into_iter().map(Into::into),
+                        );
                         let params = params_subst.into_params(mir_ty_args.len(), |idx| {
                             rty::RefinedType::unrefined(
                                 self.ctx.unrefined_ty(mir_ty_args[idx]).vacuous(),
@@ -232,17 +236,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
                         let sort_args: Vec<_> = params.iter().map(|rty| rty.ty.to_sort()).collect();
                         let ty = rty::EnumType::new(ty_sym.clone(), params).into();
-                        fields_ty.replace(|_, fields_term| {
-                            let term = chc::Term::datatype_ctor(
-                                ty_sym,
-                                sort_args,
-                                v_sym,
-                                vec![fields_term],
-                            );
-                            (ty, term)
-                        })
+                        PlaceType::aggregate(
+                            field_tys,
+                            |_| ty,
+                            |fields_term| {
+                                chc::Term::datatype_ctor(ty_sym, sort_args, v_sym, fields_term)
+                            },
+                        )
                     }
-                    _ => fields_ty,
+                    _ => PlaceType::tuple(field_tys),
                 }
             }
             Rvalue::Cast(
