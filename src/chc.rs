@@ -1045,12 +1045,14 @@ impl System {
 
     pub fn solve(&self) -> Result<(), CheckSatError> {
         let system = unbox(self.clone());
-        let mut f = std::fs::File::create("refinement-analyzer.txt").unwrap();
-        for (idx, c) in system.clauses.iter_enumerated() {
-            use crate::pretty::PrettyDisplayExt as _;
-            use std::io::Write as _;
-            write!(f, "{:?}: {}\n", idx, c.display()).unwrap();
+        if let Some(file) = std::env::var("THRUST_PRETTY_OUTPUT").ok() {
+            let mut f = std::fs::File::create(file).unwrap();
+            for (idx, c) in system.clauses.iter_enumerated() {
+                use crate::pretty::PrettyDisplayExt as _;
+                use std::io::Write as _;
+                write!(f, "{:?}: {}\n", idx, c.display()).unwrap();
+            }
         }
-        Config::load_env().check_sat(system.smtlib2())
+        Config::from_env().check_sat(system.smtlib2())
     }
 }

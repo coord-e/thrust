@@ -1,6 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off -C opt-level=3
-//@rustc-env: REFA_SOLVER_TIMEOUT_SECS=120
+//@rustc-env: THRUST_SOLVER_TIMEOUT_SECS=120
 
 enum List {
   Cons(i32, Box<List>),
