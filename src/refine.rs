@@ -8,7 +8,7 @@ mod matcher_pred;
 pub use matcher_pred::MatcherPredCache;
 
 mod env;
-pub use env::{Env, PlaceType, TempVarIdx, UnboundAssumption, Var};
+pub use env::{Env, PlaceType, PlaceTypeVar, TempVarIdx, UnboundAssumption, Var};
 
 use crate::chc::DatatypeSymbol;
 use rustc_middle::ty as mir_ty;

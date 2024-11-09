@@ -11,10 +11,10 @@ use rustc_target::abi::FieldIdx;
 
 use crate::analyze;
 use crate::chc;
-use crate::pretty::{PrettyDisplayExt as _, PrettySliceExt as _};
+use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, BasicBlockType, Env, PlaceType, TempVarIdx, TemplateTypeGenerator, UnboundAssumption,
-    UnrefinedTypeGenerator, Var,
+    self, BasicBlockType, Env, PlaceType, PlaceTypeVar, TempVarIdx, TemplateTypeGenerator,
+    UnboundAssumption, UnrefinedTypeGenerator, Var,
 };
 use crate::rty::{self, ClauseBuilderExt as _, ClauseScope as _, Subtyping as _};
 
@@ -889,23 +889,19 @@ impl<T> UnbindAtoms<T> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip(self, expected_params))]
     fn bind_locals(
         &mut self,
-    ) -> IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>> {
-        let mut params_template = IndexVec::new();
-        let mut template_pred_sig = Vec::new();
-        let mut template_pred_args = Vec::new();
-        let mut env_pred_existentials = IndexVec::new();
-        let mut env_pred_args = Vec::new();
-        let mut env_pred_conds = Vec::new();
+        expected_params: &IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
+    ) {
+        let mut param_terms = HashMap::new();
+        let mut assumption = UnboundAssumption::default();
 
         let bb_ty = self.basic_block_ty(self.basic_block).clone();
         let params = &bb_ty.as_ref().params;
         assert!(params.len() >= 1);
         for (param_idx, param_rty) in params.iter_enumerated() {
             let param_ty = &param_rty.ty;
-            params_template.push(rty::RefinedType::unrefined(param_ty.clone()));
             if let Some(local) = bb_ty.local_of_param(param_idx) {
                 self.env.bind(
                     local,
@@ -917,42 +913,39 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     continue;
                 }
 
-                template_pred_sig.push(param_sort);
-                template_pred_args.push(chc::Term::var(rty::RefinedTypeVar::Free(param_idx)));
                 let local_ty = self.env.local_type(local);
-                env_pred_args.push(
-                    local_ty
-                        .term
-                        .map_var(|v| v.shift_existential(env_pred_existentials.len())),
-                );
-                env_pred_conds.extend(
+                assumption.conds.extend(
                     local_ty
                         .conds
                         .into_iter()
-                        .map(|a| a.map_var(|v| v.shift_existential(env_pred_existentials.len()))),
+                        .map(|a| a.map_var(|v| v.shift_existential(assumption.existentials.len()))),
                 );
-                env_pred_existentials.extend(local_ty.existentials);
+                let term = local_ty
+                    .term
+                    .map_var(|v| v.shift_existential(assumption.existentials.len()));
+                assumption.existentials.extend(local_ty.existentials);
+                param_terms.insert(param_idx, term);
             }
         }
 
-        tracing::debug!(template_pred_sig = %template_pred_sig.pretty_slice().display(), "bind_locals");
-        let pvar = self.ctx.generate_pred_var(template_pred_sig);
-        if let Some(last) = template_pred_args.last_mut() {
-            *last = chc::Term::var(rty::RefinedTypeVar::Value);
+        for (idx, param) in expected_params.iter_enumerated() {
+            let rty::Refinement {
+                existentials,
+                atoms,
+            } = param.refinement.clone();
+            assumption.conds.extend(atoms.into_iter().map(|a| {
+                a.subst_var(|v| match v {
+                    rty::RefinedTypeVar::Value => param_terms[&idx].clone(),
+                    rty::RefinedTypeVar::Free(v) => param_terms[&v].clone(),
+                    rty::RefinedTypeVar::Existential(ev) => chc::Term::var(
+                        PlaceTypeVar::Existential(ev + assumption.existentials.len()),
+                    ),
+                })
+            }));
+            assumption.existentials.extend(existentials);
         }
-        params_template.iter_mut().last().unwrap().refinement =
-            chc::Atom::new(pvar.into(), template_pred_args).into();
 
-        env_pred_conds.push(chc::Atom::new(pvar.into(), env_pred_args));
-        let assumption = UnboundAssumption::new(env_pred_existentials, env_pred_conds);
-        tracing::debug!(
-            assumption = %assumption.display(),
-            params_template = %params_template.pretty_slice().display(),
-            "bind_locals",
-        );
         self.env.assume(assumption);
-
-        params_template
     }
 
     fn unbind_atoms(&self) -> UnbindAtoms<rty::FunctionParamIdx> {
@@ -1018,7 +1011,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let span = tracing::info_span!("bb", bb = ?self.basic_block);
         let _guard = span.enter();
 
-        let param_templates = self.bind_locals();
+        let params = expected.as_ref().params.clone();
+        self.bind_locals(&params);
         let unbind_atoms = self.unbind_atoms();
         self.alloc_prophecies();
         self.analyze_statements();
@@ -1029,7 +1023,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.analyze_terminator_goto(&term, &ret_template);
 
         let got_ret_ty = unbind_atoms.unbind(&self.env, ret_template);
-        let got_ty = rty::FunctionType::new(param_templates, got_ret_ty).into_closed_ty();
+        let got_ty = rty::FunctionType::new(params, got_ret_ty).into_closed_ty();
         let clauses = self
             .env
             .relate_sub_type(&got_ty, &expected.to_function_ty().into_closed_ty());

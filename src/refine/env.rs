@@ -679,7 +679,7 @@ impl PlaceType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct UnboundAssumption {
     pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
     pub conds: Vec<chc::Atom<PlaceTypeVar>>,
