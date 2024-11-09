@@ -103,7 +103,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // TODO: check sty and length is equal
         let mut builder = self.env.build_clause();
         for (param_idx, param_rty) in got.params.iter_enumerated() {
-            builder.add_mapped_var(param_idx, param_rty.ty.to_sort());
+            let param_sort = param_rty.ty.to_sort();
+            if !param_sort.is_singleton() {
+                builder.add_mapped_var(param_idx, param_sort);
+            }
         }
         for ((param_idx, got_ty), expected_ty) in got.params.iter_enumerated().zip(&expected_args) {
             // TODO we can use relate_sub_refined_type here when we implemenented builder-aware relate_*
@@ -900,14 +903,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let param_ty = &param_rty.ty;
             params_template.push(rty::RefinedType::unrefined(param_ty.clone()));
             if let Some(local) = bb_ty.local_of_param(param_idx) {
-                template_pred_sig.push(param_ty.to_sort());
-                template_pred_args.push(chc::Term::var(rty::RefinedTypeVar::Free(param_idx)));
-
                 self.env.bind(
                     local,
                     // TODO: polymorphic datatypes: template needed?
                     rty::RefinedType::unrefined(param_ty.clone().strip_refinement().vacuous()),
                 );
+                let param_sort = param_ty.to_sort();
+                if param_sort.is_singleton() {
+                    continue;
+                }
+
+                template_pred_sig.push(param_sort);
+                template_pred_args.push(chc::Term::var(rty::RefinedTypeVar::Free(param_idx)));
                 let local_ty = self.env.local_type(local);
                 env_pred_args.push(
                     local_ty
@@ -947,11 +954,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn unbind_atoms(&self) -> UnbindAtoms<rty::FunctionParamIdx> {
         let bb_ty = self.basic_block_ty(self.basic_block);
         let mut atoms = UnbindAtoms::default();
-        if self.is_defined(mir::RETURN_PLACE.into()) {
+        if self.is_defined(mir::RETURN_PLACE.into())
+            && !bb_ty.as_ref().ret.ty.to_sort().is_singleton()
+        {
             let r_ty = self.operand_type(Operand::Move(mir::RETURN_PLACE.into()));
             atoms.push(rty::RefinedTypeVar::Value, r_ty);
         }
-        for param_idx in bb_ty.as_ref().params.indices() {
+        for (param_idx, param_ty) in bb_ty.as_ref().params.iter_enumerated() {
+            if param_ty.ty.to_sort().is_singleton() {
+                continue;
+            }
             if let Some(local) = bb_ty.local_of_param(param_idx) {
                 let local_ty = self.env.local_type(local);
                 atoms.push(rty::RefinedTypeVar::Free(param_idx), local_ty);

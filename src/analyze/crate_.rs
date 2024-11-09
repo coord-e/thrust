@@ -129,7 +129,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .clone();
             let mut builder = chc::ClauseBuilder::default();
             for (param_idx, param_ty) in entry_ty.params.iter_enumerated() {
-                builder.add_mapped_var(param_idx, param_ty.ty.to_sort());
+                let param_sort = param_ty.ty.to_sort();
+                if !param_sort.is_singleton() {
+                    builder.add_mapped_var(param_idx, param_sort);
+                }
             }
             builder.add_body(chc::Atom::top());
             for param_ty in entry_ty.params {

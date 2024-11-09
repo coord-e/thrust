@@ -92,7 +92,10 @@ where
                 // TODO: check length is equal
                 let mut builder = chc::ClauseBuilder::default();
                 for (param_idx, param_rty) in got.params.iter_enumerated() {
-                    builder.add_mapped_var(param_idx, param_rty.ty.to_sort());
+                    let param_sort = param_rty.ty.to_sort();
+                    if !param_sort.is_singleton() {
+                        builder.add_mapped_var(param_idx, param_sort);
+                    }
                 }
                 for (got_ty, expected_ty) in got.params.iter().zip(expected.params.iter()) {
                     let cs = builder.relate_sub_refined_type(expected_ty, got_ty);

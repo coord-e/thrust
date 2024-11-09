@@ -770,7 +770,9 @@ impl rty::ClauseScope for Env {
                 let tv = builder.add_var(sort.clone());
                 instantiator.existential(ev, tv);
             }
-            instantiator.value_var(builder.mapped_var(var));
+            if !rty.ty.to_sort().is_singleton() {
+                instantiator.value_var(builder.mapped_var(var));
+            }
             for atom in instantiator.into_atoms() {
                 builder.add_body(atom);
             }
@@ -1106,6 +1108,7 @@ impl Env {
                     .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), &rty.ty))),
             )
             .map(|(v, ty)| (v, ty.to_sort()))
+            .filter(|(_, s)| !s.is_singleton())
     }
 
     fn vars(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
