@@ -11,7 +11,7 @@ use rustc_target::abi::FieldIdx;
 
 use crate::analyze;
 use crate::chc;
-use crate::pretty::PrettyDisplayExt as _;
+use crate::pretty::{PrettyDisplayExt as _, PrettySliceExt as _};
 use crate::refine::{
     self, BasicBlockType, Env, PlaceType, TempVarIdx, TemplateTypeGenerator, UnboundAssumption,
     UnrefinedTypeGenerator, Var,
@@ -924,7 +924,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
 
-        tracing::debug!(?template_pred_sig, "bind_locals");
+        tracing::debug!(template_pred_sig = %template_pred_sig.pretty_slice().display(), "bind_locals");
         let pvar = self.ctx.generate_pred_var(template_pred_sig);
         if let Some(last) = template_pred_args.last_mut() {
             *last = chc::Term::var(rty::RefinedTypeVar::Value);
@@ -934,7 +934,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         env_pred_conds.push(chc::Atom::new(pvar.into(), env_pred_args));
         let assumption = UnboundAssumption::new(env_pred_existentials, env_pred_conds);
-        tracing::debug!(assumption = %assumption.display(), ?params_template, "bind_locals");
+        tracing::debug!(
+            assumption = %assumption.display(),
+            params_template = %params_template.pretty_slice().display(),
+            "bind_locals",
+        );
         self.env.assume(assumption);
 
         params_template
