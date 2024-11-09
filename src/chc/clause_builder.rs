@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use rustc_index::IndexVec;
 
-use super::{Atom, Clause, Sort, TermVarIdx};
+use super::{Atom, Clause, DebugInfo, Sort, TermVarIdx};
 
 pub trait Var: Eq + Hash + Copy + Debug + 'static {}
 impl<T: Eq + Hash + Copy + Debug + 'static> Var for T {}
@@ -118,7 +118,12 @@ impl ClauseBuilder {
         } else if body.iter().any(Atom::is_bottom) {
             body = vec![Atom::bottom()];
         }
-        Clause { vars, head, body }
+        Clause {
+            vars,
+            head,
+            body,
+            debug_info: DebugInfo::from_current_span(),
+        }
     }
 
     pub fn head_mapped<T>(&self, head: Atom<T>) -> Clause

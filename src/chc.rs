@@ -5,6 +5,7 @@ use rustc_index::IndexVec;
 use crate::pretty::PrettyDisplayExt as _;
 
 mod clause_builder;
+mod debug;
 mod format_context;
 mod hoice;
 mod smtlib2;
@@ -12,6 +13,7 @@ mod solver;
 mod unbox;
 
 pub use clause_builder::{ClauseBuilder, Var};
+pub use debug::DebugInfo;
 pub use solver::{CheckSatError, Config};
 pub use unbox::unbox;
 
@@ -965,6 +967,7 @@ pub struct Clause {
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
     pub body: Vec<Atom<TermVarIdx>>,
+    pub debug_info: DebugInfo,
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Clause
@@ -1037,16 +1040,22 @@ rustc_index::newtype_index! {
 
 pub type PredSig = Vec<Sort>;
 
+#[derive(Debug, Clone)]
+pub struct PredVarDef {
+    pub sig: PredSig,
+    pub debug_info: DebugInfo,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct System {
     pub datatypes: Vec<Datatype>,
     pub clauses: IndexVec<ClauseId, Clause>,
-    pub pred_vars: IndexVec<PredVarId, PredSig>,
+    pub pred_vars: IndexVec<PredVarId, PredVarDef>,
 }
 
 impl System {
-    pub fn new_pred_var(&mut self, sig: PredSig) -> PredVarId {
-        self.pred_vars.push(sig)
+    pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
+        self.pred_vars.push(PredVarDef { sig, debug_info })
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {

@@ -36,6 +36,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let mut builder = analyze::basic_block::DropPoints::builder(self.body);
         for (bb, _data) in mir::traversal::postorder(self.body) {
+            let span = tracing::info_span!("refine_basic_block", ?bb);
+            let _guard = span.enter();
+
             self.drop_points.insert(bb, builder.build(&mut results, bb));
             results.seek_to_block_start(bb);
             let mut live_locals: Vec<_> = results
@@ -198,6 +201,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn run(&mut self, expected: &rty::RefinedType) {
+        let span = tracing::info_span!("def", def = %self.tcx.def_path_str(self.local_def_id));
+        let _guard = span.enter();
+
         self.refine_basic_blocks();
         self.analyze_basic_blocks();
         self.assert_entry(expected);

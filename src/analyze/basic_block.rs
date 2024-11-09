@@ -700,6 +700,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         term
     }
 
+    #[tracing::instrument(skip(self), fields(term = ?term.kind))]
     fn analyze_terminator_binds(&mut self, term: &mir::Terminator<'tcx>) {
         match &term.kind {
             TerminatorKind::Call {
@@ -725,6 +726,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    #[tracing::instrument(skip(self, expected_ret), fields(term = ?term.kind))]
     fn analyze_terminator_goto(
         &mut self,
         term: &mir::Terminator<'tcx>,
@@ -772,6 +774,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     fn ret_template(&mut self) -> rty::RefinedType<Var> {
         let bb_ty = self.basic_block_ty(self.basic_block);
         let ret_ty = bb_ty.as_ref().ret.ty.clone();
@@ -886,6 +889,7 @@ impl<T> UnbindAtoms<T> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    #[tracing::instrument(skip(self))]
     fn bind_locals(
         &mut self,
     ) -> IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>> {
@@ -1011,7 +1015,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn run(&mut self, expected: &BasicBlockType) {
-        let span = tracing::debug_span!("bb", bb = ?self.basic_block);
+        let span = tracing::info_span!("bb", bb = ?self.basic_block);
         let _guard = span.enter();
 
         let param_templates = self.bind_locals();

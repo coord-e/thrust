@@ -26,6 +26,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(def_id)))]
     fn refine_fn_def(&mut self, def_id: DefId) {
         let sig = self.tcx.fn_sig(def_id);
         let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
@@ -210,6 +211,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn run(&mut self) {
+        let span = tracing::debug_span!("crate", krate = %self.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE));
+        let _guard = span.enter();
+
         self.register_enum_defs();
         self.refine_local_defs();
         self.analyze_local_defs();

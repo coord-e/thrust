@@ -45,15 +45,27 @@ fn unbox_sort(sort: Sort) -> Sort {
 }
 
 fn unbox_clause(clause: Clause) -> Clause {
-    let Clause { vars, head, body } = clause;
+    let Clause {
+        vars,
+        head,
+        body,
+        debug_info,
+    } = clause;
     let vars = vars.into_iter().map(unbox_sort).collect();
     let head = unbox_atom(head);
     let body = body.into_iter().map(unbox_atom).collect();
-    Clause { vars, head, body }
+    Clause {
+        vars,
+        head,
+        body,
+        debug_info,
+    }
 }
 
-fn unbox_pred_sig(pred_sig: PredSig) -> PredSig {
-    pred_sig.into_iter().map(unbox_sort).collect()
+fn unbox_pred_var_def(pred_var_def: PredVarDef) -> PredVarDef {
+    let PredVarDef { sig, debug_info } = pred_var_def;
+    let sig = sig.into_iter().map(unbox_sort).collect();
+    PredVarDef { sig, debug_info }
 }
 
 fn unbox_datatype_selector(selector: DatatypeSelector) -> DatatypeSelector {
@@ -98,7 +110,7 @@ pub fn unbox(system: System) -> System {
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
-    let pred_vars = pred_vars.into_iter().map(unbox_pred_sig).collect();
+    let pred_vars = pred_vars.into_iter().map(unbox_pred_var_def).collect();
     System {
         clauses,
         pred_vars,

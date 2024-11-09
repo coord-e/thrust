@@ -190,8 +190,8 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
 fn collect_sorts(system: &chc::System) -> HashSet<chc::Sort> {
     let mut sorts = HashSet::new();
 
-    for sig in &system.pred_vars {
-        sorts.extend(sig.clone());
+    for def in &system.pred_vars {
+        sorts.extend(def.sig.clone());
     }
 
     for clause in &system.clauses {

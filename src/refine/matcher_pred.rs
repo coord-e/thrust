@@ -12,6 +12,7 @@ use rustc_index::IndexVec;
 use rustc_span::def_id::DefId;
 
 use crate::chc;
+use crate::pretty::{PrettyDisplayExt as _, PrettySliceExt as _};
 use crate::rty;
 
 #[derive(Debug, Clone)]
@@ -49,6 +50,7 @@ impl MatcherPredCache {
         matcher_pred
     }
 
+    #[tracing::instrument(name = "matcher_pred", skip(self), fields(symbol = %symbol, args = %args.pretty_slice().display()))]
     fn create(&self, symbol: &chc::DatatypeSymbol, args: &[chc::Sort]) -> chc::PredVarId {
         let def = self
             .datatypes
@@ -66,10 +68,10 @@ impl MatcherPredCache {
             })
             .collect();
         matcher_pred_sig.push(chc::Sort::datatype(def.name.clone(), args.to_vec()));
-        let matcher_pred = self
-            .system
-            .borrow_mut()
-            .new_pred_var(matcher_pred_sig.clone());
+        let matcher_pred = self.system.borrow_mut().new_pred_var(
+            matcher_pred_sig.clone(),
+            chc::DebugInfo::from_current_span(),
+        );
 
         let vars = IndexVec::<chc::TermVarIdx, _>::from_raw(matcher_pred_sig);
         let data_var: chc::TermVarIdx = (vars.len() - 1).into();
@@ -97,6 +99,7 @@ impl MatcherPredCache {
                 vars: vars.clone(),
                 head: head.clone(),
                 body: vec![body1, body2],
+                debug_info: chc::DebugInfo::from_current_span(),
             };
             self.system.borrow_mut().push_clause(clause);
         }

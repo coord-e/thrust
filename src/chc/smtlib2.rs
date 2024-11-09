@@ -234,6 +234,9 @@ pub struct Clause<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.inner.debug_info.is_empty() {
+            writeln!(f, "{}", self.inner.debug_info.display("; "))?;
+        }
         let body = List::open(
             self.inner
                 .body
@@ -396,16 +399,19 @@ impl<'a> std::fmt::Display for System<'a> {
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
         }
-        for (p, sorts) in self.inner.pred_vars.iter_enumerated() {
+        for (p, def) in self.inner.pred_vars.iter_enumerated() {
+            if !def.debug_info.is_empty() {
+                writeln!(f, "{}", def.debug_info.display("; "))?;
+            }
             writeln!(
                 f,
-                "(declare-fun {} {} Bool)",
+                "(declare-fun {} {} Bool)\n",
                 p,
-                List::closed(sorts.iter().map(|s| self.ctx.fmt_sort(s)))
+                List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
             )?;
         }
         for clause in &self.inner.clauses {
-            writeln!(f, "(assert {})", Clause::new(&self.ctx, clause))?;
+            writeln!(f, "\n(assert {})", Clause::new(&self.ctx, clause))?;
         }
         Ok(())
     }

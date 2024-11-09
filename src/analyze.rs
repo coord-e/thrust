@@ -70,8 +70,10 @@ impl<'tcx> crate::refine::UnrefinedTypeGenerator<'tcx> for Analyzer<'tcx> {
 }
 
 impl<'tcx> Analyzer<'tcx> {
-    pub fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId {
-        self.system.borrow_mut().new_pred_var(pred_sig)
+    pub fn generate_pred_var(&mut self, sig: chc::PredSig) -> chc::PredVarId {
+        self.system
+            .borrow_mut()
+            .new_pred_var(sig, chc::DebugInfo::from_current_span())
     }
 
     fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
