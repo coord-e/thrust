@@ -173,7 +173,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
             }
             chc::Term::DatatypeCtor(sort, sym, args) => {
                 if args.is_empty() {
-                    write!(f, "{}", sym)
+                    write!(f, "{}", self.ctx.datatype_ctor(sort, sym))
                 } else {
                     write!(
                         f,
