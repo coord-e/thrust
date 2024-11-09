@@ -31,9 +31,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let sig = self.tcx.fn_sig(def_id);
         let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
 
-        // TODO: merge this into FunctionTemplateBuilder or something like that
-        let mut rty = self.ctx.function_template_ty(sig);
-
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).into_iter().zip(sig.inputs()) {
             param_resolver.push_param(input_ident.name, input_ty);
@@ -79,26 +76,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             assert!(require_annot.is_some());
             self.trusted.insert(def_id);
         }
+
+        let mut builder = self.ctx.build_function_template_ty(sig);
         if let Some(AnnotAtom::Atom(require)) = require_annot {
-            let last_idx = rty.params.last_index().unwrap();
-            for (param_idx, param_ty) in rty.params.iter_enumerated_mut() {
-                let refinement = if param_idx == last_idx {
-                    require.clone().into()
-                } else {
-                    rty::Refinement::top()
-                };
-                *param_ty = rty::RefinedType::new(
-                    param_ty.clone().strip_refinement().vacuous(),
-                    refinement,
-                );
-            }
+            builder.param_refinement(require.into());
         }
         if let Some(AnnotAtom::Atom(ensure)) = ensure_annot {
-            *rty.ret =
-                rty::RefinedType::new(rty.ret.clone().strip_refinement().vacuous(), ensure.into());
+            builder.ret_refinement(ensure.into());
         }
 
-        let rty = rty::RefinedType::unrefined(rty.into());
+        let rty = rty::RefinedType::unrefined(builder.build().into());
         self.ctx.register_def(def_id, rty);
     }
 

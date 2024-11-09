@@ -29,44 +29,6 @@ where
     }
 }
 
-fn function_ty_impl<'a, 'tcx, T>(
-    g: &'a mut T,
-    params: Vec<mir_ty::TypeAndMut<'tcx>>,
-    ret_ty: mir_ty::Ty<'tcx>,
-) -> rty::FunctionType
-where
-    T: TemplateTypeGenerator<'tcx> + ?Sized,
-{
-    let mut builder = rty::TemplateBuilder::default();
-    let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
-    for (idx, param_ty) in params.iter().enumerate() {
-        let param_rty = if idx == params.len() - 1 {
-            g.build_template_ty(&builder).refined_ty(param_ty.ty)
-        } else {
-            rty::RefinedType::unrefined(g.build_template_ty(&builder).ty(param_ty.ty))
-        };
-        let param_rty = if param_ty.mutbl.is_mut() {
-            // elaboration: treat mutabully declared variables as own
-            param_rty.boxed()
-        } else {
-            param_rty
-        };
-        let param_sort = param_rty.ty.to_sort();
-        let param_idx = param_rtys.push(param_rty);
-        builder.add_dependency(param_idx, param_sort);
-    }
-
-    // elaboration: we need at least one predicate variable in parameter
-    if params.is_empty() {
-        let unit_ty = mir_ty::Ty::new_unit(g.tcx());
-        let param_rty = g.build_template_ty(&builder).refined_ty(unit_ty);
-        param_rtys.push(param_rty);
-    }
-
-    let ret_rty = g.build_template_ty(&builder).refined_ty(ret_ty);
-    rty::FunctionType::new(param_rtys, ret_rty)
-}
-
 pub trait TemplateTypeGenerator<'tcx> {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
     fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V>;
@@ -79,11 +41,31 @@ pub trait TemplateTypeGenerator<'tcx> {
         }
     }
 
-    fn basic_block_template_ty<I>(
+    fn build_function_template_ty(
+        &mut self,
+        sig: mir_ty::FnSig<'tcx>,
+    ) -> FunctionTemplateTypeBuilder<'_, 'tcx, Self> {
+        FunctionTemplateTypeBuilder {
+            gen: self,
+            param_tys: sig
+                .inputs()
+                .iter()
+                .map(|ty| mir_ty::TypeAndMut {
+                    ty: *ty,
+                    mutbl: Mutability::Not,
+                })
+                .collect(),
+            ret_ty: sig.output(),
+            param_refinement: None,
+            ret_rty: None,
+        }
+    }
+
+    fn build_basic_block_template_ty<I>(
         &mut self,
         live_locals: I,
         ret_ty: mir_ty::Ty<'tcx>,
-    ) -> BasicBlockType
+    ) -> BasicBlockTemplateTypeBuilder<'_, 'tcx, Self>
     where
         I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
     {
@@ -94,22 +76,30 @@ pub trait TemplateTypeGenerator<'tcx> {
             locals.push((local, ty.mutbl));
             tys.push(ty);
         }
-        let ty = function_ty_impl(self, tys, ret_ty);
-        BasicBlockType { ty, locals }
+        let inner = FunctionTemplateTypeBuilder {
+            gen: self,
+            param_tys: tys,
+            ret_ty,
+            param_refinement: None,
+            ret_rty: None,
+        };
+        BasicBlockTemplateTypeBuilder { inner, locals }
+    }
+
+    fn basic_block_template_ty<I>(
+        &mut self,
+        live_locals: I,
+        ret_ty: mir_ty::Ty<'tcx>,
+    ) -> BasicBlockType
+    where
+        I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
+    {
+        self.build_basic_block_template_ty(live_locals, ret_ty)
+            .build()
     }
 
     fn function_template_ty(&mut self, sig: mir_ty::FnSig<'tcx>) -> rty::FunctionType {
-        function_ty_impl(
-            self,
-            sig.inputs()
-                .iter()
-                .map(|ty| mir_ty::TypeAndMut {
-                    ty: *ty,
-                    mutbl: Mutability::Not,
-                })
-                .collect(),
-            sig.output(),
-        )
+        self.build_function_template_ty(sig).build()
     }
 }
 
@@ -123,6 +113,118 @@ where
 
     fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V> {
         T::register_template(self, tmpl)
+    }
+}
+
+#[derive(Debug)]
+pub struct FunctionTemplateTypeBuilder<'a, 'tcx, T: ?Sized> {
+    // can't use T: TemplateTypeGenerator<'tcx> directly because of recursive instantiation
+    gen: &'a mut T,
+    param_tys: Vec<mir_ty::TypeAndMut<'tcx>>,
+    ret_ty: mir_ty::Ty<'tcx>,
+    param_refinement: Option<rty::Refinement<rty::FunctionParamIdx>>,
+    ret_rty: Option<rty::RefinedType<rty::FunctionParamIdx>>,
+}
+
+impl<'a, 'tcx, T> FunctionTemplateTypeBuilder<'a, 'tcx, T>
+where
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
+{
+    pub fn param_refinement(
+        &mut self,
+        refinement: rty::Refinement<rty::FunctionParamIdx>,
+    ) -> &mut Self {
+        self.param_refinement = Some(refinement);
+        self
+    }
+
+    pub fn ret_refinement(
+        &mut self,
+        refinement: rty::Refinement<rty::FunctionParamIdx>,
+    ) -> &mut Self {
+        let ty = UnrefinedTypeGeneratorWrapper(&mut self.gen).unrefined_ty(self.ret_ty);
+        self.ret_rty = Some(rty::RefinedType::new(ty.vacuous(), refinement));
+        self
+    }
+
+    pub fn ret_rty(&mut self, rty: rty::RefinedType<rty::FunctionParamIdx>) -> &mut Self {
+        self.ret_rty = Some(rty);
+        self
+    }
+
+    pub fn build(&mut self) -> rty::FunctionType {
+        let mut builder = rty::TemplateBuilder::default();
+        let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
+        for (idx, param_ty) in self.param_tys.iter().enumerate() {
+            let param_rty = if idx == self.param_tys.len() - 1 {
+                if let Some(param_refinement) = &self.param_refinement {
+                    let ty = UnrefinedTypeGeneratorWrapper(&mut self.gen).unrefined_ty(param_ty.ty);
+                    rty::RefinedType::new(ty.vacuous(), param_refinement.clone())
+                } else {
+                    self.gen.build_template_ty(&builder).refined_ty(param_ty.ty)
+                }
+            } else {
+                rty::RefinedType::unrefined(self.gen.build_template_ty(&builder).ty(param_ty.ty))
+            };
+            let param_rty = if param_ty.mutbl.is_mut() {
+                // elaboration: treat mutabully declared variables as own
+                param_rty.boxed()
+            } else {
+                param_rty
+            };
+            let param_sort = param_rty.ty.to_sort();
+            let param_idx = param_rtys.push(param_rty);
+            builder.add_dependency(param_idx, param_sort);
+        }
+
+        // elaboration: we need at least one predicate variable in parameter
+        if self.param_tys.is_empty() {
+            let param_rty = if let Some(param_refinement) = &self.param_refinement {
+                rty::RefinedType::new(rty::Type::unit(), param_refinement.clone())
+            } else {
+                let unit_ty = mir_ty::Ty::new_unit(self.gen.tcx());
+                self.gen.build_template_ty(&builder).refined_ty(unit_ty)
+            };
+            param_rtys.push(param_rty);
+        }
+
+        let ret_rty = self
+            .ret_rty
+            .clone()
+            .unwrap_or_else(|| self.gen.build_template_ty(&builder).refined_ty(self.ret_ty));
+        rty::FunctionType::new(param_rtys, ret_rty)
+    }
+}
+
+#[derive(Debug)]
+pub struct BasicBlockTemplateTypeBuilder<'a, 'tcx, T: ?Sized> {
+    inner: FunctionTemplateTypeBuilder<'a, 'tcx, T>,
+    locals: IndexVec<rty::FunctionParamIdx, (Local, mir_ty::Mutability)>,
+}
+
+impl<'a, 'tcx, T> BasicBlockTemplateTypeBuilder<'a, 'tcx, T>
+where
+    T: TemplateTypeGenerator<'tcx> + ?Sized,
+{
+    pub fn param_refinement(
+        &mut self,
+        refinement: rty::Refinement<rty::FunctionParamIdx>,
+    ) -> &mut Self {
+        self.inner.param_refinement(refinement);
+        self
+    }
+
+    pub fn ret_rty(&mut self, rty: rty::RefinedType<rty::FunctionParamIdx>) -> &mut Self {
+        self.inner.ret_rty(rty);
+        self
+    }
+
+    pub fn build(&mut self) -> BasicBlockType {
+        let ty = self.inner.build();
+        BasicBlockType {
+            ty,
+            locals: self.locals.clone(),
+        }
     }
 }
 
@@ -256,5 +358,16 @@ pub trait UnrefinedTypeGenerator<'tcx> {
             }
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
+    }
+}
+
+struct UnrefinedTypeGeneratorWrapper<T>(T);
+
+impl<'tcx, T> UnrefinedTypeGenerator<'tcx> for UnrefinedTypeGeneratorWrapper<T>
+where
+    T: TemplateTypeGenerator<'tcx>,
+{
+    fn tcx(&self) -> mir_ty::TyCtxt<'tcx> {
+        self.0.tcx()
     }
 }
