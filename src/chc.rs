@@ -786,6 +786,10 @@ impl KnownPred {
         self == &KnownPred::TOP
     }
 
+    pub fn is_bottom(&self) -> bool {
+        self == &KnownPred::BOTTOM
+    }
+
     pub const TOP: KnownPred = KnownPred::new("true");
     pub const BOTTOM: KnownPred = KnownPred::new("false");
     pub const EQUAL: KnownPred = KnownPred::infix("=");
@@ -859,6 +863,13 @@ impl Pred {
             Pred::Var(_) => false,
         }
     }
+
+    pub fn is_bottom(&self) -> bool {
+        match self {
+            Pred::Known(p) => p.is_bottom(),
+            Pred::Var(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -918,6 +929,10 @@ impl<V> Atom<V> {
 
     pub fn is_top(&self) -> bool {
         self.pred.is_top()
+    }
+
+    pub fn is_bottom(&self) -> bool {
+        self.pred.is_bottom()
     }
 
     pub fn subst_var<F, W>(self, mut f: F) -> Atom<W>
@@ -1034,9 +1049,12 @@ impl System {
         self.pred_vars.push(sig)
     }
 
-    pub fn push_clause(&mut self, clause: Clause) -> ClauseId {
+    pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
+        if clause.head.is_top() || clause.body.iter().any(Atom::is_bottom) {
+            return None;
+        }
         tracing::debug!(clause = %clause.display(), id = ?self.clauses.next_index(), "push_clause");
-        self.clauses.push(clause)
+        Some(self.clauses.push(clause))
     }
 
     pub fn smtlib2(&self) -> smtlib2::System<'_> {

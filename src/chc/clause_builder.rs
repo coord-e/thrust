@@ -107,7 +107,17 @@ impl ClauseBuilder {
 
     pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
         let vars = self.vars.clone();
-        let body = self.body.clone();
+        let mut body: Vec<_> = self
+            .body
+            .clone()
+            .into_iter()
+            .filter(|a| !a.is_top())
+            .collect();
+        if body.is_empty() {
+            body = vec![Atom::top()];
+        } else if body.iter().any(Atom::is_bottom) {
+            body = vec![Atom::bottom()];
+        }
         Clause { vars, head, body }
     }
 

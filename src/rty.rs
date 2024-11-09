@@ -941,10 +941,12 @@ impl<FV> Refinement<FV> {
         existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
         atoms: Vec<chc::Atom<RefinedTypeVar<FV>>>,
     ) -> Self {
-        Refinement {
+        let mut refinement = Refinement {
             existentials,
             atoms,
-        }
+        };
+        refinement.reduce_atoms();
+        refinement
     }
 
     pub fn has_existentials(&self) -> bool {
@@ -956,11 +958,15 @@ impl<FV> Refinement<FV> {
     }
 
     pub fn is_top(&self) -> bool {
-        self.atoms.iter().all(|a| a.is_top())
+        self.atoms.iter().all(chc::Atom::is_top)
+    }
+
+    pub fn is_bottom(&self) -> bool {
+        self.atoms.iter().any(chc::Atom::is_bottom)
     }
 
     pub fn top() -> Self {
-        chc::Atom::top().into()
+        Refinement::new(IndexVec::new(), vec![])
     }
 
     pub fn bottom() -> Self {
@@ -978,6 +984,14 @@ impl<FV> Refinement<FV> {
                 .map(|a| a.map_var(|v| v.shift_existential(self.existentials.len()))),
         );
         self.existentials.extend(existentials);
+        self.reduce_atoms();
+    }
+
+    fn reduce_atoms(&mut self) {
+        self.atoms.retain(|a| !a.is_top());
+        if self.is_bottom() {
+            self.atoms = vec![chc::Atom::bottom()];
+        }
     }
 
     pub fn subst_var<F, W>(self, mut f: F) -> Refinement<W>

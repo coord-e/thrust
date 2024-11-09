@@ -241,17 +241,24 @@ impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
                 .map(|a| Atom::new(self.ctx, self.inner, a)),
         );
         let head = Atom::new(self.ctx, self.inner, &self.inner.head);
-        if self.inner.vars.is_empty() {
-            write!(f, "(=> (and {body}) {head})")
-        } else {
+        if !self.inner.vars.is_empty() {
             let vars = List::closed(
                 self.inner
                     .vars
                     .iter_enumerated()
                     .map(|(v, s)| List::closed([v.to_string(), self.ctx.fmt_sort(s).to_string()])),
             );
-            write!(f, "(forall {vars} (=> (and {body}) {head}))")
+            write!(f, "(forall {vars} ")?;
         }
+        if self.inner.body.len() == 1 {
+            write!(f, "(=> {body} {head})")?;
+        } else {
+            write!(f, "(=> (and {body}) {head})")?;
+        }
+        if !self.inner.vars.is_empty() {
+            write!(f, ")")?;
+        }
+        Ok(())
     }
 }
 
