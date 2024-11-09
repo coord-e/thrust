@@ -13,8 +13,6 @@ use crate::pretty::PrettyDisplayExt as _;
 use crate::refine;
 use crate::rty;
 
-const BIND_EXPANSION_DEPTH_LIMIT: usize = 10;
-
 rustc_index::newtype_index! {
     #[debug_format = "t{}"]
     pub struct TempVarIdx { }
@@ -752,6 +750,8 @@ pub struct Env {
 
     matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
     enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
+
+    expansion_depth_limit: usize,
 }
 
 impl rty::ClauseScope for Env {
@@ -814,6 +814,10 @@ impl Env {
             unbound_assumptions: Vec::new(),
             matcher_preds,
             enum_defs,
+            expansion_depth_limit: std::env::var("THRUST_EXPANSION_DEPTH_LIMIT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5),
         }
     }
 
@@ -1059,7 +1063,7 @@ impl Env {
     }
 
     fn bind_impl(&mut self, var: Var, rty: rty::RefinedType<Var>, depth: usize) {
-        if depth > BIND_EXPANSION_DEPTH_LIMIT {
+        if depth > self.expansion_depth_limit {
             self.bind_var(var, rty);
             return;
         }
