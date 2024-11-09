@@ -54,6 +54,18 @@ impl<T> List<T> {
         }
     }
 
+    pub fn multiline_open<I>(inner: I) -> Self
+    where
+        I: std::iter::IntoIterator<Item = T>,
+    {
+        Self {
+            open: None,
+            close: None,
+            delimiter: "\n",
+            items: inner.into_iter().collect(),
+        }
+    }
+
     pub fn open<I>(inner: I) -> Self
     where
         I: std::iter::IntoIterator<Item = T>,
@@ -307,7 +319,7 @@ impl<'ctx, 'a> std::fmt::Display for DatatypeCtor<'ctx, 'a> {
             .selectors
             .iter()
             .map(|s| DatatypeSelector::new(self.ctx, s));
-        write!(f, "({} {})", &self.inner.symbol, List::open(selectors))
+        write!(f, "    ({} {})", &self.inner.symbol, List::open(selectors))
     }
 }
 
@@ -325,14 +337,18 @@ pub struct Datatypes<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for Datatypes<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.inner.is_empty() {
+            return Ok(());
+        }
+
         let datatypes = self
             .inner
             .iter()
             .map(|d| format!("({} 0)", self.ctx.fmt_datatype_symbol(&d.symbol)));
         let ctors = self.inner.iter().map(|d| {
             format!(
-                "(par () {})",
-                List::multiline_closed(d.ctors.iter().map(|c| DatatypeCtor::new(self.ctx, c)))
+                "  (par () (\n{}\n  ))",
+                List::multiline_open(d.ctors.iter().map(|c| DatatypeCtor::new(self.ctx, c)))
             )
         });
         write!(
@@ -370,7 +386,7 @@ impl<'ctx, 'a> std::fmt::Display for DatatypeDiscrFun<'ctx, 'a> {
                     discr = ctor.discriminant,
                 )
             });
-        writeln!(
+        write!(
             f,
             "(define-fun {discr} ((x {sym})) Int {cases})",
             discr = self.ctx.datatype_discr_def(sym),
@@ -393,12 +409,13 @@ pub struct System<'a> {
 
 impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "(set-logic HORN)")?;
+        writeln!(f, "(set-logic HORN)\n")?;
 
-        writeln!(f, "{}", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
+        writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
         }
+        writeln!(f, "")?;
         for (p, def) in self.inner.pred_vars.iter_enumerated() {
             if !def.debug_info.is_empty() {
                 writeln!(f, "{}", def.debug_info.display("; "))?;
@@ -410,8 +427,8 @@ impl<'a> std::fmt::Display for System<'a> {
                 List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
             )?;
         }
-        for clause in &self.inner.clauses {
-            writeln!(f, "\n(assert {})", Clause::new(&self.ctx, clause))?;
+        for (id, clause) in self.inner.clauses.iter_enumerated() {
+            writeln!(f, "; {:?}\n(assert {})\n", id, Clause::new(&self.ctx, clause))?;
         }
         Ok(())
     }
