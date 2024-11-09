@@ -751,7 +751,7 @@ pub struct Env {
     matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
     enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
 
-    expansion_depth_limit: usize,
+    enum_expansion_depth_limit: usize,
 }
 
 impl rty::ClauseScope for Env {
@@ -814,10 +814,10 @@ impl Env {
             unbound_assumptions: Vec::new(),
             matcher_preds,
             enum_defs,
-            expansion_depth_limit: std::env::var("THRUST_EXPANSION_DEPTH_LIMIT")
+            enum_expansion_depth_limit: std::env::var("THRUST_ENUM_EXPANSION_DEPTH_LIMIT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(5),
+                .unwrap_or(2),
         }
     }
 
@@ -853,7 +853,7 @@ impl Env {
         };
         let mut inner_ty = *ty.elem;
         inner_ty.extend_refinement(current_refinement);
-        self.bind_impl(current.into(), inner_ty, depth + 1);
+        self.bind_impl(current.into(), inner_ty, depth);
     }
 
     fn bind_mut(
@@ -891,7 +891,7 @@ impl Env {
         );
         let mut inner_ty = *ty.elem;
         inner_ty.extend_refinement(current_refinement);
-        self.bind_impl(current.into(), inner_ty, depth + 1);
+        self.bind_impl(current.into(), inner_ty, depth);
     }
 
     fn bind_tuple(
@@ -911,7 +911,7 @@ impl Env {
         for elem in &ty.elems {
             let x = self.temp_vars.next_index();
             xs.push(x);
-            self.bind_impl(x.into(), elem.clone(), depth + 1);
+            self.bind_impl(x.into(), elem.clone(), depth);
         }
         let assumption = {
             let tuple_ty = PlaceType::tuple(
@@ -980,7 +980,7 @@ impl Env {
                 fields.push(x);
                 let mut field_ty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
                 field_ty.instantiate_ty_params(ty.args.clone());
-                self.bind_impl(x.into(), field_ty, depth + 1);
+                self.bind_impl(x.into(), field_ty, depth);
             }
             variants.push(FlowBindingVariant { fields });
         }
@@ -1063,7 +1063,7 @@ impl Env {
     }
 
     fn bind_impl(&mut self, var: Var, rty: rty::RefinedType<Var>, depth: usize) {
-        if depth > self.expansion_depth_limit {
+        if depth >= self.enum_expansion_depth_limit {
             self.bind_var(var, rty);
             return;
         }
@@ -1073,7 +1073,7 @@ impl Env {
             rty::Type::Tuple(ty) if !ty.is_unit() => {
                 self.bind_tuple(var, ty, rty.refinement, depth)
             }
-            rty::Type::Enum(ty) => self.bind_enum(var, ty, rty.refinement, depth),
+            rty::Type::Enum(ty) => self.bind_enum(var, ty, rty.refinement, depth + 1),
             _ => self.bind_var(var, rty),
         }
     }
