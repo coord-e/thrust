@@ -19,6 +19,7 @@ mod params;
 pub use params::{TypeParamIdx, TypeParamSubst, TypeParams};
 
 rustc_index::newtype_index! {
+    #[orderable]
     #[debug_format = "${}"]
     pub struct FunctionParamIdx { }
 }
@@ -806,6 +807,7 @@ where
 }
 
 rustc_index::newtype_index! {
+    #[orderable]
     #[debug_format = "e{}"]
     pub struct ExistentialVarIdx { }
 }
@@ -825,7 +827,7 @@ where
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RefinedTypeVar<FV> {
     Value,
     Existential(ExistentialVarIdx),

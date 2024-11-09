@@ -8,8 +8,8 @@ use rustc_index::IndexVec;
 
 use super::{Atom, Clause, DebugInfo, Sort, TermVarIdx};
 
-pub trait Var: Eq + Hash + Copy + Debug + 'static {}
-impl<T: Eq + Hash + Copy + Debug + 'static> Var for T {}
+pub trait Var: Eq + Ord + Hash + Copy + Debug + 'static {}
+impl<T: Eq + Ord + Hash + Copy + Debug + 'static> Var for T {}
 
 // https://stackoverflow.com/questions/64838355/how-do-i-create-a-hashmap-with-type-erased-keys
 trait Key {

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::chc;
 
@@ -26,13 +26,13 @@ impl<FV> Template<FV> {
 
 #[derive(Debug, Clone)]
 pub struct TemplateBuilder<FV> {
-    dependencies: HashMap<RefinedTypeVar<FV>, chc::Sort>,
+    dependencies: BTreeMap<RefinedTypeVar<FV>, chc::Sort>,
 }
 
 impl<FV> Default for TemplateBuilder<FV> {
     fn default() -> Self {
         TemplateBuilder {
-            dependencies: HashMap::default(),
+            dependencies: Default::default(),
         }
     }
 }

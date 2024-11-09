@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use pretty::{termcolor, Pretty};
@@ -14,11 +14,12 @@ use crate::refine;
 use crate::rty;
 
 rustc_index::newtype_index! {
+    #[orderable]
     #[debug_format = "t{}"]
     pub struct TempVarIdx { }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Var {
     Local(Local),
     Temp(TempVarIdx),
@@ -151,7 +152,7 @@ impl TempVarBinding {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PlaceTypeVar {
     Var(Var),
     Existential(rty::ExistentialVarIdx),
@@ -743,8 +744,8 @@ impl UnboundAssumption {
 
 #[derive(Debug, Clone)]
 pub struct Env {
-    locals: HashMap<Local, rty::RefinedType<Var>>,
-    flow_locals: HashMap<Local, FlowBinding>,
+    locals: BTreeMap<Local, rty::RefinedType<Var>>,
+    flow_locals: BTreeMap<Local, FlowBinding>,
     temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
     unbound_assumptions: Vec<UnboundAssumption>,
 
@@ -810,8 +811,8 @@ impl Env {
         matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
     ) -> Self {
         Env {
-            locals: HashMap::new(),
-            flow_locals: HashMap::new(),
+            locals: Default::default(),
+            flow_locals: Default::default(),
             temp_vars: IndexVec::new(),
             unbound_assumptions: Vec::new(),
             matcher_preds,

@@ -271,6 +271,7 @@ impl Sort {
 }
 
 rustc_index::newtype_index! {
+    #[orderable]
     #[debug_format = "v{}"]
     pub struct TermVarIdx { }
 }
