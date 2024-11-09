@@ -92,13 +92,11 @@ impl MatcherPredCache {
                 variant.name.clone(),
                 ctor_args,
             );
-            let body1 = chc::Term::var(data_var).equal_to(ctor_term);
-            let body2 = chc::Term::datatype_discr(def.name.clone(), chc::Term::var(data_var))
-                .equal_to(chc::Term::int(variant.discr as i64));
+            let body = chc::Term::var(data_var).equal_to(ctor_term);
             let clause = chc::Clause {
                 vars: vars.clone(),
                 head: head.clone(),
-                body: vec![body1, body2],
+                body: vec![body],
                 debug_info: chc::DebugInfo::from_current_span(),
             };
             self.system.borrow_mut().push_clause(clause);
