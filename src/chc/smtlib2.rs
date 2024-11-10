@@ -428,7 +428,12 @@ impl<'a> std::fmt::Display for System<'a> {
             )?;
         }
         for (id, clause) in self.inner.clauses.iter_enumerated() {
-            writeln!(f, "; {:?}\n(assert {})\n", id, Clause::new(&self.ctx, clause))?;
+            writeln!(
+                f,
+                "; {:?}\n(assert {})\n",
+                id,
+                Clause::new(&self.ctx, clause)
+            )?;
         }
         Ok(())
     }
