@@ -174,7 +174,7 @@ impl<'tcx> Analyzer<'tcx> {
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
-        tracing::debug!(def_id = ?def_id, rty = %rty.display(), "register_def");
+        tracing::info!(def_id = ?def_id, rty = %rty.display(), "register_def");
         self.defs.insert(def_id, rty);
     }
 
