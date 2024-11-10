@@ -20,7 +20,7 @@ pub struct Analyzer<'tcx, 'ctx> {
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn refine_local_defs(&mut self) {
         for local_def_id in self.tcx.mir_keys(()) {
-            if let DefKind::Fn = self.tcx.def_kind(*local_def_id) {
+            if self.tcx.def_kind(*local_def_id).is_fn_like() {
                 self.refine_fn_def(local_def_id.to_def_id());
             }
         }
@@ -91,7 +91,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn analyze_local_defs(&mut self) {
         for local_def_id in self.tcx.mir_keys(()) {
-            let DefKind::Fn = self.tcx.def_kind(*local_def_id) else {
+            if !self.tcx.def_kind(*local_def_id).is_fn_like() {
                 continue;
             };
             if self.trusted.contains(&local_def_id.to_def_id()) {
