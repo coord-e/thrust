@@ -147,7 +147,7 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             _ => {
                 let new_local = self.insert_borrow(place.clone(), ty);
                 (new_local, self.tcx.mk_place_deref(new_local.into()))
-            },
+            }
         };
 
         ReplacePlacesVisitor::with_replacement(self.tcx, inner_place, new_place)

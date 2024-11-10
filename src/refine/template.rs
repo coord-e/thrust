@@ -256,7 +256,10 @@ where
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
-                let elems = ts.iter().map(|ty| rty::PointerType::own(self.ty(ty)).into()).collect();
+                let elems = ts
+                    .iter()
+                    .map(|ty| rty::PointerType::own(self.ty(ty)).into())
+                    .collect();
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
@@ -319,7 +322,10 @@ pub trait UnrefinedTypeGenerator<'tcx> {
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
-                let elems = ts.iter().map(|ty| rty::PointerType::own(self.unrefined_ty(ty)).into()).collect();
+                let elems = ts
+                    .iter()
+                    .map(|ty| rty::PointerType::own(self.unrefined_ty(ty)).into())
+                    .collect();
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
