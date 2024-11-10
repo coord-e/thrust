@@ -121,7 +121,7 @@ where
     }
 }
 
-const DEFAULT_WIDTH: usize = 80;
+const DEFAULT_WIDTH: usize = 150;
 
 impl<'a, T> Display<'a, T> {
     fn new(value: &'a T) -> Self {
