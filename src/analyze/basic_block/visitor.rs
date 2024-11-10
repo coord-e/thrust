@@ -120,35 +120,37 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             return;
         }
 
-        if place.projection.last() != Some(&mir::PlaceElem::Deref) {
-            self.super_assign(place, rvalue, location);
-            return;
-        }
-
-        let inner_place = {
+        let inner_place = if place.projection.last() == Some(&mir::PlaceElem::Deref) {
+            // *m = *m + 1 => m1 = &mut m; *m1 = *m + 1
             let mut projection = place.projection.as_ref().to_vec();
             projection.pop();
             mir::Place {
                 local: place.local,
                 projection: self.tcx.mk_place_elems(&projection),
             }
+        } else {
+            // s.0 = s.0 + 1 => m1 = &mut s.0; *m1 = *m1 + 1
+            *place
         };
+
         let ty = inner_place.ty(&self.analyzer.local_decls, self.tcx).ty;
-        let new_local = match ty.kind() {
+        let (new_local, new_place) = match ty.kind() {
             mir_ty::TyKind::Ref(_, inner_ty, m) if m.is_mut() => {
-                self.insert_reborrow(place.clone(), *inner_ty)
+                let new_local = self.insert_reborrow(place.clone(), *inner_ty);
+                (new_local, new_local.into())
             }
             mir_ty::TyKind::Adt(adt, args) if adt.is_box() => {
                 let inner_ty = args.type_at(0);
-                self.insert_borrow(place.clone(), inner_ty)
+                let new_local = self.insert_borrow(place.clone(), inner_ty);
+                (new_local, new_local.into())
             }
             _ => {
-                self.super_assign(place, rvalue, location);
-                return;
-            }
+                let new_local = self.insert_borrow(place.clone(), ty);
+                (new_local, self.tcx.mk_place_deref(new_local.into()))
+            },
         };
 
-        ReplacePlacesVisitor::with_replacement(self.tcx, inner_place, new_local.into())
+        ReplacePlacesVisitor::with_replacement(self.tcx, inner_place, new_place)
             .visit_rvalue(rvalue, location);
         *place = self.tcx.mk_place_deref(new_local.into());
         self.super_assign(place, rvalue, location);
