@@ -245,7 +245,7 @@ where
     pub fn ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<V> {
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
-            mir_ty::TyKind::Int(_) => rty::Type::int(),
+            mir_ty::TyKind::Uint(_) | mir_ty::TyKind::Int(_) => rty::Type::int(),
             mir_ty::TyKind::Str => rty::Type::string(),
             mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
                 let elem_ty = self.ty(*elem_ty);
@@ -308,7 +308,7 @@ pub trait UnrefinedTypeGenerator<'tcx> {
     fn unrefined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
-            mir_ty::TyKind::Int(_) => rty::Type::int(),
+            mir_ty::TyKind::Uint(_) | mir_ty::TyKind::Int(_) => rty::Type::int(),
             mir_ty::TyKind::Str => rty::Type::string(),
             mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
                 let elem_ty = self.unrefined_ty(*elem_ty);
