@@ -39,22 +39,22 @@ impl CommandConfig {
 
     fn wait_child(
         &self,
-        mut child: std::process::Child,
+        child: std::process::Child,
     ) -> Result<(std::process::Output, std::time::Duration), CheckSatError> {
+        use process_control::{ChildExt as _, Control as _};
+
         let start = std::time::Instant::now();
-        let deadline = self.timeout.map(|timeout| start + timeout);
         tracing::info!(timeout = ?self.timeout, pid = child.id(), "waiting");
-        while child.try_wait()?.is_none() {
-            if let Some(deadline) = deadline {
-                if deadline < std::time::Instant::now() {
-                    child.kill()?;
-                    return Err(CheckSatError::Timeout(self.timeout.unwrap()));
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut child = child.controlled_with_output().terminate_for_timeout();
+        if let Some(timeout) = self.timeout {
+            child = child.time_limit(timeout);
         }
+        let output = match child.wait()? {
+            None => return Err(CheckSatError::Timeout(self.timeout.unwrap())),
+            Some(output) => output,
+        };
         let elapsed = std::time::Instant::now() - start;
-        Ok((child.wait_with_output()?, elapsed))
+        Ok((output.into_std_lossy(), elapsed))
     }
 
     fn run(
