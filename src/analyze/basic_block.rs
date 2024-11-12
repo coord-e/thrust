@@ -659,17 +659,29 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.bind_local(lhs.local, rty, mutbl);
     }
 
+    fn terminator_is_drop_call(&self) -> Option<BasicBlock> {
+        // XXX: hack
+        let term = &self.body.basic_blocks[self.basic_block].terminator().kind;
+        if let TerminatorKind::Call { func, target, .. } = term {
+            if let Some((def_id, _)) = func.const_fn_def() {
+                return (self.tcx.def_path_str(def_id) == "std::ops::Drop::drop")
+                    .then(|| target.unwrap());
+            }
+        }
+        None
+    }
+
     fn analyze_statements(&mut self) {
         for local in self.drop_points.before_statements.clone() {
             tracing::info!(?local, "implicitly dropped before statements");
             self.drop_local(local);
         }
-        for (stmt_idx, mut stmt) in self.body.basic_blocks[self.basic_block]
-            .statements
-            .iter()
-            .cloned()
-            .enumerate()
-        {
+        let statements = &self.body.basic_blocks[self.basic_block].statements;
+        for (stmt_idx, mut stmt) in statements.iter().cloned().enumerate() {
+            if stmt_idx == statements.len() - 1 && self.terminator_is_drop_call().is_some() {
+                tracing::warn!(%stmt_idx, ?stmt, "skip before std::ops::Drop");
+                continue;
+            }
             self.replace_elaborated_locals_visitor()
                 .visit_statement(&mut stmt);
             self.reborrow_visitor().visit_statement(&mut stmt);
@@ -693,6 +705,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut term = self.body.basic_blocks[self.basic_block]
             .terminator()
             .clone();
+        if let Some(target) = self.terminator_is_drop_call() {
+            tracing::warn!(?term, "skip std::ops::Drop");
+            return mir::Terminator {
+                kind: TerminatorKind::Goto { target },
+                source_info: term.source_info,
+            };
+        }
         self.replace_elaborated_locals_visitor()
             .visit_terminator(&mut term);
         self.reborrow_visitor().visit_terminator(&mut term);
