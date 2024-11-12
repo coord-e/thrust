@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 
@@ -9,7 +9,7 @@ pub struct FormatContext {
 }
 
 // FIXME: this is obviously ineffective and should be replaced
-fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort>) {
+fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sort>) {
     sorts.insert(clause.term_sort(t));
     match t {
         chc::Term::Null => {}
@@ -45,7 +45,7 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut HashSet<chc::Sort
     }
 }
 
-fn atom_sorts(clause: &chc::Clause, a: &chc::Atom, sorts: &mut HashSet<chc::Sort>) {
+fn atom_sorts(clause: &chc::Clause, a: &chc::Atom, sorts: &mut BTreeSet<chc::Sort>) {
     for a in &a.args {
         term_sorts(clause, a, sorts);
     }
@@ -187,8 +187,8 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
     Some(d)
 }
 
-fn collect_sorts(system: &chc::System) -> HashSet<chc::Sort> {
-    let mut sorts = HashSet::new();
+fn collect_sorts(system: &chc::System) -> BTreeSet<chc::Sort> {
+    let mut sorts = BTreeSet::new();
 
     for def in &system.pred_vars {
         sorts.extend(def.sig.clone());
