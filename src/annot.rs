@@ -199,6 +199,16 @@ where
                 let (rhs, _) = self.parse_atom_term()?;
                 lhs.sub(rhs)
             }
+            Some(TokenKind::BinOp(BinOpToken::Star)) => {
+                self.consume();
+                let (rhs, _) = self.parse_atom_term()?;
+                lhs.mul(rhs)
+            }
+            Some(TokenKind::Ge) => {
+                self.consume();
+                let (rhs, _) = self.parse_atom_term()?;
+                lhs.ge(rhs)
+            }
             _ => return Ok((lhs, lhs_kind)),
         };
 
@@ -221,7 +231,7 @@ where
         }
 
         let (lhs, _) = self.parse_atom_term()?;
-        let pred = match self.next_token("== or !=")? {
+        let pred = match self.next_token("<=, >=, == or !=")? {
             Token {
                 kind: TokenKind::EqEq,
                 ..
@@ -230,6 +240,14 @@ where
                 kind: TokenKind::Ne,
                 ..
             } => chc::KnownPred::NOT_EQUAL,
+            Token {
+                kind: TokenKind::Ge,
+                ..
+            } => chc::KnownPred::GREATER_THAN_OR_EQUAL,
+            Token {
+                kind: TokenKind::Le,
+                ..
+            } => chc::KnownPred::LESS_THAN_OR_EQUAL,
             t => return Err(ParseAttrError::unexpected_token("==", t.clone())),
         };
         let (rhs, _) = self.parse_term()?;

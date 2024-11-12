@@ -797,6 +797,9 @@ impl KnownPred {
     pub const BOTTOM: KnownPred = KnownPred::new("false");
     pub const EQUAL: KnownPred = KnownPred::infix("=");
     pub const NOT_EQUAL: KnownPred = KnownPred::infix("=").negated();
+
+    pub const LESS_THAN_OR_EQUAL: KnownPred = KnownPred::infix("<=");
+    pub const GREATER_THAN_OR_EQUAL: KnownPred = KnownPred::infix(">=");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
