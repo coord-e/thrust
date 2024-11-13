@@ -134,6 +134,23 @@ where
         &mut self,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
     ) -> &mut Self {
+        let refinement = rty::Refinement {
+            existentials: refinement.existentials,
+            atoms: refinement
+                .atoms
+                .into_iter()
+                .map(|a| {
+                    a.map_var(|v| match v {
+                        rty::RefinedTypeVar::Free(idx)
+                            if idx.index() == self.param_tys.len() - 1 =>
+                        {
+                            rty::RefinedTypeVar::Value
+                        }
+                        v => v,
+                    })
+                })
+                .collect(),
+        };
         self.param_refinement = Some(refinement);
         self
     }
