@@ -74,8 +74,7 @@ impl<'tcx> ReborrowVisitor<'_, 'tcx, '_> {
         let decl = mir::LocalDecl::new(ty, Default::default()).immutable();
         let new_local = self.analyzer.local_decls.push(decl);
         let new_local_ty = self.analyzer.borrow_place_(place, inner_ty);
-        self.analyzer
-            .bind_local(new_local, new_local_ty);
+        self.analyzer.bind_local(new_local, new_local_ty);
         tracing::info!(old_place = ?place, ?new_local, "implicitly borrowed");
         new_local
     }
@@ -86,8 +85,7 @@ impl<'tcx> ReborrowVisitor<'_, 'tcx, '_> {
         let decl = mir::LocalDecl::new(ty, Default::default()).immutable();
         let new_local = self.analyzer.local_decls.push(decl);
         let new_local_ty = self.analyzer.borrow_place_(place, inner_ty);
-        self.analyzer
-            .bind_local(new_local, new_local_ty);
+        self.analyzer.bind_local(new_local, new_local_ty);
         tracing::info!(old_place = ?place, ?new_local, "implicitly reborrowed");
         new_local
     }
