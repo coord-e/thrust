@@ -321,6 +321,16 @@ impl FormatContext {
         format!("datatype_discr<{}>", self.fmt_datatype_symbol(sym))
     }
 
+    pub fn matcher_pred(&self, p: &chc::MatcherPred) -> impl std::fmt::Display {
+        let ss = Sorts::new(&p.datatype_args);
+        let sym = chc::DatatypeSymbol::new(format!("{}{}", p.datatype_symbol, ss));
+        self.matcher_pred_def(&sym)
+    }
+
+    pub fn matcher_pred_def(&self, sym: &chc::DatatypeSymbol) -> impl std::fmt::Display {
+        format!("matcher_pred<{}>", self.fmt_datatype_symbol(sym))
+    }
+
     pub fn fmt_sort(&self, sort: &chc::Sort) -> impl std::fmt::Display {
         let sym = Sort::new(sort).to_symbol();
         self.fmt_datatype_symbol(&sym)

@@ -802,10 +802,58 @@ impl KnownPred {
     pub const GREATER_THAN_OR_EQUAL: KnownPred = KnownPred::infix(">=");
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MatcherPred {
+    datatype_symbol: DatatypeSymbol,
+    datatype_args: Vec<Sort>,
+}
+
+impl std::fmt::Display for MatcherPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "matcher_pred")
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b MatcherPred
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let args = allocator.intersperse(
+            self.datatype_args.iter().map(|a| a.pretty(allocator)),
+            allocator.text(", "),
+        );
+        allocator
+            .text("matcher_pred")
+            .append(
+                allocator
+                    .as_string(&self.datatype_symbol)
+                    .append(args.angles())
+                    .angles(),
+            )
+            .group()
+    }
+}
+
+impl MatcherPred {
+    pub fn new(datatype_symbol: DatatypeSymbol, datatype_args: Vec<Sort>) -> Self {
+        MatcherPred {
+            datatype_symbol,
+            datatype_args,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        "matcher_pred"
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pred {
     Known(KnownPred),
     Var(PredVarId),
+    Matcher(MatcherPred),
 }
 
 impl std::fmt::Display for Pred {
@@ -813,6 +861,7 @@ impl std::fmt::Display for Pred {
         match self {
             Pred::Known(p) => p.fmt(f),
             Pred::Var(p) => p.fmt(f),
+            Pred::Matcher(p) => p.fmt(f),
         }
     }
 }
@@ -820,11 +869,13 @@ impl std::fmt::Display for Pred {
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Pred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             Pred::Known(p) => p.pretty(allocator),
             Pred::Var(p) => p.pretty(allocator),
+            Pred::Matcher(p) => p.pretty(allocator),
         }
     }
 }
@@ -841,11 +892,18 @@ impl From<PredVarId> for Pred {
     }
 }
 
+impl From<MatcherPred> for Pred {
+    fn from(p: MatcherPred) -> Pred {
+        Pred::Matcher(p)
+    }
+}
+
 impl Pred {
     pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
             Pred::Known(p) => p.name().into(),
             Pred::Var(p) => p.to_string().into(),
+            Pred::Matcher(p) => p.name().into(),
         }
     }
 
@@ -853,6 +911,7 @@ impl Pred {
         match self {
             Pred::Known(p) => p.is_negative(),
             Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
         }
     }
 
@@ -860,6 +919,7 @@ impl Pred {
         match self {
             Pred::Known(p) => p.is_infix(),
             Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
         }
     }
 
@@ -867,6 +927,7 @@ impl Pred {
         match self {
             Pred::Known(p) => p.is_top(),
             Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
         }
     }
 
@@ -874,6 +935,7 @@ impl Pred {
         match self {
             Pred::Known(p) => p.is_bottom(),
             Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
         }
     }
 }

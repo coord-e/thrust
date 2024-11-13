@@ -4,9 +4,6 @@ pub use template::{TemplateScope, TemplateTypeGenerator, UnrefinedTypeGenerator}
 mod basic_block;
 pub use basic_block::BasicBlockType;
 
-mod matcher_pred;
-pub use matcher_pred::MatcherPredCache;
-
 mod env;
 pub use env::{Env, PlaceType, PlaceTypeVar, TempVarIdx, UnboundAssumption, Var};
 

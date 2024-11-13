@@ -49,7 +49,6 @@ pub struct Analyzer<'tcx> {
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
-    matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
     enum_defs: Rc<RefCell<HashMap<DefId, rty::EnumDatatypeDef>>>,
 }
 
@@ -106,17 +105,12 @@ impl<'tcx> Analyzer<'tcx> {
         let system = Default::default();
         let basic_blocks = Default::default();
         let enum_defs = Default::default();
-        let matcher_preds = Rc::new(RefCell::new(refine::MatcherPredCache::new(
-            Rc::clone(&system),
-            Rc::clone(&enum_defs),
-        )));
         Self {
             tcx,
             defs,
             system,
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
-            matcher_preds,
             enum_defs,
         }
     }
@@ -216,7 +210,7 @@ impl<'tcx> Analyzer<'tcx> {
             .values()
             .map(|def| (def.name.clone(), def.clone()))
             .collect();
-        refine::Env::new(defs, Rc::clone(&self.matcher_preds))
+        refine::Env::new(defs)
     }
 
     pub fn crate_analyzer(&mut self) -> crate_::Analyzer<'tcx, '_> {

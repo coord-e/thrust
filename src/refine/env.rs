@@ -1,6 +1,4 @@
-use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::rc::Rc;
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
@@ -626,7 +624,7 @@ impl PlaceType {
 
     pub fn enum_(
         enum_ty: rty::EnumType<Var>,
-        matcher_pred: chc::PredVarId,
+        matcher_pred: chc::Pred,
         discr: TempVarIdx,
         field_tys: Vec<PlaceType>,
     ) -> PlaceType {
@@ -664,7 +662,7 @@ impl PlaceType {
         let term = chc::Term::var(value_var_ev.into());
         let mut pred_args = terms;
         pred_args.push(chc::Term::var(value_var_ev.into()));
-        conds.push(chc::Atom::new(matcher_pred.into(), pred_args));
+        conds.push(chc::Atom::new(matcher_pred, pred_args));
         conds.push(
             chc::Term::var(discr.into()).equal_to(chc::Term::datatype_discr(
                 enum_ty.symbol.clone(),
@@ -749,7 +747,6 @@ pub struct Env {
     temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
     unbound_assumptions: Vec<UnboundAssumption>,
 
-    matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
     enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
 
     enum_expansion_depth_limit: usize,
@@ -806,16 +803,12 @@ impl refine::TemplateScope<Var> for Env {
 }
 
 impl Env {
-    pub fn new(
-        enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
-        matcher_preds: Rc<RefCell<refine::MatcherPredCache>>,
-    ) -> Self {
+    pub fn new(enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>) -> Self {
         Env {
             locals: Default::default(),
             flow_locals: Default::default(),
             temp_vars: IndexVec::new(),
             unbound_assumptions: Vec::new(),
-            matcher_preds,
             enum_defs,
             enum_expansion_depth_limit: std::env::var("THRUST_ENUM_EXPANSION_DEPTH_LIMIT")
                 .ok()
@@ -970,10 +963,7 @@ impl Env {
         }
 
         let def = self.enum_defs[&ty.symbol].clone();
-        let matcher_pred = self
-            .matcher_preds
-            .borrow_mut()
-            .get_or_create(&ty.symbol, &ty.arg_sorts());
+        let matcher_pred = chc::MatcherPred::new(ty.symbol.clone(), ty.arg_sorts());
 
         let mut variants = IndexVec::new();
         for variant_def in &def.variants {
@@ -1195,10 +1185,7 @@ impl Env {
                 };
 
                 let enum_ty = rty::EnumType::new(sym.clone(), arg_rtys);
-                let matcher_pred = self
-                    .matcher_preds
-                    .borrow_mut()
-                    .get_or_create(&sym, &enum_ty.arg_sorts());
+                let matcher_pred = chc::MatcherPred::new(sym.clone(), enum_ty.arg_sorts()).into();
                 PlaceType::enum_(enum_ty, matcher_pred, *discr, field_tys)
             }
             None => {

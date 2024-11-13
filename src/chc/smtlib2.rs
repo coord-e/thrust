@@ -214,8 +214,12 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
         if self.inner.pred.is_negative() {
             write!(f, "(not ")?;
         }
+        let pred = match &self.inner.pred {
+            chc::Pred::Matcher(p) => self.ctx.matcher_pred(p).to_string(),
+            p => p.name().into_owned(),
+        };
         if self.inner.args.is_empty() {
-            write!(f, "{}", self.inner.pred.name())?;
+            write!(f, "{}", pred)?;
         } else {
             let args = List::open(
                 self.inner
@@ -223,7 +227,7 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
                     .iter()
                     .map(|t| Term::new(self.ctx, self.clause, t)),
             );
-            write!(f, "({} {})", self.inner.pred.name(), args)?;
+            write!(f, "({} {})", pred, args)?;
         }
         if self.inner.pred.is_negative() {
             write!(f, ")")?;
@@ -402,6 +406,56 @@ impl<'ctx, 'a> DatatypeDiscrFun<'ctx, 'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct MatcherPredFun<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    inner: &'a chc::Datatype,
+}
+
+impl<'ctx, 'a> std::fmt::Display for MatcherPredFun<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let sym = &self.inner.symbol;
+        let mut offset = 0;
+        let mut variants = Vec::new();
+        for ctor in &self.inner.ctors {
+            let args = List::open(
+                (0..ctor.selectors.len())
+                    .into_iter()
+                    .map(|i| i + offset)
+                    .map(|i| format!("x{i}")),
+            );
+            offset += ctor.selectors.len();
+            let repr = if ctor.selectors.is_empty() {
+                ctor.symbol.to_string()
+            } else {
+                format!("({} {})", &ctor.symbol, args)
+            };
+            variants.push(format!("(= v {repr})"));
+        }
+        let params = List::closed(
+            self.inner
+                .ctors
+                .iter()
+                .flat_map(|c| &c.selectors)
+                .enumerate()
+                .map(|(idx, s)| format!("(x{} {})", idx, self.ctx.fmt_sort(&s.sort)))
+                .chain([format!("(v {})", self.ctx.fmt_datatype_symbol(sym))]),
+        );
+        write!(
+            f,
+            "(define-fun {name} {params} Bool (or {variants}))",
+            name = self.ctx.matcher_pred_def(sym),
+            variants = List::open(variants),
+        )
+    }
+}
+
+impl<'ctx, 'a> MatcherPredFun<'ctx, 'a> {
+    pub fn new(ctx: &'ctx FormatContext, inner: &'a chc::Datatype) -> MatcherPredFun<'ctx, 'a> {
+        MatcherPredFun { ctx, inner }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct System<'a> {
     ctx: FormatContext,
     inner: &'a chc::System,
@@ -414,6 +468,7 @@ impl<'a> std::fmt::Display for System<'a> {
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
+            writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
         }
         writeln!(f, "")?;
         for (p, def) in self.inner.pred_vars.iter_enumerated() {
