@@ -67,9 +67,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         &self.ctx.basic_block_ty(self.local_def_id, bb)
     }
 
-    fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>, mutbl: mir::Mutability) {
-        // elaboration:
-        let elaborated_rty = if mutbl.is_mut() {
+    fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>) {
+        let rty = if self.is_mut_local(local) {
+            // elaboration:
             let refinement = rty
                 .refinement
                 .subst_value_var(|| chc::Term::var(rty::RefinedTypeVar::Value).box_current());
@@ -78,7 +78,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         } else {
             rty
         };
-        self.env.bind(local, elaborated_rty);
+        if self.is_mut_local(local) || rty.ty.is_mut() {
+            self.env.mut_bind(local, rty);
+        } else {
+            self.env.immut_bind(local, rty);
+        }
     }
 
     // this can't be implmeneted in relate_sub_type because rty::FunctionType is free from Var
@@ -647,16 +651,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         if let Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent) = rvalue {
             // mutable borrow
-            let mutbl = self.local_decls[lhs.local].mutability;
             let rty = self.mutable_borrow(stmt_idx, referent.clone());
-            self.bind_local(lhs.local, rty, mutbl);
+            self.bind_local(lhs.local, rty);
             return;
         }
 
         // new binding
-        let mutbl = self.local_decls[lhs.local].mutability;
         let rty = self.rvalue_refined_type(rvalue.clone());
-        self.bind_local(lhs.local, rty, mutbl);
+        self.bind_local(lhs.local, rty);
     }
 
     fn terminator_is_drop_call(&self) -> Option<BasicBlock> {
@@ -739,7 +741,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let decl = self.local_decls[destination].clone();
                 let rty = self.ctx.build_template_ty(&self.env).refined_ty(decl.ty);
                 self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
-                self.bind_local(destination, rty, decl.mutability);
+                self.bind_local(destination, rty);
             }
             _ => {}
         }
@@ -922,11 +924,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for (param_idx, param_rty) in params.iter_enumerated() {
             let param_ty = &param_rty.ty;
             if let Some(local) = bb_ty.local_of_param(param_idx) {
-                self.env.bind(
-                    local,
-                    // TODO: polymorphic datatypes: template needed?
-                    rty::RefinedType::unrefined(param_ty.clone().strip_refinement().vacuous()),
-                );
+                // TODO: polymorphic datatypes: template needed?
+                let rty = rty::RefinedType::unrefined(param_ty.clone().strip_refinement().vacuous());
+                if bb_ty.mutbl_of_param(param_idx).unwrap().is_mut() || rty.ty.is_mut() {
+                    self.env.mut_bind(local, rty);
+                } else {
+                    self.env.immut_bind(local, rty);
+                }
                 let param_sort = param_ty.to_sort();
                 if param_sort.is_singleton() {
                     continue;

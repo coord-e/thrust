@@ -1081,10 +1081,16 @@ impl Env {
         }
     }
 
-    pub fn bind(&mut self, local: Local, rty: rty::RefinedType<Var>) {
+    pub fn mut_bind(&mut self, local: Local, rty: rty::RefinedType<Var>) {
         let rty_disp = rty.clone();
         self.bind_impl(local.into(), rty, 0);
-        tracing::debug!(local = ?local, rty = %rty_disp.display(), place_type = %self.local_type(local).display(), "bind");
+        tracing::debug!(local = ?local, rty = %rty_disp.display(), place_type = %self.local_type(local).display(), "mut_bind");
+    }
+
+    pub fn immut_bind(&mut self, local: Local, rty: rty::RefinedType<Var>) {
+        let rty_disp = rty.clone();
+        self.bind_var(local.into(), rty);
+        tracing::debug!(local = ?local, rty = %rty_disp.display(), place_type = %self.local_type(local).display(), "immut_bind");
     }
 
     pub fn assume(&mut self, assumption: impl Into<UnboundAssumption>) {
