@@ -1,6 +1,6 @@
 use rustc_ast::ast::Attribute;
 use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Token, TokenKind};
-use rustc_ast::tokenstream::{RefTokenTreeCursor, TokenTree};
+use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenTree};
 use rustc_span::symbol::Ident;
 
 use crate::chc;
@@ -47,6 +47,16 @@ where
     }
 }
 
+impl<T> Resolver for Box<T>
+where
+    T: Resolver + ?Sized,
+{
+    type Output = T::Output;
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
+        (**self).resolve(ident)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseAttrError {
     kind: ParseAttrErrorKind,
@@ -60,6 +70,13 @@ impl ParseAttrError {
     }
 
     fn unexpected_token(expected: &'static str, got: Token) -> Self {
+        let got = TokenTree::Token(got, Spacing::Alone);
+        Self {
+            kind: ParseAttrErrorKind::UnexpectedToken { expected, got },
+        }
+    }
+
+    fn unexpected_token_tree(expected: &'static str, got: TokenTree) -> Self {
         Self {
             kind: ParseAttrErrorKind::UnexpectedToken { expected, got },
         }
@@ -85,9 +102,16 @@ impl ParseAttrError {
 #[derive(Debug, Clone)]
 pub enum ParseAttrErrorKind {
     InvalidAttribute,
-    UnexpectedEnd { expected: &'static str },
-    UnexpectedToken { expected: &'static str, got: Token },
-    UnknownIdent { ident: Ident },
+    UnexpectedEnd {
+        expected: &'static str,
+    },
+    UnexpectedToken {
+        expected: &'static str,
+        got: TokenTree,
+    },
+    UnknownIdent {
+        ident: Ident,
+    },
 }
 
 type Result<T> = std::result::Result<T, ParseAttrError>;
@@ -101,21 +125,32 @@ impl<'a, T> Parser<'a, T>
 where
     T: Resolver,
 {
-    fn next_token(&mut self, expected: &'static str) -> Result<&Token> {
+    fn next_token_tree(&mut self, expected: &'static str) -> Result<&TokenTree> {
         let Some(t) = self.cursor.next() else {
             return Err(ParseAttrError::unexpected_end(expected));
         };
-        match t {
-            TokenTree::Token(t, _) => Ok(t),
-            TokenTree::Delimited { .. } => unimplemented!(),
+        Ok(t)
+    }
+
+    fn next_token(&mut self, expected: &'static str) -> Result<&Token> {
+        let tt = self.next_token_tree(expected)?;
+        if let TokenTree::Token(t, _) = tt {
+            Ok(t)
+        } else {
+            Err(ParseAttrError::unexpected_token_tree(expected, tt.clone()))
         }
     }
 
-    fn look_ahead(&mut self) -> Option<&Token> {
-        self.cursor.look_ahead(0).map(|t| match t {
-            TokenTree::Token(t, _) => t,
-            TokenTree::Delimited { .. } => unimplemented!(),
-        })
+    fn look_ahead(&mut self) -> Option<&TokenTree> {
+        self.cursor.look_ahead(0)
+    }
+
+    fn look_ahead_token(&mut self) -> Option<&Token> {
+        if let Some(TokenTree::Token(t, _)) = self.look_ahead() {
+            Some(t)
+        } else {
+            None
+        }
     }
 
     fn consume(&mut self) {
@@ -123,8 +158,11 @@ where
     }
 
     fn end_of_input(&mut self) -> Result<()> {
-        if let Ok(t) = self.next_token("") {
-            Err(ParseAttrError::unexpected_token("end of input", t.clone()))
+        if let Ok(t) = self.next_token_tree("") {
+            Err(ParseAttrError::unexpected_token_tree(
+                "end of input",
+                t.clone(),
+            ))
         } else {
             Ok(())
         }
@@ -138,7 +176,20 @@ where
     }
 
     fn parse_atom_term(&mut self) -> Result<(chc::Term<T::Output>, TermKind)> {
-        let t = self.next_token("term")?.clone();
+        let tt = self.next_token_tree("term")?.clone();
+
+        let t = match &tt {
+            TokenTree::Token(t, _) => t,
+            TokenTree::Delimited(_, _, Delimiter::Parenthesis, s) => {
+                let resolver = Box::new(&self.resolver) as Box<dyn Resolver<Output = T::Output>>;
+                let mut parser = Parser {
+                    resolver,
+                    cursor: s.trees(),
+                };
+                return parser.parse_term();
+            }
+            _ => unimplemented!(),
+        };
 
         if let Some((ident, _)) = t.ident() {
             let (v, kind) = self.resolve(ident)?;
@@ -168,17 +219,10 @@ where
                     panic!("unexpected term kind");
                 }
             }
-            TokenKind::OpenDelim(Delimiter::Parenthesis) => {
-                let (term, kind) = self.parse_term()?;
-                if self.next_token(")")?.kind != TokenKind::CloseDelim(Delimiter::Parenthesis) {
-                    return Err(ParseAttrError::unexpected_token(")", t.clone()));
-                }
-                (term, kind)
-            }
             _ => {
-                return Err(ParseAttrError::unexpected_token(
+                return Err(ParseAttrError::unexpected_token_tree(
                     "*, ^, (, identifier, or literal",
-                    t.clone(),
+                    tt,
                 ))
             }
         };
@@ -188,7 +232,7 @@ where
     fn parse_term(&mut self) -> Result<(chc::Term<T::Output>, TermKind)> {
         let (lhs, lhs_kind) = self.parse_atom_term()?;
 
-        let term = match self.look_ahead().map(|t| &t.kind) {
+        let term = match self.look_ahead_token().map(|t| &t.kind) {
             Some(TokenKind::BinOp(BinOpToken::Plus)) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
@@ -216,7 +260,7 @@ where
     }
 
     fn parse_atom(&mut self) -> Result<chc::Atom<T::Output>> {
-        match self.look_ahead().and_then(|t| t.ident()) {
+        match self.look_ahead_token().and_then(|t| t.ident()) {
             Some((ident, _)) => {
                 if ident.as_str() == "true" {
                     self.consume();
@@ -256,7 +300,7 @@ where
     }
 
     pub fn parse(&mut self) -> Result<AnnotAtom<T::Output>> {
-        match self.look_ahead().and_then(|t| t.ident()) {
+        match self.look_ahead_token().and_then(|t| t.ident()) {
             Some((ident, _)) => {
                 if ident.as_str() == "auto" {
                     return Ok(AnnotAtom::Auto);
