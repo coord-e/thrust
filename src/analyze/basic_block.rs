@@ -789,6 +789,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
                 self.type_goto(*target, &expected_ret);
             }
+            TerminatorKind::Assert {
+                cond,
+                expected,
+                target,
+                ..
+            } => {
+                for local in self.drop_points.after_terminator(target).iter() {
+                    tracing::info!(?local, "dropped");
+                    self.drop_local(local);
+                }
+                self.type_operand(
+                    cond.clone(),
+                    &rty::RefinedType::refined_with_term(
+                        rty::Type::bool(),
+                        chc::Term::bool(*expected),
+                    ),
+                );
+                self.type_goto(*target, &expected_ret);
+            }
             TerminatorKind::UnwindResume {} => {}
             TerminatorKind::Unreachable {} => {}
             _ => unimplemented!("term={:?}", term.kind),
