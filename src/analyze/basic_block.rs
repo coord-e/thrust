@@ -945,7 +945,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let bb_ty = self.basic_block_ty(self.basic_block).clone();
         let params = &bb_ty.as_ref().params;
-        tracing::info!(params = %params.pretty_slice().display(), expected_params = %expected_params.pretty_slice().display(), "bind_locals");
         assert!(params.len() >= 1);
         for (param_idx, param_rty) in params.iter_enumerated() {
             let param_ty = &param_rty.ty;

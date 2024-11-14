@@ -1191,7 +1191,9 @@ impl<FV> RefinedType<FV> {
         F: FnMut(FV) -> chc::Term<W>,
     {
         RefinedType {
-            ty: self.ty.subst_var(&mut f),
+            ty: self
+                .ty
+                .subst_var(Box::new(&mut f) as Box<dyn FnMut(FV) -> chc::Term<W>>),
             refinement: self.refinement.subst_var(&mut f),
         }
     }
