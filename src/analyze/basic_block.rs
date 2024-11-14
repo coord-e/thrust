@@ -739,7 +739,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
 
                 let decl = self.local_decls[destination].clone();
-                let rty = self.ctx.build_template_ty(&self.env).refined_ty(decl.ty);
+                let rty = self
+                    .ctx
+                    .build_template_ty_with_scope(&self.env)
+                    .refined_ty(decl.ty);
                 self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
                 self.bind_local(destination, rty);
             }

@@ -35,10 +35,18 @@ pub trait TemplateTypeGenerator<'tcx> {
     fn tcx(&self) -> mir_ty::TyCtxt<'tcx>;
     fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V>;
 
-    fn build_template_ty<T, V>(&mut self, scope: T) -> TemplateTypeBuilder<Self, T, V> {
+    fn build_template_ty_with_scope<T, V>(&mut self, scope: T) -> TemplateTypeBuilder<Self, T, V> {
         TemplateTypeBuilder {
             gen: self,
             scope,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn build_template_ty<V>(&mut self) -> TemplateTypeBuilder<Self, rty::TemplateBuilder<V>, V> {
+        TemplateTypeBuilder {
+            gen: self,
+            scope: Default::default(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -198,11 +206,15 @@ where
                                 .unrefined_ty(param_ty.ty);
                             rty::RefinedType::new(ty.vacuous(), param_refinement.clone())
                         } else {
-                            self.gen.build_template_ty(&builder).refined_ty(param_ty.ty)
+                            self.gen
+                                .build_template_ty_with_scope(&builder)
+                                .refined_ty(param_ty.ty)
                         }
                     } else {
                         rty::RefinedType::unrefined(
-                            self.gen.build_template_ty(&builder).ty(param_ty.ty),
+                            self.gen
+                                .build_template_ty_with_scope(&builder)
+                                .ty(param_ty.ty),
                         )
                     }
                 });
@@ -223,15 +235,18 @@ where
                 rty::RefinedType::new(rty::Type::unit(), param_refinement.clone())
             } else {
                 let unit_ty = mir_ty::Ty::new_unit(self.gen.tcx());
-                self.gen.build_template_ty(&builder).refined_ty(unit_ty)
+                self.gen
+                    .build_template_ty_with_scope(&builder)
+                    .refined_ty(unit_ty)
             };
             param_rtys.push(param_rty);
         }
 
-        let ret_rty = self
-            .ret_rty
-            .clone()
-            .unwrap_or_else(|| self.gen.build_template_ty(&builder).refined_ty(self.ret_ty));
+        let ret_rty = self.ret_rty.clone().unwrap_or_else(|| {
+            self.gen
+                .build_template_ty_with_scope(&builder)
+                .refined_ty(self.ret_ty)
+        });
         rty::FunctionType::new(param_rtys, ret_rty)
     }
 }
@@ -338,7 +353,8 @@ where
     }
 
     pub fn refined_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<V> {
-        let ty = self.ty(ty);
+        // TODO: consider building ty with scope
+        let ty = self.gen.build_template_ty().ty(ty);
         let tmpl = self.scope.build_template().build(ty);
         self.gen.register_template(tmpl)
     }
