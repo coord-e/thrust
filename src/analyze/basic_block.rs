@@ -439,7 +439,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let func_ty = match func.const_fn_def() {
             // TODO: move this to well-known defs?
             Some((def_id, args)) if self.is_box_new(def_id) => {
-                let inner_ty = self.ctx.unrefined_ty(args.type_at(0)).vacuous();
+                let inner_ty = self.ctx.build_template_ty().ty(args.type_at(0)).vacuous();
                 let param = rty::RefinedType::unrefined(inner_ty.clone());
                 let ret_term =
                     chc::Term::box_(chc::Term::var(rty::FunctionParamIdx::from(0_usize)));
