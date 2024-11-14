@@ -1,3 +1,5 @@
+use rustc_ast::ast::Attribute;
+use rustc_ast::tokenstream::TokenStream;
 use rustc_index::IndexVec;
 use rustc_middle::ty as mir_ty;
 use rustc_span::symbol::{Ident, Symbol};
@@ -11,6 +13,14 @@ pub fn requires_path() -> [Symbol; 2] {
 
 pub fn ensures_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("ensures")]
+}
+
+pub fn param_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("param")]
+}
+
+pub fn ret_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("ret")]
 }
 
 pub fn trusted_path() -> [Symbol; 2] {
@@ -77,4 +87,34 @@ impl ResultResolver {
             result_kind,
         }
     }
+}
+
+pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
+    use rustc_ast::{AttrArgs, AttrKind, DelimArgs};
+
+    let AttrKind::Normal(attr) = &attr.kind else {
+        panic!("invalid attribute");
+    };
+
+    let AttrArgs::Delimited(DelimArgs { tokens, .. }, ..) = &attr.item.args else {
+        panic!("invalid attribute");
+    };
+
+    tokens.clone()
+}
+
+pub fn split_param(ts: &TokenStream) -> (Ident, TokenStream) {
+    use rustc_ast::token::TokenKind;
+    use rustc_ast::tokenstream::TokenTree;
+
+    let mut cursor = ts.trees();
+    let (ident, _) = match cursor.next() {
+        Some(TokenTree::Token(t, _)) => t.ident().expect("expected parameter name"),
+        _ => panic!("expected parameter name"),
+    };
+    match cursor.next() {
+        Some(TokenTree::Token(t, _)) if t.kind == TokenKind::Colon => {}
+        _ => panic!("expected :"),
+    }
+    (ident, cursor.cloned().collect())
 }

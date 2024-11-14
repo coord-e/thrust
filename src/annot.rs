@@ -1,6 +1,5 @@
-use rustc_ast::ast::Attribute;
 use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Token, TokenKind};
-use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenTree};
+use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenStream, TokenTree};
 use rustc_index::IndexVec;
 use rustc_span::symbol::Ident;
 
@@ -10,7 +9,6 @@ use crate::rty;
 #[derive(Debug, Clone)]
 pub enum AnnotAtom<T> {
     Auto,
-    Param(Ident, rty::RefinedType<T>),
     Atom(chc::Atom<T>),
 }
 
@@ -438,7 +436,7 @@ where
         }
     }
 
-    fn parse_rty(&mut self) -> Result<rty::RefinedType<T::Output>> {
+    pub fn parse_rty(&mut self) -> Result<rty::RefinedType<T::Output>> {
         let ts = match self.look_ahead_token_tree(0) {
             Some(TokenTree::Delimited(_, _, Delimiter::Brace, ts)) => ts.clone(),
             _ => {
@@ -484,55 +482,17 @@ where
         Ok(rty::RefinedType::new(ty, atom.into()))
     }
 
-    fn parse_param(&mut self) -> Result<(Ident, rty::RefinedType<T::Output>)> {
-        let h = self.next_token("param")?;
-        let Some((ident, _)) = h.ident() else {
-            return Err(ParseAttrError::unexpected_token("param", h.clone()));
-        };
-        self.expect_next_token(TokenKind::Colon, ":")?;
-        let rty = self.parse_rty()?;
-        Ok((ident, rty))
-    }
-
-    pub fn parse(&mut self) -> Result<AnnotAtom<T::Output>> {
+    pub fn parse_annot_atom(&mut self) -> Result<AnnotAtom<T::Output>> {
         match self.look_ahead_token(0).and_then(|t| t.ident()) {
             Some((ident, _)) => {
                 if ident.as_str() == "auto" {
                     return Ok(AnnotAtom::Auto);
-                }
-                if matches!(
-                    self.look_ahead_token(1),
-                    Some(Token {
-                        kind: TokenKind::Colon,
-                        ..
-                    })
-                ) {
-                    return self
-                        .parse_param()
-                        .map(|(ident, rty)| AnnotAtom::Param(ident, rty));
                 }
             }
             _ => {}
         }
         self.parse_atom().map(AnnotAtom::Atom)
     }
-}
-
-pub fn parse<T: Resolver>(resolver: T, attr: &Attribute) -> Result<AnnotAtom<T::Output>> {
-    use rustc_ast::{AttrArgs, AttrKind, DelimArgs};
-
-    // TODO: Maybe we should move this to analyze and only accept TokenStream
-    let AttrKind::Normal(attr) = &attr.kind else {
-        return Err(ParseAttrError::invalid_attribute());
-    };
-
-    let AttrArgs::Delimited(DelimArgs { tokens, .. }, ..) = &attr.item.args else {
-        return Err(ParseAttrError::invalid_attribute());
-    };
-
-    let cursor = tokens.trees();
-    let mut parser = Parser { resolver, cursor };
-    parser.parse()
 }
 
 struct RefinementResolver<'a, T> {
@@ -621,10 +581,36 @@ impl<'a, T> StackedResolver<'a, T> {
         self.resolvers.push(Box::new(resolver));
         self
     }
+}
 
-    pub fn parse(self, attr: &Attribute) -> Result<AnnotAtom<T>> {
-        parse(self, attr)
+#[derive(Debug, Clone)]
+pub struct AnnotParser<T> {
+    resolver: T,
+}
+
+impl<T> AnnotParser<T> {
+    pub fn new(resolver: T) -> Self {
+        Self { resolver }
     }
 }
 
-pub type AnnotParser<'a, T> = StackedResolver<'a, T>;
+impl<T> AnnotParser<T>
+where
+    T: Resolver,
+{
+    pub fn parse_rty(&self, ts: TokenStream) -> Result<rty::RefinedType<T::Output>> {
+        let mut parser = Parser {
+            resolver: &self.resolver,
+            cursor: ts.trees(),
+        };
+        parser.parse_rty()
+    }
+
+    pub fn parse_atom(&self, ts: TokenStream) -> Result<AnnotAtom<T::Output>> {
+        let mut parser = Parser {
+            resolver: &self.resolver,
+            cursor: ts.trees(),
+        };
+        parser.parse_annot_atom()
+    }
+}
