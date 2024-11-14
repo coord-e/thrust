@@ -230,16 +230,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             .clone()
                             .into_iter()
                             .map(|ty| rty::RefinedType::unrefined(ty.vacuous()));
-                        let mir_ty_args: IndexVec<_, _> = args.types().collect();
-                        let params_subst = rty::unify_tys_params(
-                            variant_rtys,
-                            field_tys.clone().into_iter().map(Into::into),
-                        );
-                        let params = params_subst.into_params(mir_ty_args.len(), |idx| {
-                            rty::RefinedType::unrefined(
-                                self.ctx.unrefined_ty(mir_ty_args[idx]).vacuous(),
-                            )
-                        });
+
+                        let params: IndexVec<_, _> = args
+                            .types()
+                            .map(|ty| {
+                                self.ctx
+                                    .build_template_ty_with_scope(&self.env)
+                                    .refined_ty(ty)
+                            })
+                            .collect();
+                        for (field_pty, mut variant_rty) in
+                            field_tys.clone().into_iter().zip(variant_rtys)
+                        {
+                            variant_rty.instantiate_ty_params(params.clone());
+                            let cs = self
+                                .env
+                                .relate_sub_refined_type(&field_pty.into(), &variant_rty.boxed());
+                            self.ctx.extend_clauses(cs);
+                        }
 
                         let sort_args: Vec<_> = params.iter().map(|rty| rty.ty.to_sort()).collect();
                         let ty = rty::EnumType::new(ty_sym.clone(), params).into();
