@@ -827,15 +827,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     #[tracing::instrument(skip(self))]
     fn ret_template(&mut self) -> rty::RefinedType<Var> {
-        let bb_ty = self.basic_block_ty(self.basic_block);
-        let ret_ty = bb_ty.as_ref().ret.ty.clone();
-        let mut builder = rty::TemplateBuilder::default();
-        for (v, sort) in self.env.dependencies() {
-            builder.add_dependency(v, sort);
-        }
-        // TODO: polymorphic datatypes: template needed?
-        let tmpl = builder.build(ret_ty.strip_refinement().vacuous());
-        self.ctx.register_template(tmpl)
+        let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
+        self.ctx
+            .build_template_ty_with_scope(&self.env)
+            .refined_ty(ret_ty)
     }
 
     // TODO: remove this
@@ -945,17 +940,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         &mut self,
         expected_params: &IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
     ) {
-        let mut param_terms = HashMap::new();
+        let mut param_terms = HashMap::<rty::FunctionParamIdx, chc::Term<PlaceTypeVar>>::new();
         let mut assumption = UnboundAssumption::default();
 
         let bb_ty = self.basic_block_ty(self.basic_block).clone();
         let params = &bb_ty.as_ref().params;
+        tracing::info!(params = %params.pretty_slice().display(), expected_params = %expected_params.pretty_slice().display(), "bind_locals");
         assert!(params.len() >= 1);
         for (param_idx, param_rty) in params.iter_enumerated() {
             let param_ty = &param_rty.ty;
             if let Some(local) = bb_ty.local_of_param(param_idx) {
-                // TODO: polymorphic datatypes: template needed?
-                let rty = rty::RefinedType::unrefined(param_ty.clone().strip_refinement().vacuous());
+                let rty = rty::RefinedType::unrefined(param_ty.clone().subst_var(|v| {
+                    param_terms[&v].clone().map_var(|v| match v {
+                        PlaceTypeVar::Var(v) => v,
+                        // TODO
+                        _ => unimplemented!(),
+                    })
+                }));
                 if bb_ty.mutbl_of_param(param_idx).unwrap().is_mut() || rty.ty.is_mut() {
                     self.env.mut_bind(local, rty);
                 } else {
