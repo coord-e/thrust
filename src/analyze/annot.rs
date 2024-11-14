@@ -36,12 +36,12 @@ pub struct ParamResolver {
 }
 
 impl annot::Resolver for ParamResolver {
-    type Output = rty::RefinedTypeVar<rty::FunctionParamIdx>;
+    type Output = rty::FunctionParamIdx;
     fn resolve(&self, ident: Ident) -> Option<(Self::Output, annot::TermKind)> {
         self.params
             .iter_enumerated()
             .find(|(_, (name, _))| name == &ident.name)
-            .map(|(idx, (_, kind))| (rty::RefinedTypeVar::Free(idx), kind.clone()))
+            .map(|(idx, (_, kind))| (idx, kind.clone()))
     }
 }
 

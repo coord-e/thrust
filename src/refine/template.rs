@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Mutability};
 use rustc_middle::ty as mir_ty;
@@ -56,6 +58,7 @@ pub trait TemplateTypeGenerator<'tcx> {
                 })
                 .collect(),
             ret_ty: sig.output(),
+            param_rtys: Default::default(),
             param_refinement: None,
             ret_rty: None,
         }
@@ -80,6 +83,7 @@ pub trait TemplateTypeGenerator<'tcx> {
             gen: self,
             param_tys: tys,
             ret_ty,
+            param_rtys: Default::default(),
             param_refinement: None,
             ret_rty: None,
         };
@@ -123,6 +127,7 @@ pub struct FunctionTemplateTypeBuilder<'a, 'tcx, T: ?Sized> {
     param_tys: Vec<mir_ty::TypeAndMut<'tcx>>,
     ret_ty: mir_ty::Ty<'tcx>,
     param_refinement: Option<rty::Refinement<rty::FunctionParamIdx>>,
+    param_rtys: HashMap<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
     ret_rty: Option<rty::RefinedType<rty::FunctionParamIdx>>,
 }
 
@@ -155,6 +160,15 @@ where
         self
     }
 
+    pub fn param_rty(
+        &mut self,
+        idx: rty::FunctionParamIdx,
+        ty: rty::RefinedType<rty::FunctionParamIdx>,
+    ) -> &mut Self {
+        self.param_rtys.insert(idx, ty);
+        self
+    }
+
     pub fn ret_refinement(
         &mut self,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
@@ -173,16 +187,25 @@ where
         let mut builder = rty::TemplateBuilder::default();
         let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
         for (idx, param_ty) in self.param_tys.iter().enumerate() {
-            let param_rty = if idx == self.param_tys.len() - 1 {
-                if let Some(param_refinement) = &self.param_refinement {
-                    let ty = UnrefinedTypeGeneratorWrapper(&mut self.gen).unrefined_ty(param_ty.ty);
-                    rty::RefinedType::new(ty.vacuous(), param_refinement.clone())
-                } else {
-                    self.gen.build_template_ty(&builder).refined_ty(param_ty.ty)
-                }
-            } else {
-                rty::RefinedType::unrefined(self.gen.build_template_ty(&builder).ty(param_ty.ty))
-            };
+            let param_rty = self
+                .param_rtys
+                .get(&idx.into())
+                .cloned()
+                .unwrap_or_else(|| {
+                    if idx == self.param_tys.len() - 1 {
+                        if let Some(param_refinement) = &self.param_refinement {
+                            let ty = UnrefinedTypeGeneratorWrapper(&mut self.gen)
+                                .unrefined_ty(param_ty.ty);
+                            rty::RefinedType::new(ty.vacuous(), param_refinement.clone())
+                        } else {
+                            self.gen.build_template_ty(&builder).refined_ty(param_ty.ty)
+                        }
+                    } else {
+                        rty::RefinedType::unrefined(
+                            self.gen.build_template_ty(&builder).ty(param_ty.ty),
+                        )
+                    }
+                });
             let param_rty = if param_ty.mutbl.is_mut() {
                 // elaboration: treat mutabully declared variables as own
                 param_rty.boxed()

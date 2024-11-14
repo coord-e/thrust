@@ -188,6 +188,13 @@ where
 }
 
 impl<T> PointerType<T> {
+    pub fn new(kind: PointerKind, elem: Type<T>) -> Self {
+        PointerType {
+            kind,
+            elem: Box::new(RefinedType::unrefined(elem)),
+        }
+    }
+
     pub fn mut_to(ty: Type<T>) -> Self {
         PointerType {
             kind: PointerKind::Ref(RefKind::Mut),

@@ -1,13 +1,16 @@
 use rustc_ast::ast::Attribute;
 use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Token, TokenKind};
 use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenTree};
+use rustc_index::IndexVec;
 use rustc_span::symbol::Ident;
 
 use crate::chc;
+use crate::rty;
 
 #[derive(Debug, Clone)]
 pub enum AnnotAtom<T> {
     Auto,
+    Param(Ident, rty::RefinedType<T>),
     Atom(chc::Atom<T>),
 }
 
@@ -29,6 +32,14 @@ impl TermKind {
 
     pub fn other() -> Self {
         TermKind::Other
+    }
+
+    pub fn from_sort(sort: &chc::Sort) -> Self {
+        match sort {
+            chc::Sort::Box(s) => TermKind::Box(Box::new(TermKind::from_sort(s))),
+            chc::Sort::Mut(s) => TermKind::Mut(Box::new(TermKind::from_sort(s))),
+            _ => TermKind::Other,
+        }
     }
 }
 
@@ -56,6 +67,18 @@ where
         (**self).resolve(ident)
     }
 }
+
+pub trait ResolverExt: Resolver {
+    fn map<'a, U, F>(self, f: F) -> MappedResolver<'a, <Self as Resolver>::Output, F>
+    where
+        F: Fn(Self::Output) -> U,
+        Self: Sized + 'a,
+    {
+        MappedResolver::new(self, f)
+    }
+}
+
+impl<T> ResolverExt for T where T: Resolver {}
 
 #[derive(Debug, Clone)]
 pub struct ParseAttrError {
@@ -125,6 +148,10 @@ impl<'a, T> Parser<'a, T>
 where
     T: Resolver,
 {
+    fn boxed_resolver<'b>(&'b self) -> Box<dyn Resolver<Output = T::Output> + 'b> {
+        Box::new(&self.resolver)
+    }
+
     fn next_token_tree(&mut self, expected: &'static str) -> Result<&TokenTree> {
         let Some(t) = self.cursor.next() else {
             return Err(ParseAttrError::unexpected_end(expected));
@@ -141,15 +168,24 @@ where
         }
     }
 
-    fn look_ahead(&mut self) -> Option<&TokenTree> {
-        self.cursor.look_ahead(0)
+    fn look_ahead_token_tree(&mut self, n: usize) -> Option<&TokenTree> {
+        self.cursor.look_ahead(n)
     }
 
-    fn look_ahead_token(&mut self) -> Option<&Token> {
-        if let Some(TokenTree::Token(t, _)) = self.look_ahead() {
+    fn look_ahead_token(&mut self, n: usize) -> Option<&Token> {
+        if let Some(TokenTree::Token(t, _)) = self.look_ahead_token_tree(n) {
             Some(t)
         } else {
             None
+        }
+    }
+
+    fn expect_next_token(&mut self, expected: TokenKind, expected_str: &'static str) -> Result<()> {
+        let t = self.next_token(expected_str)?;
+        if t.kind == expected {
+            Ok(())
+        } else {
+            Err(ParseAttrError::unexpected_token(expected_str, t.clone()))
         }
     }
 
@@ -181,9 +217,8 @@ where
         let t = match &tt {
             TokenTree::Token(t, _) => t,
             TokenTree::Delimited(_, _, Delimiter::Parenthesis, s) => {
-                let resolver = Box::new(&self.resolver) as Box<dyn Resolver<Output = T::Output>>;
                 let mut parser = Parser {
-                    resolver,
+                    resolver: self.boxed_resolver(),
                     cursor: s.trees(),
                 };
                 return parser.parse_term();
@@ -232,7 +267,7 @@ where
     fn parse_term(&mut self) -> Result<(chc::Term<T::Output>, TermKind)> {
         let (lhs, lhs_kind) = self.parse_atom_term()?;
 
-        let term = match self.look_ahead_token().map(|t| &t.kind) {
+        let term = match self.look_ahead_token(0).map(|t| &t.kind) {
             Some(TokenKind::BinOp(BinOpToken::Plus)) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
@@ -260,7 +295,7 @@ where
     }
 
     fn parse_atom(&mut self) -> Result<chc::Atom<T::Output>> {
-        match self.look_ahead_token().and_then(|t| t.ident()) {
+        match self.look_ahead_token(0).and_then(|t| t.ident()) {
             Some((ident, _)) => {
                 if ident.as_str() == "true" {
                     self.consume();
@@ -299,11 +334,182 @@ where
         Ok(chc::Atom::new(pred.into(), vec![lhs, rhs]))
     }
 
+    fn parse_ty(&mut self) -> Result<rty::Type<T::Output>> {
+        let tt = self.next_token_tree("ty")?.clone();
+        match tt {
+            TokenTree::Token(
+                Token {
+                    kind: TokenKind::Ident(sym, _),
+                    ..
+                },
+                _,
+            ) => {
+                let ty = match sym.as_str() {
+                    "bool" => rty::Type::bool(),
+                    "int" => rty::Type::int(),
+                    "string" => rty::Type::string(),
+                    "fn" => unimplemented!(),
+                    "Box" => {
+                        self.expect_next_token(TokenKind::Lt, "<")?;
+                        let ty = self.parse_ty()?;
+                        self.expect_next_token(TokenKind::Gt, ">")?;
+                        rty::PointerType::own(ty).into()
+                    }
+                    s => {
+                        let sym = chc::DatatypeSymbol::new(s.to_owned());
+                        let tys =
+                            if self.look_ahead_token(0).map(|t| &t.kind) == Some(&TokenKind::Lt) {
+                                self.consume();
+                                let mut tys = IndexVec::new();
+                                loop {
+                                    tys.push(self.parse_rty()?);
+                                    match self.next_token("> or ,")? {
+                                        Token {
+                                            kind: TokenKind::Comma,
+                                            ..
+                                        } => {}
+                                        Token {
+                                            kind: TokenKind::Gt,
+                                            ..
+                                        } => break,
+                                        t => {
+                                            return Err(ParseAttrError::unexpected_token(
+                                                ">, or ,",
+                                                t.clone(),
+                                            ))
+                                        }
+                                    }
+                                }
+                                tys
+                            } else {
+                                Default::default()
+                            };
+                        rty::EnumType::new(sym, tys).into()
+                    }
+                };
+                Ok(ty)
+            }
+            TokenTree::Token(
+                Token {
+                    kind: TokenKind::Not,
+                    ..
+                },
+                _,
+            ) => Ok(rty::Type::never()),
+            TokenTree::Token(
+                Token {
+                    kind: TokenKind::BinOp(BinOpToken::And),
+                    ..
+                },
+                _,
+            ) => {
+                let ref_kind = if matches!(self.look_ahead_token(0), Some(Token { kind: TokenKind::Ident(sym, _), .. }) if sym.as_str() == "mut")
+                {
+                    self.consume();
+                    rty::RefKind::Mut
+                } else {
+                    rty::RefKind::Immut
+                };
+                let ty = self.parse_ty()?;
+                Ok(rty::PointerType::new(ref_kind.into(), ty).into())
+            }
+            TokenTree::Delimited(_, _, Delimiter::Parenthesis, ts) => {
+                let mut parser = Parser {
+                    resolver: self.boxed_resolver(),
+                    cursor: ts.trees(),
+                };
+                let mut rtys = Vec::new();
+                loop {
+                    rtys.push(parser.parse_ty()?);
+                    match parser.look_ahead_token(0) {
+                        Some(Token {
+                            kind: TokenKind::Comma,
+                            ..
+                        }) => {
+                            parser.consume();
+                        }
+                        None => break,
+                        Some(t) => return Err(ParseAttrError::unexpected_token(",", t.clone())),
+                    }
+                }
+                Ok(rty::TupleType::new(rtys).into())
+            }
+            t => Err(ParseAttrError::unexpected_token_tree("ty", t.clone())),
+        }
+    }
+
+    fn parse_rty(&mut self) -> Result<rty::RefinedType<T::Output>> {
+        let ts = match self.look_ahead_token_tree(0) {
+            Some(TokenTree::Delimited(_, _, Delimiter::Brace, ts)) => ts.clone(),
+            _ => {
+                let ty = self.parse_ty()?;
+                return Ok(rty::RefinedType::unrefined(ty));
+            }
+        };
+        self.consume();
+
+        let mut parser = Parser {
+            resolver: self.boxed_resolver(),
+            cursor: ts.trees(),
+        };
+        let self_ident = if matches!(
+            parser.look_ahead_token(1),
+            Some(Token {
+                kind: TokenKind::Colon,
+                ..
+            })
+        ) {
+            let h = parser.next_token("ident")?;
+            let Some((ident, _)) = h.ident() else {
+                return Err(ParseAttrError::unexpected_token("ident", h.clone()));
+            };
+            parser.consume();
+            Some(ident)
+        } else {
+            None
+        };
+        let ty = parser.parse_ty()?;
+        parser.expect_next_token(TokenKind::BinOp(BinOpToken::Or), "|")?;
+
+        let mut parser = Parser {
+            resolver: RefinementResolver::new(self.boxed_resolver()),
+            cursor: parser.cursor,
+        };
+        if let Some(self_ident) = self_ident {
+            parser
+                .resolver
+                .set_self(self_ident, TermKind::from_sort(&ty.to_sort()));
+        }
+        let atom = parser.parse_atom()?;
+        Ok(rty::RefinedType::new(ty, atom.into()))
+    }
+
+    fn parse_param(&mut self) -> Result<(Ident, rty::RefinedType<T::Output>)> {
+        let h = self.next_token("param")?;
+        let Some((ident, _)) = h.ident() else {
+            return Err(ParseAttrError::unexpected_token("param", h.clone()));
+        };
+        self.expect_next_token(TokenKind::Colon, ":")?;
+        let rty = self.parse_rty()?;
+        Ok((ident, rty))
+    }
+
     pub fn parse(&mut self) -> Result<AnnotAtom<T::Output>> {
-        match self.look_ahead_token().and_then(|t| t.ident()) {
+        match self.look_ahead_token(0).and_then(|t| t.ident()) {
             Some((ident, _)) => {
                 if ident.as_str() == "auto" {
                     return Ok(AnnotAtom::Auto);
+                }
+                if matches!(
+                    self.look_ahead_token(1),
+                    Some(Token {
+                        kind: TokenKind::Colon,
+                        ..
+                    })
+                ) {
+                    return self
+                        .parse_param()
+                        .map(|(ident, rty)| AnnotAtom::Param(ident, rty));
                 }
             }
             _ => {}
@@ -327,6 +533,65 @@ pub fn parse<T: Resolver>(resolver: T, attr: &Attribute) -> Result<AnnotAtom<T::
     let cursor = tokens.trees();
     let mut parser = Parser { resolver, cursor };
     parser.parse()
+}
+
+struct RefinementResolver<'a, T> {
+    resolver: Box<dyn Resolver<Output = T> + 'a>,
+    self_: Option<(Ident, TermKind)>,
+}
+
+impl<'a, T> Resolver for RefinementResolver<'a, T> {
+    type Output = rty::RefinedTypeVar<T>;
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
+        if let Some((self_ident, kind)) = &self.self_ {
+            if ident == *self_ident {
+                return Some((rty::RefinedTypeVar::Value, kind.clone()));
+            }
+        }
+        self.resolver
+            .resolve(ident)
+            .map(|(v, kind)| (rty::RefinedTypeVar::Free(v), kind))
+    }
+}
+
+impl<'a, T> RefinementResolver<'a, T> {
+    fn new(resolver: impl Resolver<Output = T> + 'a) -> Self {
+        Self {
+            resolver: Box::new(resolver),
+            self_: None,
+        }
+    }
+
+    fn set_self(&mut self, ident: Ident, kind: TermKind) -> &mut Self {
+        self.self_ = Some((ident, kind));
+        self
+    }
+}
+
+pub struct MappedResolver<'a, T, F> {
+    resolver: Box<dyn Resolver<Output = T> + 'a>,
+    map: F,
+}
+
+impl<'a, T, F, U> Resolver for MappedResolver<'a, T, F>
+where
+    F: Fn(T) -> U,
+{
+    type Output = U;
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
+        self.resolver
+            .resolve(ident)
+            .map(|(v, kind)| ((self.map)(v), kind))
+    }
+}
+
+impl<'a, T, F> MappedResolver<'a, T, F> {
+    pub fn new(resolver: impl Resolver<Output = T> + 'a, map: F) -> Self {
+        Self {
+            resolver: Box::new(resolver),
+            map,
+        }
+    }
 }
 
 pub struct StackedResolver<'a, T> {

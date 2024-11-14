@@ -6,7 +6,7 @@ use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::DefId;
 
 use crate::analyze;
-use crate::annot::{AnnotAtom, AnnotParser};
+use crate::annot::{AnnotAtom, AnnotParser, ResolverExt as _};
 use crate::chc;
 use crate::refine::{self, TemplateTypeGenerator, UnrefinedTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _};
@@ -36,7 +36,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             param_resolver.push_param(input_ident.name, input_ty);
         }
 
-        let mut require_annot = None;
+        let mut require_annots = Vec::new();
         for require in self
             .tcx
             .get_attrs_by_path(def_id, &analyze::annot::requires_path())
@@ -45,10 +45,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .resolver(&param_resolver)
                 .parse(require)
                 .unwrap();
-            if require_annot.is_some() {
-                unimplemented!();
-            }
-            require_annot = Some(require);
+            require_annots.push(require);
         }
         let mut ensure_annot = None;
         for ensure in self
@@ -57,7 +54,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         {
             let ensure = AnnotParser::default()
                 .resolver(analyze::annot::ResultResolver::new(&sig.output()))
-                .resolver(&param_resolver)
+                .resolver((&param_resolver).map(rty::RefinedTypeVar::Free))
                 .parse(ensure)
                 .unwrap();
             if ensure_annot.is_some() {
@@ -66,20 +63,37 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             ensure_annot = Some(ensure);
         }
 
-        assert!(require_annot.is_some() == ensure_annot.is_some());
+        assert!(require_annots.is_empty() == ensure_annot.is_none());
         if self
             .tcx
             .get_attrs_by_path(def_id, &analyze::annot::trusted_path())
             .next()
             .is_some()
         {
-            assert!(require_annot.is_some());
+            assert!(!require_annots.is_empty());
             self.trusted.insert(def_id);
         }
 
         let mut builder = self.ctx.build_function_template_ty(sig);
-        if let Some(AnnotAtom::Atom(require)) = require_annot {
-            builder.param_refinement(require.into());
+        for require_annot in require_annots {
+            match require_annot {
+                AnnotAtom::Atom(require) => {
+                    let atom = require.map_var(|idx| {
+                        if idx.index() == sig.inputs().len() - 1 {
+                            rty::RefinedTypeVar::Value
+                        } else {
+                            rty::RefinedTypeVar::Free(idx)
+                        }
+                    });
+                    builder.param_refinement(atom.into());
+                }
+                AnnotAtom::Param(ident, ty) => {
+                    use crate::annot::Resolver as _;
+                    let (idx, _) = param_resolver.resolve(ident).expect("unknown param");
+                    builder.param_rty(idx, ty);
+                }
+                _ => {}
+            }
         }
         if let Some(AnnotAtom::Atom(ensure)) = ensure_annot {
             builder.ret_refinement(ensure.into());
