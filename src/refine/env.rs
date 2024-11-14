@@ -409,7 +409,7 @@ impl PlaceType {
         for field_ty in variant.field_tys.clone() {
             let mut rty = rty::RefinedType::unrefined(field_ty.vacuous());
             rty.instantiate_ty_params(inner_ty.args.clone());
-            let rty::RefinedType { ty, refinement } = rty;
+            let rty::RefinedType { ty, refinement } = rty.boxed();
 
             let field_ex_var = existentials.push(ty.to_sort());
             field_terms.push(chc::Term::var(field_ex_var.into()));
@@ -973,7 +973,7 @@ impl Env {
                 fields.push(x);
                 let mut field_ty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
                 field_ty.instantiate_ty_params(ty.args.clone());
-                self.bind_impl(x.into(), field_ty, depth);
+                self.bind_impl(x.into(), field_ty.boxed(), depth);
             }
             variants.push(FlowBindingVariant { fields });
         }
@@ -1177,7 +1177,7 @@ impl Env {
                     let def = &self.enum_defs[&sym];
                     let expected_tys = def
                         .field_tys()
-                        .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()));
+                        .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()).boxed());
                     let got_tys = field_tys.iter().map(|ty| ty.clone().into());
                     rty::unify_tys_params(expected_tys, got_tys).into_params(def.ty_params, |_| {
                         panic!("var_type: should unify all params")

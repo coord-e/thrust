@@ -166,9 +166,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .iter()
                         .map(|field| {
                             let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                            let field_ty = self.ctx.unrefined_ty(field_ty);
-                            // elaboration: all fields are boxed
-                            rty::PointerType::own(field_ty).into()
+                            self.ctx.unrefined_ty(field_ty)
                         })
                         .collect();
                     rty::EnumVariantDef {
