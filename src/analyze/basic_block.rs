@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use rustc_hir::def::DefKind;
@@ -7,7 +8,6 @@ use rustc_middle::mir::{
 };
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
-use rustc_target::abi::FieldIdx;
 
 use crate::analyze;
 use crate::chc;
@@ -29,20 +29,15 @@ pub struct Analyzer<'tcx, 'ctx> {
     local_def_id: LocalDefId,
     drop_points: DropPoints,
     basic_block: BasicBlock,
-    body: &'tcx Body<'tcx>,
+    body: Cow<'tcx, Body<'tcx>>,
 
     env: Env,
     local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>,
-    elaborated_locals: HashMap<Local, mir::Place<'tcx>>,
     // TODO: remove this
     prophecy_vars: HashMap<usize, TempVarIdx>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    fn def_ids(&self) -> &analyze::did_cache::DefIdCache<'tcx> {
-        &self.ctx.def_ids
-    }
-
     fn is_defined(&self, local: Local) -> bool {
         self.env.contains_local(local)
     }
@@ -53,14 +48,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn reborrow_visitor<'a>(&'a mut self) -> visitor::ReborrowVisitor<'a, 'tcx, 'ctx> {
         visitor::ReborrowVisitor::new(self)
-    }
-
-    fn replace_elaborated_locals_visitor(&self) -> visitor::ReplacePlacesVisitor<'tcx> {
-        let mut visitor = visitor::ReplacePlacesVisitor::new(self.tcx);
-        for (from, to) in &self.elaborated_locals {
-            visitor.add_replacement((*from).into(), to.clone());
-        }
-        visitor
     }
 
     fn basic_block_ty(&self, bb: BasicBlock) -> &BasicBlockType {
@@ -578,51 +565,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn unelaborate_box_deref(&self, place: &mir::Place<'tcx>) -> Option<mir::Place<'tcx>> {
-        let unique_did = self.def_ids().unique()?;
-        let nonnull_did = self.def_ids().nonnull()?;
-
-        let (rest, chunk) = place.projection.as_slice().split_last_chunk::<3>()?;
-        let rest_place = mir::Place {
-            local: place.local,
-            projection: self.tcx.mk_place_elems(rest),
-        };
-        let local_ty = rest_place.ty(&self.local_decls, self.tcx).ty;
-        if !local_ty.is_box() {
-            return None;
-        }
-        let inner_ty = local_ty.boxed_ty();
-
-        use mir::ProjectionElem::Field;
-        const ZERO_FIELD: FieldIdx = FieldIdx::from_u32(0);
-        let [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1), Field(ZERO_FIELD, ty2)] = chunk else {
-            return None;
-        };
-
-        if !matches!(
-            ty0.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == unique_did && args.type_at(0) == inner_ty
-        ) {
-            return None;
-        }
-
-        if !matches!(
-            ty1.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == nonnull_did && args.type_at(0) == inner_ty
-        ) {
-            return None;
-        }
-
-        if !matches!(
-            ty2.kind(), mir_ty::TyKind::RawPtr(t)
-            if t.ty == inner_ty && t.mutbl.is_not()
-        ) {
-            return None;
-        }
-
-        Some(rest_place)
-    }
-
     #[tracing::instrument(skip(self, lhs, rvalue))]
     fn analyze_assignment(
         &mut self,
@@ -640,22 +582,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         // definition
         assert!(lhs.projection.is_empty());
-
-        if let Rvalue::Use(Operand::Copy(operand)) = rvalue {
-            if let Some(place) = self.unelaborate_box_deref(operand) {
-                self.elaborated_locals.insert(lhs.local, place);
-                self.merge_drop_points(lhs.local, place.local);
-                tracing::info!(ptr_local = ?lhs.local, ?place, "skipped elaborated box deref");
-                return;
-            }
-        }
-
-        if let Rvalue::CopyForDeref(place) = rvalue {
-            self.elaborated_locals.insert(lhs.local, place.clone());
-            self.merge_drop_points(lhs.local, place.local);
-            tracing::info!(ret_local = ?lhs.local, ?place, "skipped deref_copy");
-            return;
-        }
 
         if let Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent) = rvalue {
             // mutable borrow
@@ -686,14 +612,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             tracing::info!(?local, "implicitly dropped before statements");
             self.drop_local(local);
         }
-        let statements = &self.body.basic_blocks[self.basic_block].statements;
+        let statements = self.body.basic_blocks[self.basic_block].statements.clone();
         for (stmt_idx, mut stmt) in statements.iter().cloned().enumerate() {
             if stmt_idx == statements.len() - 1 && self.terminator_is_drop_call().is_some() {
                 tracing::warn!(%stmt_idx, ?stmt, "skip before std::ops::Drop");
                 continue;
             }
-            self.replace_elaborated_locals_visitor()
-                .visit_statement(&mut stmt);
             self.reborrow_visitor().visit_statement(&mut stmt);
             tracing::debug!(%stmt_idx, ?stmt);
             match &stmt.kind {
@@ -701,7 +625,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     let (lhs, rvalue) = &**x;
                     self.analyze_assignment(lhs, rvalue, stmt_idx);
                 }
-                StatementKind::StorageLive(_) | StatementKind::StorageDead(_) => {}
+                StatementKind::Nop
+                | StatementKind::StorageLive(_)
+                | StatementKind::StorageDead(_) => {}
                 _ => unimplemented!("stmt={:?}", stmt.kind),
             }
             for local in self.drop_points.after_statement(stmt_idx).iter() {
@@ -722,8 +648,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 source_info: term.source_info,
             };
         }
-        self.replace_elaborated_locals_visitor()
-            .visit_terminator(&mut term);
         self.reborrow_visitor().visit_terminator(&mut term);
         tracing::debug!(term = ?term.kind);
         term
@@ -837,6 +761,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn alloc_prophecies(&mut self) {
         for (stmt_idx, stmt) in self.body.basic_blocks[self.basic_block]
             .statements
+            .clone()
             .iter()
             .enumerate()
         {
@@ -1031,11 +956,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) -> Self {
         let tcx = ctx.tcx;
         let drop_points = DropPoints::default();
-        let body = tcx.optimized_mir(local_def_id.to_def_id());
+        let body = Cow::Borrowed(tcx.optimized_mir(local_def_id.to_def_id()));
         let env = ctx.new_env();
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
-        let elaborated_locals = Default::default();
         Self {
             ctx,
             tcx,
@@ -1046,12 +970,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             env,
             local_decls,
             prophecy_vars,
-            elaborated_locals,
         }
     }
 
     pub fn drop_points(&mut self, drop_points: DropPoints) -> &mut Self {
         self.drop_points = drop_points;
+        self
+    }
+
+    pub fn body(&mut self, body: Body<'tcx>) -> &mut Self {
+        self.local_decls = body.local_decls.clone();
+        self.body = Cow::Owned(body);
+        self
+    }
+
+    pub fn local_decls(&mut self, local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>) -> &mut Self {
+        self.local_decls = local_decls;
         self
     }
 

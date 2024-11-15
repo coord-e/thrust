@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::mir::{BasicBlock, Local};
+use rustc_middle::mir::{self, BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
@@ -29,6 +29,69 @@ pub fn resolve_discr<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::VariantDiscr) -> u3
             let val = tcx.const_eval_poly(did).unwrap();
             val.try_to_scalar_int().unwrap().try_to_u32().unwrap()
         }
+    }
+}
+
+pub struct ReplacePlacesVisitor<'tcx> {
+    replacements: HashMap<(Local, &'tcx [mir::PlaceElem<'tcx>]), mir::Place<'tcx>>,
+    tcx: TyCtxt<'tcx>,
+}
+
+impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplacePlacesVisitor<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn visit_place(
+        &mut self,
+        place: &mut mir::Place<'tcx>,
+        _: mir::visit::PlaceContext,
+        _: mir::Location,
+    ) {
+        let proj = place.projection.as_slice();
+        for i in 0..=proj.len() {
+            if let Some(to) = self.replacements.get(&(place.local, &proj[0..i])) {
+                place.local = to.local;
+                place.projection = self.tcx.mk_place_elems_from_iter(
+                    to.projection.iter().chain(proj.iter().skip(i).cloned()),
+                );
+                return;
+            }
+        }
+    }
+}
+
+impl<'tcx> ReplacePlacesVisitor<'tcx> {
+    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+        Self {
+            tcx,
+            replacements: Default::default(),
+        }
+    }
+
+    pub fn with_replacement(
+        tcx: TyCtxt<'tcx>,
+        from: mir::Place<'tcx>,
+        to: mir::Place<'tcx>,
+    ) -> Self {
+        let mut visitor = Self::new(tcx);
+        visitor.add_replacement(from, to);
+        visitor
+    }
+
+    pub fn add_replacement(&mut self, from: mir::Place<'tcx>, to: mir::Place<'tcx>) {
+        self.replacements
+            .insert((from.local, from.projection.as_slice()), to);
+    }
+
+    pub fn visit_statement(&mut self, stmt: &mut mir::Statement<'tcx>) {
+        // dummy location
+        mir::visit::MutVisitor::visit_statement(self, stmt, mir::Location::START);
+    }
+
+    pub fn visit_terminator(&mut self, term: &mut mir::Terminator<'tcx>) {
+        // dummy location
+        mir::visit::MutVisitor::visit_terminator(self, term, mir::Location::START);
     }
 }
 
