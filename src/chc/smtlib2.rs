@@ -379,17 +379,17 @@ pub struct DatatypeDiscrFun<'ctx, 'a> {
 impl<'ctx, 'a> std::fmt::Display for DatatypeDiscrFun<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sym = &self.inner.symbol;
-        let mut ctors = self.inner.ctors.iter().rev();
-        let Some(last_ctor) = ctors.next() else {
-            unimplemented!("empty enum is not implemented");
-        };
-        let cases = ctors.fold(last_ctor.discriminant.to_string(), |acc, ctor| {
-            format!(
-                "(ite ((_ is {ctor}) x) {discr} {acc})",
-                ctor = &ctor.symbol,
-                discr = ctor.discriminant,
-            )
-        });
+        let cases = self
+            .inner
+            .ctors
+            .iter()
+            .rfold("(- 1)".to_owned(), |acc, ctor| {
+                format!(
+                    "(ite ((_ is {ctor}) x) {discr} {acc})",
+                    ctor = &ctor.symbol,
+                    discr = ctor.discriminant,
+                )
+            });
         write!(
             f,
             "(define-fun {discr} ((x {sym})) Int {cases})",
