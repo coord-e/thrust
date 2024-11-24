@@ -109,7 +109,7 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             return;
         };
 
-        if m.is_mut() && !operand.is_move() {
+        if m.is_mut() {
             let new_local = self.insert_reborrow(self.tcx.mk_place_deref(p), *inner_ty);
             *operand = mir::Operand::Move(new_local.into());
         }

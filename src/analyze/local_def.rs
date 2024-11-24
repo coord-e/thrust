@@ -121,15 +121,32 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     where
         T: mir::visit::MirVisitable<'tcx> + ?Sized,
     {
-        struct Visitor {
+        struct Visitor<'tcx, 'a> {
+            tcx: TyCtxt<'tcx>,
+            body: &'a Body<'tcx>,
+
             locals: BitSet<Local>,
         }
-        impl<'tcx> mir::visit::Visitor<'tcx> for Visitor {
+        impl<'tcx> mir::visit::Visitor<'tcx> for Visitor<'tcx, '_> {
             fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {
                 if let mir::Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, place) = rvalue {
                     self.locals.insert(place.local);
                 }
                 self.super_rvalue(rvalue, location);
+            }
+
+            fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, location: mir::Location) {
+                if let mir::Operand::Move(place) = operand {
+                    // to be reborrowed; see analyze::basic_block::visitor
+                    if place
+                        .ty(&self.body.local_decls, self.tcx)
+                        .ty
+                        .is_mutable_ptr()
+                    {
+                        self.locals.insert(place.local);
+                    }
+                }
+                self.super_operand(operand, location);
             }
 
             fn visit_assign(
@@ -144,6 +161,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         let mut visitor = Visitor {
+            tcx: self.tcx,
+            body: &self.body,
             locals: BitSet::new_empty(self.body.local_decls.len()),
         };
         visitable.apply(mir::Location::START, &mut visitor);
