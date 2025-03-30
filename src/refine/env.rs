@@ -1322,6 +1322,10 @@ impl Path {
     fn deref(self) -> Self {
         Path::Deref(Box::new(self))
     }
+
+    fn tuple_proj(self, idx: usize) -> Self {
+        Path::TupleProj(Box::new(self), idx)
+    }
 }
 
 impl Env {
@@ -1350,6 +1354,10 @@ impl Env {
             }));
         } else if ty.ty.is_own() {
             self.drop_path(&path.clone().deref())
+        } else if let Some(tty) = ty.ty.as_tuple() {
+            for i in 0..tty.elems.len() {
+                self.drop_path(&path.clone().tuple_proj(i));
+            }
         }
     }
 

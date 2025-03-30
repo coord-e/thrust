@@ -659,6 +659,13 @@ impl<T> Type<T> {
         }
     }
 
+    pub fn as_tuple(&self) -> Option<&TupleType<T>> {
+        match self {
+            Type::Tuple(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
     pub fn into_enum(self) -> Option<EnumType<T>> {
         match self {
             Type::Enum(ty) => Some(ty),
