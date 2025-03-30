@@ -652,6 +652,13 @@ impl<T> Type<T> {
         }
     }
 
+    pub fn as_pointer(&self) -> Option<&PointerType<T>> {
+        match self {
+            Type::Pointer(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
     pub fn as_enum(&self) -> Option<&EnumType<T>> {
         match self {
             Type::Enum(ty) => Some(ty),

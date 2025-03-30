@@ -695,6 +695,35 @@ impl From<chc::Atom<Var>> for UnboundAssumption {
     }
 }
 
+impl Extend<UnboundAssumption> for UnboundAssumption {
+    fn extend<T>(&mut self, iter: T)
+    where
+        T: IntoIterator<Item = UnboundAssumption>,
+    {
+        for assumption in iter {
+            self.conds.extend(
+                assumption
+                    .conds
+                    .into_iter()
+                    .map(|c| c.map_var(|v| v.shift_existential(self.existentials.len()))),
+            );
+            self.existentials.extend(assumption.existentials);
+        }
+        self.conds.retain(|c| !c.is_top());
+    }
+}
+
+impl FromIterator<UnboundAssumption> for UnboundAssumption {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = UnboundAssumption>,
+    {
+        let mut result = UnboundAssumption::default();
+        result.extend(iter);
+        result
+    }
+}
+
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UnboundAssumption
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -737,6 +766,10 @@ impl UnboundAssumption {
             existentials,
             conds,
         }
+    }
+
+    pub fn is_top(&self) -> bool {
+        self.conds.iter().all(chc::Atom::is_top)
     }
 }
 
@@ -1290,6 +1323,7 @@ impl Env {
 
 #[derive(Debug, Clone)]
 enum Path {
+    PlaceTy(PlaceType),
     Local(Local),
     Deref(Box<Path>),
     TupleProj(Box<Path>, usize),
@@ -1331,6 +1365,7 @@ impl Path {
 impl Env {
     fn path_type(&self, path: &Path) -> PlaceType {
         match path {
+            Path::PlaceTy(pty) => pty.clone(),
             Path::Local(local) => self.local_type(*local),
             Path::Deref(path) => self.path_type(path).deref(),
             Path::TupleProj(path, idx) => self.path_type(path).tuple_proj(*idx),
@@ -1345,23 +1380,101 @@ impl Env {
         self.path_type(&place.into())
     }
 
-    fn drop_path(&mut self, path: &Path) {
+    fn dropping_assumption(&mut self, path: &Path) -> UnboundAssumption {
         let ty = self.path_type(path);
         if ty.ty.is_mut() {
-            self.assume(ty.into_assumption(|term| {
+            ty.into_assumption(|term| {
                 let term = term.map_var(Into::into);
                 term.clone().mut_final().equal_to(term.mut_current())
-            }));
+            })
         } else if ty.ty.is_own() {
-            self.drop_path(&path.clone().deref())
+            self.dropping_assumption(&path.clone().deref())
         } else if let Some(tty) = ty.ty.as_tuple() {
-            for i in 0..tty.elems.len() {
-                self.drop_path(&path.clone().tuple_proj(i));
+            (0..tty.elems.len())
+                .into_iter()
+                .map(|i| self.dropping_assumption(&path.clone().tuple_proj(i)))
+                .collect()
+        } else if let Some(ety) = ty.ty.as_enum() {
+            let enum_def = self.enum_defs[&ety.symbol].clone();
+            let matcher_pred = chc::MatcherPred::new(ety.symbol.clone(), ety.arg_sorts());
+
+            let PlaceType {
+                ty: _,
+                mut existentials,
+                term,
+                mut conds,
+            } = ty;
+
+            let mut pred_args = vec![];
+            for field_ty in enum_def.field_tys() {
+                let mut field_rty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
+                field_rty.instantiate_ty_params(ety.args.clone());
+
+                let ev = existentials.push(field_rty.ty.to_sort());
+                pred_args.push(chc::Term::var(ev.into()));
+
+                if let Some(p) = field_rty.ty.as_pointer() {
+                    if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
+                        // TODO: we need recursively defined drop_pred for the recursive ADTs!
+                        tracing::warn!("skipping recursive variant");
+                        continue;
+                    }
+                }
+
+                let field_pty = {
+                    let rty::RefinedType {
+                        ty: field_ty,
+                        refinement,
+                    } = field_rty;
+                    let rty::Refinement {
+                        atoms,
+                        existentials,
+                    } = refinement;
+                    PlaceType {
+                        ty: field_ty,
+                        existentials,
+                        term: chc::Term::var(ev.into()),
+                        conds: atoms
+                            .into_iter()
+                            .map(|a| {
+                                a.map_var(|v| match v {
+                                    rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(ev),
+                                    rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v.into()),
+                                    // TODO: (but otherwise we can't distinguish field existentials from them...)
+                                    rty::RefinedTypeVar::Existential(_) => {
+                                        panic!("cannot handle existentials in field_rty")
+                                    }
+                                })
+                            })
+                            .collect(),
+                    }
+                };
+
+                let UnboundAssumption {
+                    existentials: assumption_existentials,
+                    conds: assumption_conds,
+                } = self.dropping_assumption(&Path::PlaceTy(field_pty));
+                // dropping assumption should not generate any existential
+                assert!(assumption_existentials.is_empty());
+                conds.extend(assumption_conds);
             }
+
+            pred_args.push(term);
+            conds.push(chc::Atom::new(matcher_pred.into(), pred_args));
+
+            UnboundAssumption {
+                existentials,
+                conds,
+            }
+        } else {
+            UnboundAssumption::default()
         }
     }
 
     pub fn drop_local(&mut self, local: Local) {
-        self.drop_path(&Path::Local(local))
+        let assumption = self.dropping_assumption(&Path::Local(local));
+        if !assumption.is_top() {
+            self.assume(assumption);
+        }
     }
 }
