@@ -12,6 +12,12 @@ pub enum AnnotAtom<T> {
     Atom(chc::Atom<T>),
 }
 
+impl<T> AnnotAtom<T> {
+    pub fn top() -> Self {
+        AnnotAtom::Atom(chc::Atom::top())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum TermKind {
     Box(Box<TermKind>),

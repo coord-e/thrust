@@ -119,8 +119,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             param_resolver.push_param(input_ident.name, input_ty);
         }
 
-        let require_annot = self.extract_require_annot(&param_resolver, def_id);
-        let ensure_annot = {
+        let mut require_annot = self.extract_require_annot(&param_resolver, def_id);
+        let mut ensure_annot = {
             let resolver = annot::StackedResolver::default()
                 .resolver(analyze::annot::ResultResolver::new(&sig.output()))
                 .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
@@ -128,6 +128,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         };
         let param_annots = self.extract_param_annots(&param_resolver, def_id);
         let ret_annot = self.extract_ret_annot(&param_resolver, def_id);
+
+        if self
+            .tcx
+            .get_attrs_by_path(def_id, &analyze::annot::callable_path())
+            .next()
+            .is_some()
+        {
+            if require_annot.is_some() || ensure_annot.is_some() {
+                unimplemented!();
+            }
+
+            require_annot = Some(AnnotAtom::top());
+            ensure_annot = Some(AnnotAtom::top());
+        }
 
         assert!(require_annot.is_none() || param_annots.is_empty());
         assert!(ensure_annot.is_none() || ret_annot.is_none());

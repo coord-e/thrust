@@ -27,6 +27,10 @@ pub fn trusted_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("trusted")]
 }
 
+pub fn callable_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("callable")]
+}
+
 fn ty_to_term_kind(ty: &mir_ty::Ty<'_>) -> annot::TermKind {
     match ty.kind() {
         mir_ty::TyKind::Ref(_, ty, mir_ty::Mutability::Mut) => {
