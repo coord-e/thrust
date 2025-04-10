@@ -96,7 +96,10 @@ impl Default for Config {
         Config {
             solver: CommandConfig {
                 name: "z3".to_owned(),
-                args: vec!["fp.spacer.global=true".to_owned()],
+                args: vec![
+                    "fp.spacer.global=true".to_owned(),
+                    "fp.validate=true".to_owned(),
+                ],
                 timeout: Some(std::time::Duration::from_secs(30)),
             },
             preprocessor: None,
