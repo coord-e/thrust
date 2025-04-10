@@ -1,9 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
 
-#![feature(register_tool)]
-#![register_tool(thrust)]
-
 pub enum X<T> {
     A(T),
 }

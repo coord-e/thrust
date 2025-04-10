@@ -5,12 +5,18 @@ extern crate rustc_interface;
 extern crate rustc_session;
 
 use rustc_driver::{Callbacks, Compilation, RunCompiler};
-use rustc_interface::interface::Compiler;
+use rustc_interface::interface::{Compiler, Config};
 use rustc_interface::Queries;
 
 struct CompilerCalls {}
 
 impl Callbacks for CompilerCalls {
+    fn config(&mut self, config: &mut Config) {
+        let attrs = &mut config.opts.unstable_opts.crate_attr;
+        attrs.push("feature(register_tool)".to_owned());
+        attrs.push("register_tool(thrust)".to_owned());
+    }
+
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &Compiler,

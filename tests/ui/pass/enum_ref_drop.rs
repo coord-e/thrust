@@ -1,9 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
 
-#![feature(register_tool)]
-#![register_tool(thrust)]
-
 pub enum X<'a, 'b> {
     A(&'a mut i64),
     B(&'b mut i64),

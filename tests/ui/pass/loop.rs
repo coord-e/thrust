@@ -1,9 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
 
-#![feature(register_tool)]
-#![register_tool(thrust)]
-
 #[thrust::requires(true)]
 #[thrust::ensures(true)]
 #[thrust::trusted]
