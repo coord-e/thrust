@@ -36,11 +36,11 @@ Let Thrust verify that the program is correct. Here, we use `cargo run` in the T
 ```console
 $ cargo run -- -Adead_code -C debug-assertions=false gcd.rs && echo 'safe'
    Compiling thrust v0.1.0 (/home/coord_e/rust-refinement/thrust)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.23s
-     Running `target/debug/thrust-rustc -C debug-assertions=false -Adead_code gcd.rs`
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `target/debug/thrust-rustc -Adead_code -C debug-assertions=false gcd.rs`
 error: verification error: Unsat
 
-error: aborting due to 1 previous error; 2 warnings emitted
+error: aborting due to 1 previous error
 ```
 
 Thrust says the program is not safe (possible to panic). In fact, we have a bug in our `gcd` function:
@@ -59,8 +59,8 @@ Now Thrust verifies the program is actually safe.
 
 ```console
 $ cargo run -- -Adead_code -C debug-assertions=false gcd_fixed.rs && echo 'safe'
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
-     Running `target/debug/thrust-rustc -C debug-assertions=false -Adead_code gcd_fixed.rs`
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `target/debug/thrust-rustc -Adead_code -C debug-assertions=false gcd.rs`
 safe
 ```
 
