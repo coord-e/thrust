@@ -35,21 +35,14 @@ impl Callbacks for CompilerCalls {
 pub fn main() {
     let args = std::env::args().collect::<Vec<_>>();
 
-    use tracing_subscriber::{
-        filter::{EnvFilter, LevelFilter},
-        prelude::*,
-    };
+    use tracing_subscriber::{filter::EnvFilter, prelude::*};
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stderr)
                 .compact()
                 .without_time()
-                .with_filter(
-                    EnvFilter::builder()
-                        .with_default_directive(LevelFilter::INFO.into())
-                        .from_env_lossy(),
-                ),
+                .with_filter(EnvFilter::from_default_env()),
         )
         .init();
 
