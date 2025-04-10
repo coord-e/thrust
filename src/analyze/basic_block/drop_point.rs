@@ -6,6 +6,8 @@ use rustc_mir_dataflow::{impls::MaybeLiveLocals, ResultsCursor};
 
 #[derive(Debug, Clone, Default)]
 pub struct DropPoints {
+    // TODO: ad-hoc
+    pub before_statements: Vec<Local>,
     after_statements: Vec<BitSet<Local>>,
     after_terminator: HashMap<BasicBlock, BitSet<Local>>,
 }
@@ -97,10 +99,10 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
         use rustc_data_structures::graph::WithSuccessors as _;
         let mut ins = BitSet::new_empty(self.body.local_decls.len());
         for succ_bb in self.body.basic_blocks.successors(bb) {
-            if !self.bb_ins_cache.contains_key(&succ_bb) {
+            self.bb_ins_cache.entry(succ_bb).or_insert_with(|| {
                 results.seek_to_block_start(succ_bb);
-                self.bb_ins_cache.insert(succ_bb, results.get().clone());
-            }
+                results.get().clone()
+            });
             let edge_drops = {
                 let mut t = live_locals_after_terminator.clone();
                 t.subtract(&self.bb_ins_cache[&succ_bb]);
@@ -143,6 +145,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
             "analyzed implicit drop points"
         );
         DropPoints {
+            before_statements: Default::default(),
             after_statements,
             after_terminator,
         }

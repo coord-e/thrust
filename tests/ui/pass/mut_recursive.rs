@@ -1,9 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-//@rustc-env: REFA_SOLVER_TIMEOUT_SECS=60
-
-#![feature(register_tool)]
-#![register_tool(thrust)]
+//@rustc-env: THRUST_SOLVER_TIMEOUT_SECS=60
 
 #[thrust::requires(true)]
 #[thrust::ensures(true)]

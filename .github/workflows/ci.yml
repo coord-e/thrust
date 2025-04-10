@@ -4,6 +4,20 @@ on:
 permissions: {}
 
 jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --all -- --check
+  clippy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo clippy -- -D warnings
   test:
     runs-on: ubuntu-latest
     permissions:

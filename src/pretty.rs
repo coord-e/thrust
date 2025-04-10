@@ -1,3 +1,5 @@
+use rustc_index::{IndexSlice, IndexVec};
+
 use pretty::{termcolor, BuildDoc, DocAllocator, DocPtr, Pretty};
 
 pub struct FunctionType<'a, FV> {
@@ -8,7 +10,7 @@ pub struct FunctionType<'a, FV> {
 
 impl<'a, 'b, 'c, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b FunctionType<'c, FV>
 where
-    &'c FV: Pretty<'a, D, termcolor::ColorSpec>,
+    FV: crate::chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -27,13 +29,69 @@ where
 
 impl<'a, FV> FunctionType<'a, FV> {
     pub fn new(
-        params: &'a rustc_index::IndexVec<
-            crate::rty::FunctionParamIdx,
-            crate::rty::RefinedType<FV>,
-        >,
+        params: &'a IndexVec<crate::rty::FunctionParamIdx, crate::rty::RefinedType<FV>>,
         ret: &'a crate::rty::RefinedType<FV>,
     ) -> FunctionType<'a, FV> {
         FunctionType { params, ret }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PrettySlice<'a, T> {
+    slice: &'a [T],
+}
+
+impl<'a, 'b, 'c, D, T> Pretty<'a, D, termcolor::ColorSpec> for &'c PrettySlice<'b, T>
+where
+    &'b T: Pretty<'a, D, termcolor::ColorSpec>,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let separator = allocator.text(",").append(allocator.line());
+        allocator
+            .intersperse(self.slice.iter().map(|ty| ty.pretty(allocator)), separator)
+            .group()
+            .brackets()
+    }
+}
+
+// useful for debugging
+#[allow(dead_code)]
+pub trait PrettySliceExt {
+    type Item;
+    fn pretty_slice(&self) -> PrettySlice<Self::Item>;
+}
+
+impl<T> PrettySliceExt for [T] {
+    type Item = T;
+    fn pretty_slice(&self) -> PrettySlice<T> {
+        PrettySlice { slice: self }
+    }
+}
+
+impl<T> PrettySliceExt for Vec<T> {
+    type Item = T;
+    fn pretty_slice(&self) -> PrettySlice<T> {
+        PrettySlice {
+            slice: self.as_slice(),
+        }
+    }
+}
+
+impl<I: rustc_index::Idx, T> PrettySliceExt for IndexSlice<I, T> {
+    type Item = T;
+    fn pretty_slice(&self) -> PrettySlice<T> {
+        PrettySlice { slice: &self.raw }
+    }
+}
+
+impl<I: rustc_index::Idx, T> PrettySliceExt for IndexVec<I, T> {
+    type Item = T;
+    fn pretty_slice(&self) -> PrettySlice<T> {
+        PrettySlice {
+            slice: self.raw.as_slice(),
+        }
     }
 }
 
@@ -65,8 +123,9 @@ where
     }
 }
 
-const DEFAULT_WIDTH: usize = 80;
+const DEFAULT_WIDTH: usize = 150;
 
+#[allow(dead_code)]
 impl<'a, T> Display<'a, T> {
     fn new(value: &'a T) -> Self {
         Display {

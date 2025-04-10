@@ -1,8 +1,5 @@
 //@error-in-other-file: Unsat
 
-#![feature(register_tool)]
-#![register_tool(thrust)]
-
 #[thrust::requires(true)]
 #[thrust::ensures(result != x)]
 fn rand_except(x: i64) -> i64 {

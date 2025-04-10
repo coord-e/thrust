@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::chc;
 
@@ -8,7 +8,7 @@ use super::{RefinedType, RefinedTypeVar, Type};
 pub struct Template<FV> {
     pred_sig: chc::PredSig,
     atom_args: Vec<chc::Term<RefinedTypeVar<FV>>>,
-    ty: Type,
+    ty: Type<FV>,
 }
 
 impl<FV> Template<FV> {
@@ -17,35 +17,35 @@ impl<FV> Template<FV> {
         F: FnOnce(chc::PredSig) -> chc::PredVarId,
     {
         let pred_var = pred_var_generator(self.pred_sig);
-        RefinedType {
-            ty: self.ty,
-            refinement: chc::Atom::new(pred_var.into(), self.atom_args),
-        }
+        RefinedType::new(
+            self.ty,
+            chc::Atom::new(pred_var.into(), self.atom_args).into(),
+        )
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TemplateBuilder<FV> {
-    dependencies: HashMap<RefinedTypeVar<FV>, chc::Sort>,
+    dependencies: BTreeMap<RefinedTypeVar<FV>, chc::Sort>,
 }
 
 impl<FV> Default for TemplateBuilder<FV> {
     fn default() -> Self {
         TemplateBuilder {
-            dependencies: HashMap::default(),
+            dependencies: Default::default(),
         }
     }
 }
 
 impl<FV> TemplateBuilder<FV>
 where
-    FV: Eq + std::hash::Hash,
+    FV: chc::Var,
 {
     pub fn add_dependency(&mut self, v: FV, sort: chc::Sort) {
         self.dependencies.insert(RefinedTypeVar::Free(v), sort);
     }
 
-    pub fn build(mut self, ty: Type) -> Template<FV> {
+    pub fn build(mut self, ty: Type<FV>) -> Template<FV> {
         self.dependencies
             .insert(RefinedTypeVar::Value, ty.to_sort());
         let mut atom_args = Vec::new();

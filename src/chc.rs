@@ -2,14 +2,77 @@
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
+use crate::pretty::PrettyDisplayExt as _;
+
 mod clause_builder;
+mod debug;
+mod format_context;
+mod hoice;
 mod smtlib2;
 mod solver;
 mod unbox;
 
-pub use clause_builder::ClauseBuilder;
+pub use clause_builder::{ClauseBuilder, Var};
+pub use debug::DebugInfo;
 pub use solver::{CheckSatError, Config};
 pub use unbox::unbox;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DatatypeSymbol {
+    inner: String,
+}
+
+impl std::fmt::Display for DatatypeSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b DatatypeSymbol
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator.text(self.inner.clone())
+    }
+}
+
+impl DatatypeSymbol {
+    pub fn new(inner: String) -> Self {
+        DatatypeSymbol { inner }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DatatypeSort {
+    symbol: DatatypeSymbol,
+    args: Vec<Sort>,
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b DatatypeSort
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let inner = allocator.intersperse(
+            self.args.iter().map(|t| t.pretty_atom(allocator)),
+            allocator.line(),
+        );
+        let sym = self.symbol.pretty(allocator);
+        if self.args.is_empty() {
+            sym
+        } else {
+            sym.append(allocator.line()).append(inner.nest(2)).group()
+        }
+    }
+}
+
+impl DatatypeSort {
+    pub fn new(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
+        DatatypeSort { symbol, args }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
@@ -17,9 +80,17 @@ pub enum Sort {
     Int,
     Bool,
     String,
+    Param(usize),
     Box(Box<Sort>),
     Mut(Box<Sort>),
     Tuple(Vec<Sort>),
+    Datatype(DatatypeSort),
+}
+
+impl From<DatatypeSort> for Sort {
+    fn from(sort: DatatypeSort) -> Self {
+        Sort::Datatype(sort)
+    }
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Sort
@@ -33,6 +104,7 @@ where
             Sort::Int => allocator.text("int"),
             Sort::Bool => allocator.text("bool"),
             Sort::String => allocator.text("string"),
+            Sort::Param(i) => allocator.text("T").append(allocator.as_string(i)),
             Sort::Box(s) => allocator
                 .text("box")
                 .append(allocator.line())
@@ -46,13 +118,15 @@ where
             Sort::Tuple(ss) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ss.len() == 1 {
-                    ss[0].pretty(allocator).append(separator).parens()
+                    ss[0].pretty(allocator).append(separator).parens().group()
                 } else {
                     allocator
                         .intersperse(ss.iter().map(|s| s.pretty(allocator)), separator)
                         .parens()
+                        .group()
                 }
             }
+            Sort::Datatype(sort) => sort.pretty(allocator),
         }
     }
 }
@@ -67,8 +141,30 @@ impl Sort {
         D::Doc: Clone,
     {
         match &self {
-            Sort::Box(_) | Sort::Mut(_) => self.pretty(allocator).parens(),
+            Sort::Box(_) | Sort::Mut(_) | Sort::Datatype { .. } => self.pretty(allocator).parens(),
             _ => self.pretty(allocator),
+        }
+    }
+
+    fn walk<'a>(&'a self, f: impl FnMut(&'a Sort)) {
+        self.walk_impl(Box::new(f))
+    }
+
+    fn walk_impl<'a, 'b>(&'a self, mut f: Box<dyn FnMut(&'a Sort) + 'b>) {
+        f(self);
+        match self {
+            Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
+            Sort::Tuple(ss) => {
+                for s in ss {
+                    s.walk(Box::new(&mut f));
+                }
+            }
+            Sort::Datatype(sort) => {
+                for s in &sort.args {
+                    s.walk(Box::new(&mut f));
+                }
+            }
+            _ => {}
         }
     }
 
@@ -84,18 +180,6 @@ impl Sort {
         match self {
             Sort::Tuple(ss) => ss[index].clone(),
             _ => panic!("invalid tuple_elem"),
-        }
-    }
-
-    fn length(&self) -> usize {
-        match self {
-            Sort::Null => 1,
-            Sort::Int => 1,
-            Sort::Bool => 1,
-            Sort::String => 1,
-            Sort::Box(s) => s.length() + 1,
-            Sort::Mut(s) => s.length() + 1,
-            Sort::Tuple(ss) => ss.iter().map(Sort::length).sum::<usize>() + 1,
         }
     }
 
@@ -122,6 +206,10 @@ impl Sort {
         Sort::Bool
     }
 
+    pub fn param(i: usize) -> Self {
+        Sort::Param(i)
+    }
+
     pub fn box_(sort: Sort) -> Self {
         Sort::Box(Box::new(sort))
     }
@@ -134,18 +222,56 @@ impl Sort {
         Sort::Tuple(sorts)
     }
 
+    pub fn datatype(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
+        Sort::Datatype(DatatypeSort { symbol, args })
+    }
+
+    pub fn into_datatype(self) -> Option<DatatypeSort> {
+        match self {
+            Sort::Datatype(sort) => Some(sort),
+            _ => None,
+        }
+    }
+
+    pub fn as_datatype(&self) -> Option<&DatatypeSort> {
+        match self {
+            Sort::Datatype(sort) => Some(sort),
+            _ => None,
+        }
+    }
+
     pub fn is_singleton(&self) -> bool {
         match self {
             Sort::Null => true,
-            Sort::Tuple(ts) => ts.is_empty() || ts.iter().all(Sort::is_singleton),
+            Sort::Tuple(ts) => ts.iter().all(Sort::is_singleton),
             Sort::Box(s) => s.is_singleton(),
             Sort::Mut(s) => s.is_singleton(),
             _ => false,
         }
     }
+
+    pub fn instantiate_params(&mut self, args: &[Sort]) {
+        match self {
+            Sort::Param(i) => *self = args[*i].clone(),
+            Sort::Box(s) => s.instantiate_params(args),
+            Sort::Mut(s) => s.instantiate_params(args),
+            Sort::Tuple(ss) => {
+                for s in ss {
+                    s.instantiate_params(args);
+                }
+            }
+            Sort::Datatype(sort) => {
+                for s in &mut sort.args {
+                    s.instantiate_params(args);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 rustc_index::newtype_index! {
+    #[orderable]
     #[debug_format = "v{}"]
     pub struct TermVarIdx { }
 }
@@ -233,6 +359,7 @@ impl Function {
             Self::LE => Sort::bool(),
             Self::LT => Sort::bool(),
             Self::NOT => Sort::bool(),
+            Self::NEG => Sort::int(),
             _ => unimplemented!(),
         }
     }
@@ -246,10 +373,12 @@ impl Function {
     pub const LE: Function = Function::infix("<=");
     pub const LT: Function = Function::infix("<");
     pub const NOT: Function = Function::new("not");
+    pub const NEG: Function = Function::new("-");
 }
 
 #[derive(Debug, Clone)]
 pub enum Term<V = TermVarIdx> {
+    Null,
     Var(V),
     Bool(bool),
     Int(i64),
@@ -262,17 +391,20 @@ pub enum Term<V = TermVarIdx> {
     App(Function, Vec<Term<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
+    DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
+    DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
 where
-    &'b V: Pretty<'a, D, termcolor::ColorSpec>,
+    V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
-            Term::Var(var) => var.pretty(allocator),
+            Term::Null => allocator.text("null"),
+            Term::Var(var) => allocator.text(format!("{var:?}")),
             Term::Int(n) => allocator.as_string(n),
             Term::Bool(b) => allocator.as_string(b),
             Term::String(s) => allocator.text(s.clone()).double_quotes(),
@@ -320,6 +452,16 @@ where
                 .pretty_atom(allocator)
                 .append(allocator.text("."))
                 .append(allocator.as_string(i)),
+            Term::DatatypeCtor(_, symbol, args) => {
+                let separator = allocator.text(",").append(allocator.line());
+                let args = allocator
+                    .intersperse(args.iter().map(|t| t.pretty(allocator)), separator)
+                    .parens();
+                symbol.pretty(allocator).append(args).group()
+            }
+            Term::DatatypeDiscr(_, t) => allocator
+                .text("discriminant")
+                .append(t.pretty(allocator).parens()),
         }
     }
 }
@@ -330,7 +472,7 @@ impl<V> Term<V> {
         allocator: &'a D,
     ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
     where
-        &'b V: Pretty<'a, D, termcolor::ColorSpec>,
+        V: Var,
         D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
         D::Doc: Clone,
     {
@@ -341,8 +483,9 @@ impl<V> Term<V> {
     }
 
     // TODO: ?
-    fn subst_var_impl<F, W>(self, mut f: Box<dyn FnMut(V) -> Term<W> + '_>) -> Term<W> {
+    fn subst_var_impl<W>(self, mut f: Box<dyn FnMut(V) -> Term<W> + '_>) -> Term<W> {
         match self {
+            Term::Null => Term::Null,
             Term::Var(v) => f(v),
             Term::Bool(b) => Term::Bool(b),
             Term::Int(n) => Term::Int(n),
@@ -359,6 +502,12 @@ impl<V> Term<V> {
             }
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
+            Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
+                sort,
+                c_sym,
+                args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
+            ),
+            Term::DatatypeDiscr(d_sym, t) => Term::DatatypeDiscr(d_sym, Box::new(t.subst_var(f))),
         }
     }
 
@@ -366,7 +515,7 @@ impl<V> Term<V> {
     where
         F: FnMut(V) -> Term<W>,
     {
-        self.subst_var_impl::<F, W>(Box::new(f))
+        self.subst_var_impl::<W>(Box::new(f))
     }
 
     pub fn map_var<F, W>(self, mut f: F) -> Term<W>
@@ -381,6 +530,7 @@ impl<V> Term<V> {
         F: FnMut(&V) -> Sort,
     {
         match self {
+            Term::Null => Sort::null(),
             Term::Var(v) => var_sort(v),
             Term::Bool(_) => Sort::bool(),
             Term::Int(_) => Sort::int(),
@@ -397,13 +547,17 @@ impl<V> Term<V> {
                 Sort::tuple(ts.iter().map(|t| t.sort(&mut var_sort)).collect())
             }
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
+            Term::DatatypeCtor(sort, _, _) => sort.clone().into(),
+            Term::DatatypeDiscr(_, _) => Sort::int(),
         }
     }
 
     fn fv_impl(&self) -> Box<dyn Iterator<Item = &V> + '_> {
         match self {
             Term::Var(v) => Box::new(std::iter::once(v)),
-            Term::Bool(_) | Term::Int(_) | Term::String(_) => Box::new(std::iter::empty()),
+            Term::Null | Term::Bool(_) | Term::Int(_) | Term::String(_) => {
+                Box::new(std::iter::empty())
+            }
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
             Term::BoxCurrent(t) => t.fv_impl(),
@@ -412,11 +566,17 @@ impl<V> Term<V> {
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
+            Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::DatatypeDiscr(_, t) => t.fv_impl(),
         }
     }
 
     pub fn fv(&self) -> impl Iterator<Item = &V> {
         self.fv_impl()
+    }
+
+    pub fn null() -> Self {
+        Term::Null
     }
 
     pub fn var(v: V) -> Self {
@@ -494,12 +654,33 @@ impl<V> Term<V> {
         Term::App(Function::LT, vec![self, other])
     }
 
+    pub fn not(self) -> Self {
+        Term::App(Function::NOT, vec![self])
+    }
+
+    pub fn neg(self) -> Self {
+        Term::App(Function::NEG, vec![self])
+    }
+
     pub fn tuple(ts: Vec<Term<V>>) -> Self {
         Term::Tuple(ts)
     }
 
     pub fn tuple_proj(self, i: usize) -> Self {
         Term::TupleProj(Box::new(self), i)
+    }
+
+    pub fn datatype_ctor(
+        d_sym: DatatypeSymbol,
+        d_args: Vec<Sort>,
+        c_sym: DatatypeSymbol,
+        args: Vec<Term<V>>,
+    ) -> Self {
+        Term::DatatypeCtor(DatatypeSort::new(d_sym, d_args), c_sym, args)
+    }
+
+    pub fn datatype_discr(d_sym: DatatypeSymbol, t: Term<V>) -> Self {
+        Term::DatatypeDiscr(d_sym, Box::new(t))
     }
 
     pub fn equal_to(self, other: Self) -> Atom<V> {
@@ -608,16 +789,71 @@ impl KnownPred {
         self == &KnownPred::TOP
     }
 
+    pub fn is_bottom(&self) -> bool {
+        self == &KnownPred::BOTTOM
+    }
+
     pub const TOP: KnownPred = KnownPred::new("true");
     pub const BOTTOM: KnownPred = KnownPred::new("false");
     pub const EQUAL: KnownPred = KnownPred::infix("=");
     pub const NOT_EQUAL: KnownPred = KnownPred::infix("=").negated();
+
+    pub const LESS_THAN_OR_EQUAL: KnownPred = KnownPred::infix("<=");
+    pub const GREATER_THAN_OR_EQUAL: KnownPred = KnownPred::infix(">=");
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MatcherPred {
+    datatype_symbol: DatatypeSymbol,
+    datatype_args: Vec<Sort>,
+}
+
+impl std::fmt::Display for MatcherPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "matcher_pred")
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b MatcherPred
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let args = allocator.intersperse(
+            self.datatype_args.iter().map(|a| a.pretty(allocator)),
+            allocator.text(", "),
+        );
+        allocator
+            .text("matcher_pred")
+            .append(
+                allocator
+                    .as_string(&self.datatype_symbol)
+                    .append(args.angles())
+                    .angles(),
+            )
+            .group()
+    }
+}
+
+impl MatcherPred {
+    pub fn new(datatype_symbol: DatatypeSymbol, datatype_args: Vec<Sort>) -> Self {
+        MatcherPred {
+            datatype_symbol,
+            datatype_args,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        "matcher_pred"
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pred {
     Known(KnownPred),
     Var(PredVarId),
+    Matcher(MatcherPred),
 }
 
 impl std::fmt::Display for Pred {
@@ -625,6 +861,7 @@ impl std::fmt::Display for Pred {
         match self {
             Pred::Known(p) => p.fmt(f),
             Pred::Var(p) => p.fmt(f),
+            Pred::Matcher(p) => p.fmt(f),
         }
     }
 }
@@ -632,11 +869,13 @@ impl std::fmt::Display for Pred {
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Pred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             Pred::Known(p) => p.pretty(allocator),
             Pred::Var(p) => p.pretty(allocator),
+            Pred::Matcher(p) => p.pretty(allocator),
         }
     }
 }
@@ -653,11 +892,18 @@ impl From<PredVarId> for Pred {
     }
 }
 
+impl From<MatcherPred> for Pred {
+    fn from(p: MatcherPred) -> Pred {
+        Pred::Matcher(p)
+    }
+}
+
 impl Pred {
     pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
             Pred::Known(p) => p.name().into(),
             Pred::Var(p) => p.to_string().into(),
+            Pred::Matcher(p) => p.name().into(),
         }
     }
 
@@ -665,6 +911,7 @@ impl Pred {
         match self {
             Pred::Known(p) => p.is_negative(),
             Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
         }
     }
 
@@ -672,6 +919,7 @@ impl Pred {
         match self {
             Pred::Known(p) => p.is_infix(),
             Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
         }
     }
 
@@ -679,6 +927,15 @@ impl Pred {
         match self {
             Pred::Known(p) => p.is_top(),
             Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
+        }
+    }
+
+    pub fn is_bottom(&self) -> bool {
+        match self {
+            Pred::Known(p) => p.is_bottom(),
+            Pred::Var(_) => false,
+            Pred::Matcher(_) => false,
         }
     }
 }
@@ -691,7 +948,7 @@ pub struct Atom<V = TermVarIdx> {
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Atom<V>
 where
-    &'b V: Pretty<'a, D, termcolor::ColorSpec>,
+    V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -742,6 +999,10 @@ impl<V> Atom<V> {
         self.pred.is_top()
     }
 
+    pub fn is_bottom(&self) -> bool {
+        self.pred.is_bottom()
+    }
+
     pub fn subst_var<F, W>(self, mut f: F) -> Atom<W>
     where
         F: FnMut(V) -> Term<W>,
@@ -758,7 +1019,7 @@ impl<V> Atom<V> {
     {
         Atom {
             pred: self.pred,
-            args: self.args.into_iter().map(|t| t.map_var(|v| f(v))).collect(),
+            args: self.args.into_iter().map(|t| t.map_var(&mut f)).collect(),
         }
     }
 
@@ -772,6 +1033,7 @@ pub struct Clause {
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
     pub body: Vec<Atom<TermVarIdx>>,
+    pub debug_info: DebugInfo,
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Clause
@@ -817,6 +1079,26 @@ impl Clause {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DatatypeSelector {
+    pub symbol: DatatypeSymbol,
+    pub sort: Sort,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatatypeCtor {
+    pub symbol: DatatypeSymbol,
+    pub selectors: Vec<DatatypeSelector>,
+    pub discriminant: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Datatype {
+    pub symbol: DatatypeSymbol,
+    pub params: usize,
+    pub ctors: Vec<DatatypeCtor>,
+}
+
 rustc_index::newtype_index! {
     #[debug_format = "c{}"]
     pub struct ClauseId { }
@@ -824,15 +1106,30 @@ rustc_index::newtype_index! {
 
 pub type PredSig = Vec<Sort>;
 
+#[derive(Debug, Clone)]
+pub struct PredVarDef {
+    pub sig: PredSig,
+    pub debug_info: DebugInfo,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct System {
+    pub datatypes: Vec<Datatype>,
     pub clauses: IndexVec<ClauseId, Clause>,
-    pub pred_vars: IndexVec<PredVarId, PredSig>,
+    pub pred_vars: IndexVec<PredVarId, PredVarDef>,
 }
 
 impl System {
-    pub fn new_pred_var(&mut self, sig: PredSig) -> PredVarId {
-        self.pred_vars.push(sig)
+    pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
+        self.pred_vars.push(PredVarDef { sig, debug_info })
+    }
+
+    pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
+        if clause.head.is_top() || clause.body.iter().any(Atom::is_bottom) {
+            return None;
+        }
+        tracing::debug!(clause = %clause.display(), id = ?self.clauses.next_index(), "push_clause");
+        Some(self.clauses.push(clause))
     }
 
     pub fn smtlib2(&self) -> smtlib2::System<'_> {
@@ -841,12 +1138,14 @@ impl System {
 
     pub fn solve(&self) -> Result<(), CheckSatError> {
         let system = unbox(self.clone());
-        let mut f = std::fs::File::create("refinement-analyzer.txt").unwrap();
-        for (idx, c) in system.clauses.iter_enumerated() {
-            use crate::pretty::PrettyDisplayExt as _;
-            use std::io::Write as _;
-            write!(f, "{:?}: {}\n", idx, c.display()).unwrap();
+        if let Ok(file) = std::env::var("THRUST_PRETTY_OUTPUT") {
+            let mut f = std::fs::File::create(file).unwrap();
+            for (idx, c) in system.clauses.iter_enumerated() {
+                use crate::pretty::PrettyDisplayExt as _;
+                use std::io::Write as _;
+                writeln!(f, "{:?}: {}", idx, c.display()).unwrap();
+            }
         }
-        Config::load_env().check_sat(system.smtlib2())
+        Config::from_env().check_sat(system.smtlib2())
     }
 }

@@ -1,14 +1,16 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
-use rustc_middle::mir::{BasicBlock, Local};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::mir::{self, BasicBlock, Local};
+use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::BasicBlockType;
-use crate::rty::{self, ClauseBuilderExt as _};
+use crate::refine::{self, BasicBlockType};
+use crate::rty;
 
 mod annot;
 mod basic_block;
@@ -18,6 +20,79 @@ mod local_def;
 
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
+}
+
+pub fn resolve_discr(tcx: TyCtxt<'_>, discr: mir_ty::VariantDiscr) -> u32 {
+    match discr {
+        mir_ty::VariantDiscr::Relative(i) => i,
+        mir_ty::VariantDiscr::Explicit(did) => {
+            let val = tcx.const_eval_poly(did).unwrap();
+            val.try_to_scalar_int().unwrap().try_to_u32().unwrap()
+        }
+    }
+}
+
+pub struct ReplacePlacesVisitor<'tcx> {
+    replacements: HashMap<(Local, &'tcx [mir::PlaceElem<'tcx>]), mir::Place<'tcx>>,
+    tcx: TyCtxt<'tcx>,
+}
+
+impl<'tcx> mir::visit::MutVisitor<'tcx> for ReplacePlacesVisitor<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn visit_place(
+        &mut self,
+        place: &mut mir::Place<'tcx>,
+        _: mir::visit::PlaceContext,
+        _: mir::Location,
+    ) {
+        let proj = place.projection.as_slice();
+        for i in 0..=proj.len() {
+            if let Some(to) = self.replacements.get(&(place.local, &proj[0..i])) {
+                place.local = to.local;
+                place.projection = self.tcx.mk_place_elems_from_iter(
+                    to.projection.iter().chain(proj.iter().skip(i).cloned()),
+                );
+                return;
+            }
+        }
+    }
+}
+
+impl<'tcx> ReplacePlacesVisitor<'tcx> {
+    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+        Self {
+            tcx,
+            replacements: Default::default(),
+        }
+    }
+
+    pub fn with_replacement(
+        tcx: TyCtxt<'tcx>,
+        from: mir::Place<'tcx>,
+        to: mir::Place<'tcx>,
+    ) -> Self {
+        let mut visitor = Self::new(tcx);
+        visitor.add_replacement(from, to);
+        visitor
+    }
+
+    pub fn add_replacement(&mut self, from: mir::Place<'tcx>, to: mir::Place<'tcx>) {
+        self.replacements
+            .insert((from.local, from.projection.as_slice()), to);
+    }
+
+    pub fn visit_statement(&mut self, stmt: &mut mir::Statement<'tcx>) {
+        // dummy location
+        mir::visit::MutVisitor::visit_statement(self, stmt, mir::Location::START);
+    }
+
+    pub fn visit_terminator(&mut self, term: &mut mir::Terminator<'tcx>) {
+        // dummy location
+        mir::visit::MutVisitor::visit_terminator(self, term, mir::Location::START);
+    }
 }
 
 #[derive(Clone)]
@@ -32,99 +107,58 @@ pub struct Analyzer<'tcx> {
     defs: HashMap<DefId, rty::RefinedType>,
 
     /// Resulting CHC system.
-    system: chc::System,
+    system: Rc<RefCell<chc::System>>,
 
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
+
+    enum_defs: Rc<RefCell<HashMap<DefId, rty::EnumDatatypeDef>>>,
 }
 
-impl<'tcx> crate::refine::PredVarGenerator for Analyzer<'tcx> {
-    fn generate_pred_var(&mut self, pred_sig: chc::PredSig) -> chc::PredVarId {
-        self.system.new_pred_var(pred_sig)
+impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V> {
+        tmpl.into_refined_type(|pred_sig| self.generate_pred_var(pred_sig))
+    }
+}
+
+impl<'tcx> crate::refine::UnrefinedTypeGenerator<'tcx> for Analyzer<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
     }
 }
 
 impl<'tcx> Analyzer<'tcx> {
+    pub fn generate_pred_var(&mut self, sig: chc::PredSig) -> chc::PredVarId {
+        self.system
+            .borrow_mut()
+            .new_pred_var(sig, chc::DebugInfo::from_current_span())
+    }
+
     fn implied_atom<FV, F>(&mut self, atoms: Vec<chc::Atom<FV>>, mut fv_sort: F) -> chc::Atom<FV>
     where
         F: FnMut(FV) -> chc::Sort,
-        FV: std::hash::Hash + Eq + Clone + std::fmt::Debug + 'static,
+        FV: chc::Var + std::fmt::Debug + Clone,
     {
         let fvs: Vec<_> = atoms.iter().flat_map(|a| a.fv()).cloned().collect();
         let mut builder = chc::ClauseBuilder::default();
         let mut pred_sig = chc::PredSig::new();
         for fv in &fvs {
-            let sort = fv_sort(fv.clone());
-            builder.add_mapped_var(fv.clone(), sort.clone());
+            let sort = fv_sort(*fv);
+            builder.add_mapped_var(*fv, sort.clone());
             pred_sig.push(sort);
         }
         for atom in atoms {
             builder.add_body_mapped(atom);
         }
-        let pv = self.system.new_pred_var(pred_sig);
+        let pv = self.generate_pred_var(pred_sig);
         let head = chc::Atom::new(pv.into(), fvs.into_iter().map(chc::Term::var).collect());
         let clause = builder.head_mapped(head.clone());
         self.add_clause(clause);
         head
-    }
-
-    fn relate_sub_type(&mut self, got: &rty::Type, expected: &rty::Type) {
-        tracing::debug!(got = %got.display(), expected = %expected.display(), "sub_type");
-
-        match (got, expected) {
-            (rty::Type::Unit, rty::Type::Unit)
-            | (rty::Type::Int, rty::Type::Int)
-            | (rty::Type::Bool, rty::Type::Bool)
-            | (rty::Type::String, rty::Type::String)
-            | (rty::Type::Never, rty::Type::Never) => {}
-            (rty::Type::Pointer(got), rty::Type::Pointer(expected))
-                if got.kind == expected.kind =>
-            {
-                match got.kind {
-                    rty::PointerKind::Ref(rty::RefKind::Immut) => {
-                        self.relate_sub_type(&got.elem, &expected.elem);
-                    }
-                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Mut) => {
-                        self.relate_equal_type(&got.elem, &expected.elem);
-                    }
-                }
-            }
-            (rty::Type::Function(got), rty::Type::Function(expected)) => {
-                // TODO: check sty and length is equal
-                // TODO: add value_var dependency
-                let mut builder = chc::ClauseBuilder::default();
-                for (param_idx, param_rty) in got.params.iter_enumerated() {
-                    builder.add_mapped_var(param_idx, param_rty.ty.to_sort());
-                }
-                for (got_ty, expected_ty) in got.params.iter().zip(expected.params.clone()) {
-                    let clause = builder
-                        .clone()
-                        .with_value_var(&got_ty.ty)
-                        .add_body(expected_ty.refinement)
-                        .head(got_ty.refinement.clone());
-                    self.add_clause(clause);
-                    self.relate_sub_type(&expected_ty.ty, &got_ty.ty);
-                }
-                let clause = builder
-                    .with_value_var(&got.ret.ty)
-                    .add_body(got.ret.refinement.clone())
-                    .head(expected.ret.refinement.clone());
-                self.add_clause(clause);
-                self.relate_sub_type(&got.ret.ty, &expected.ret.ty);
-            }
-            _ => panic!(
-                "inconsistent types: got={}, expected={}",
-                got.display(),
-                expected.display()
-            ),
-        }
-    }
-
-    fn relate_equal_type(&mut self, got: &rty::Type, expected: &rty::Type) {
-        tracing::debug!(got = %got.display(), expected = %expected.display(), "equal_type");
-
-        self.relate_sub_type(got, expected);
-        self.relate_sub_type(expected, got);
     }
 }
 
@@ -133,22 +167,71 @@ impl<'tcx> Analyzer<'tcx> {
         let defs = Default::default();
         let system = Default::default();
         let basic_blocks = Default::default();
+        let enum_defs = Default::default();
         Self {
             tcx,
             defs,
             system,
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
+            enum_defs,
         }
     }
 
     pub fn add_clause(&mut self, clause: chc::Clause) {
-        tracing::debug!(clause = %clause.display(), id = ?self.system.clauses.next_index(), "add_clause");
-        self.system.clauses.push(clause);
+        self.system.borrow_mut().push_clause(clause);
+    }
+
+    pub fn extend_clauses(&mut self, clauses: impl IntoIterator<Item = chc::Clause>) {
+        for clause in clauses {
+            self.add_clause(clause);
+        }
+    }
+
+    pub fn register_enum_def(&mut self, def_id: DefId, enum_def: rty::EnumDatatypeDef) {
+        tracing::debug!(def_id = ?def_id, enum_def = ?enum_def, "register_enum_def");
+        let ctors = enum_def
+            .variants
+            .iter()
+            .map(|v| chc::DatatypeCtor {
+                symbol: v.name.clone(),
+                selectors: v
+                    .field_tys
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, ty)| chc::DatatypeSelector {
+                        symbol: chc::DatatypeSymbol::new(format!("_get{}.{}", v.name, idx)),
+                        sort: ty.to_sort(),
+                    })
+                    .collect(),
+                discriminant: v.discr,
+            })
+            .collect();
+        let datatype = chc::Datatype {
+            symbol: enum_def.name.clone(),
+            params: enum_def.ty_params,
+            ctors,
+        };
+        self.enum_defs.borrow_mut().insert(def_id, enum_def);
+        self.system.borrow_mut().datatypes.push(datatype);
+    }
+
+    pub fn find_enum_variant(
+        &self,
+        ty_sym: &chc::DatatypeSymbol,
+        v_sym: &chc::DatatypeSymbol,
+    ) -> Option<rty::EnumVariantDef> {
+        self.enum_defs
+            .borrow()
+            .iter()
+            .find(|(_, d)| &d.name == ty_sym)
+            .and_then(|(_, d)| d.variants.iter().find(|v| &v.name == v_sym))
+            .cloned()
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
-        tracing::debug!(def_id = ?def_id, rty = %rty.display(), "register_def");
+        tracing::info!(def_id = ?def_id, rty = %rty.display(), "register_def");
         self.defs.insert(def_id, rty);
     }
 
@@ -183,6 +266,16 @@ impl<'tcx> Analyzer<'tcx> {
         self.register_def(panic_def_id, rty::RefinedType::unrefined(panic_ty.into()));
     }
 
+    pub fn new_env(&self) -> refine::Env {
+        let defs = self
+            .enum_defs
+            .borrow()
+            .values()
+            .map(|def| (def.name.clone(), def.clone()))
+            .collect();
+        refine::Env::new(defs)
+    }
+
     pub fn crate_analyzer(&mut self) -> crate_::Analyzer<'tcx, '_> {
         crate_::Analyzer::new(self)
     }
@@ -203,7 +296,7 @@ impl<'tcx> Analyzer<'tcx> {
     }
 
     pub fn solve(&mut self) {
-        if let Err(err) = self.system.solve() {
+        if let Err(err) = self.system.borrow().solve() {
             self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
     }
