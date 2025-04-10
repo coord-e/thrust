@@ -78,61 +78,36 @@ pub trait ResolverExt: Resolver {
 
 impl<T> ResolverExt for T where T: Resolver {}
 
-#[derive(Debug, Clone)]
-pub struct ParseAttrError {
-    kind: ParseAttrErrorKind,
-}
-
-impl ParseAttrError {
-    fn unexpected_end(expected: &'static str) -> Self {
-        Self {
-            kind: ParseAttrErrorKind::UnexpectedEnd { expected },
-        }
-    }
-
-    fn unexpected_token(expected: &'static str, got: Token) -> Self {
-        let got = TokenTree::Token(got, Spacing::Alone);
-        Self {
-            kind: ParseAttrErrorKind::UnexpectedToken { expected, got },
-        }
-    }
-
-    fn unexpected_token_tree(expected: &'static str, got: TokenTree) -> Self {
-        Self {
-            kind: ParseAttrErrorKind::UnexpectedToken { expected, got },
-        }
-    }
-
-    fn invalid_attribute() -> Self {
-        Self {
-            kind: ParseAttrErrorKind::InvalidAttribute,
-        }
-    }
-
-    fn unknown_ident(ident: Ident) -> Self {
-        Self {
-            kind: ParseAttrErrorKind::UnknownIdent { ident },
-        }
-    }
-
-    pub fn kind(&self) -> &ParseAttrErrorKind {
-        &self.kind
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ParseAttrErrorKind {
-    InvalidAttribute,
-    UnexpectedEnd {
-        expected: &'static str,
-    },
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ParseAttrError {
+    #[error("unexpected end of input (expected {expected:?})")]
+    UnexpectedEnd { expected: &'static str },
+    #[error("unexpected token (expected {expected:?}, got {got:?})")]
     UnexpectedToken {
         expected: &'static str,
         got: TokenTree,
     },
-    UnknownIdent {
-        ident: Ident,
-    },
+    #[error("unknown identifier {ident:?}")]
+    UnknownIdent { ident: Ident },
+}
+
+impl ParseAttrError {
+    fn unexpected_end(expected: &'static str) -> Self {
+        ParseAttrError::UnexpectedEnd { expected }
+    }
+
+    fn unexpected_token(expected: &'static str, got: Token) -> Self {
+        let got = TokenTree::Token(got, Spacing::Alone);
+        ParseAttrError::UnexpectedToken { expected, got }
+    }
+
+    fn unexpected_token_tree(expected: &'static str, got: TokenTree) -> Self {
+        ParseAttrError::UnexpectedToken { expected, got }
+    }
+
+    fn unknown_ident(ident: Ident) -> Self {
+        ParseAttrError::UnknownIdent { ident }
+    }
 }
 
 type Result<T> = std::result::Result<T, ParseAttrError>;
