@@ -261,6 +261,7 @@ impl<'a, 'tcx, T> BasicBlockTemplateTypeBuilder<'a, 'tcx, T>
 where
     T: TemplateTypeGenerator<'tcx> + ?Sized,
 {
+    #[allow(dead_code)]
     pub fn param_refinement(
         &mut self,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
@@ -269,6 +270,7 @@ where
         self
     }
 
+    #[allow(dead_code)]
     pub fn ret_rty(&mut self, rty: rty::RefinedType<rty::FunctionParamIdx>) -> &mut Self {
         self.inner.ret_rty(rty);
         self

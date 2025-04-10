@@ -56,6 +56,8 @@ where
     }
 }
 
+// useful for debugging
+#[allow(dead_code)]
 pub trait PrettySliceExt {
     type Item;
     fn pretty_slice(&self) -> PrettySlice<Self::Item>;
@@ -123,6 +125,7 @@ where
 
 const DEFAULT_WIDTH: usize = 150;
 
+#[allow(dead_code)]
 impl<'a, T> Display<'a, T> {
     fn new(value: &'a T) -> Self {
         Display {
