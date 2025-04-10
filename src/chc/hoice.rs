@@ -34,7 +34,7 @@ impl<'a> SortDatatypes<'a> {
 
     fn sorted(mut self) -> Vec<chc::DatatypeSymbol> {
         for ty in self.defs {
-            self.sort_visit(&ty);
+            self.sort_visit(ty);
         }
         self.result
     }

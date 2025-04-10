@@ -30,9 +30,7 @@ impl<'tcx> DefIdCache<'tcx> {
 
     pub fn unique(&self) -> Option<DefId> {
         *self.def_ids.unique.get_or_init(|| {
-            let Some(box_did) = self.box_() else {
-                return None;
-            };
+            let box_did = self.box_()?;
             let box_first_did =
                 self.tcx.adt_def(box_did).non_enum_variant().fields[FieldIdx::from_u32(0)].did;
             let unique_def = self
@@ -47,9 +45,7 @@ impl<'tcx> DefIdCache<'tcx> {
 
     pub fn nonnull(&self) -> Option<DefId> {
         *self.def_ids.nonnull.get_or_init(|| {
-            let Some(unique_did) = self.unique() else {
-                return None;
-            };
+            let unique_did = self.unique()?;
             let unique_first_did =
                 self.tcx.adt_def(unique_did).non_enum_variant().fields[FieldIdx::from_u32(0)].did;
             let nonnull_def = self

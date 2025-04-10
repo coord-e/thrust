@@ -22,7 +22,7 @@ pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
 }
 
-pub fn resolve_discr<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::VariantDiscr) -> u32 {
+pub fn resolve_discr(tcx: TyCtxt<'_>, discr: mir_ty::VariantDiscr) -> u32 {
     match discr {
         mir_ty::VariantDiscr::Relative(i) => i,
         mir_ty::VariantDiscr::Explicit(did) => {
@@ -147,8 +147,8 @@ impl<'tcx> Analyzer<'tcx> {
         let mut builder = chc::ClauseBuilder::default();
         let mut pred_sig = chc::PredSig::new();
         for fv in &fvs {
-            let sort = fv_sort(fv.clone());
-            builder.add_mapped_var(fv.clone(), sort.clone());
+            let sort = fv_sort(*fv);
+            builder.add_mapped_var(*fv, sort.clone());
             pred_sig.push(sort);
         }
         for atom in atoms {

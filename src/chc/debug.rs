@@ -83,7 +83,7 @@ impl DebugInfo {
         for field in fields.rsplit("\x1b[2m=\x1b[0m") {
             let field = strip_ansi_colors(field);
             if let Some(prev_value) = value {
-                if let Some((next_value, key)) = field.rsplit_once(" ") {
+                if let Some((next_value, key)) = field.rsplit_once(' ') {
                     self.context(key, prev_value);
                     value = Some(next_value.to_owned());
                 } else {

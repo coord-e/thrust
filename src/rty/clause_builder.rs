@@ -4,7 +4,7 @@ use super::{Refinement, Type};
 
 pub trait ClauseBuilderExt {
     fn with_value_var<'a, T>(&'a mut self, ty: &Type<T>) -> RefinementClauseBuilder<'a>;
-    fn with_mapped_value_var<'a, T>(&'a mut self, v: T) -> RefinementClauseBuilder<'a>
+    fn with_mapped_value_var<T>(&mut self, v: T) -> RefinementClauseBuilder<'_>
     where
         T: chc::Var;
 }
@@ -19,7 +19,7 @@ impl ClauseBuilderExt for chc::ClauseBuilder {
         }
     }
 
-    fn with_mapped_value_var<'a, T>(&'a mut self, v: T) -> RefinementClauseBuilder<'a>
+    fn with_mapped_value_var<T>(&mut self, v: T) -> RefinementClauseBuilder<'_>
     where
         T: chc::Var,
     {

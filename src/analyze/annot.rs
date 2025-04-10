@@ -81,7 +81,7 @@ impl annot::Resolver for ResultResolver {
 impl ResultResolver {
     pub fn new(result_ty: &mir_ty::Ty<'_>) -> Self {
         let result_symbol = Symbol::intern("result");
-        let result_kind = ty_to_term_kind(&result_ty);
+        let result_kind = ty_to_term_kind(result_ty);
         Self {
             result_symbol,
             result_kind,

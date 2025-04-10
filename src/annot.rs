@@ -268,18 +268,15 @@ where
     }
 
     fn parse_atom(&mut self) -> Result<chc::Atom<T::Output>> {
-        match self.look_ahead_token(0).and_then(|t| t.ident()) {
-            Some((ident, _)) => {
-                if ident.as_str() == "true" {
-                    self.consume();
-                    return Ok(chc::Atom::top());
-                }
-                if ident.as_str() == "false" {
-                    self.consume();
-                    return Ok(chc::Atom::bottom());
-                }
+        if let Some((ident, _)) = self.look_ahead_token(0).and_then(|t| t.ident()) {
+            if ident.as_str() == "true" {
+                self.consume();
+                return Ok(chc::Atom::top());
             }
-            _ => {}
+            if ident.as_str() == "false" {
+                self.consume();
+                return Ok(chc::Atom::bottom());
+            }
         }
 
         let (lhs, _) = self.parse_atom_term()?;
@@ -458,13 +455,10 @@ where
     }
 
     pub fn parse_annot_atom(&mut self) -> Result<AnnotAtom<T::Output>> {
-        match self.look_ahead_token(0).and_then(|t| t.ident()) {
-            Some((ident, _)) => {
-                if ident.as_str() == "auto" {
-                    return Ok(AnnotAtom::Auto);
-                }
+        if let Some((ident, _)) = self.look_ahead_token(0).and_then(|t| t.ident()) {
+            if ident.as_str() == "auto" {
+                return Ok(AnnotAtom::Auto);
             }
-            _ => {}
         }
         self.parse_atom().map(AnnotAtom::Atom)
     }

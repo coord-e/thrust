@@ -115,7 +115,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
-        for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).into_iter().zip(sig.inputs()) {
+        for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
             param_resolver.push_param(input_ident.name, input_ty);
         }
 

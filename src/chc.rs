@@ -483,7 +483,7 @@ impl<V> Term<V> {
     }
 
     // TODO: ?
-    fn subst_var_impl<F, W>(self, mut f: Box<dyn FnMut(V) -> Term<W> + '_>) -> Term<W> {
+    fn subst_var_impl<W>(self, mut f: Box<dyn FnMut(V) -> Term<W> + '_>) -> Term<W> {
         match self {
             Term::Null => Term::Null,
             Term::Var(v) => f(v),
@@ -515,7 +515,7 @@ impl<V> Term<V> {
     where
         F: FnMut(V) -> Term<W>,
     {
-        self.subst_var_impl::<F, W>(Box::new(f))
+        self.subst_var_impl::<W>(Box::new(f))
     }
 
     pub fn map_var<F, W>(self, mut f: F) -> Term<W>
@@ -1019,7 +1019,7 @@ impl<V> Atom<V> {
     {
         Atom {
             pred: self.pred,
-            args: self.args.into_iter().map(|t| t.map_var(|v| f(v))).collect(),
+            args: self.args.into_iter().map(|t| t.map_var(&mut f)).collect(),
         }
     }
 
@@ -1138,12 +1138,12 @@ impl System {
 
     pub fn solve(&self) -> Result<(), CheckSatError> {
         let system = unbox(self.clone());
-        if let Some(file) = std::env::var("THRUST_PRETTY_OUTPUT").ok() {
+        if let Ok(file) = std::env::var("THRUST_PRETTY_OUTPUT") {
             let mut f = std::fs::File::create(file).unwrap();
             for (idx, c) in system.clauses.iter_enumerated() {
                 use crate::pretty::PrettyDisplayExt as _;
                 use std::io::Write as _;
-                write!(f, "{:?}: {}\n", idx, c.display()).unwrap();
+                writeln!(f, "{:?}: {}", idx, c.display()).unwrap();
             }
         }
         Config::from_env().check_sat(system.smtlib2())

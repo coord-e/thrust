@@ -1207,7 +1207,7 @@ impl Env {
                     .collect();
 
                 let arg_rtys = {
-                    let def = &self.enum_defs[&sym];
+                    let def = &self.enum_defs[sym];
                     let expected_tys = def
                         .field_tys()
                         .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()).boxed());
@@ -1275,13 +1275,13 @@ impl Env {
     }
 
     fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> PlaceType {
-        match self.flow_binding(var).expect("borrowing unbound var") {
-            &FlowBinding::Box(x) => {
+        match *self.flow_binding(var).expect("borrowing unbound var") {
+            FlowBinding::Box(x) => {
                 let inner_ty = self.var_type(x.into());
                 self.insert_flow_binding(var, FlowBinding::Box(prophecy));
                 inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
             }
-            &FlowBinding::Mut(x1, x2) => {
+            FlowBinding::Mut(x1, x2) => {
                 let inner_ty = self.var_type(x1.into());
                 self.insert_flow_binding(var, FlowBinding::Mut(prophecy, x2));
                 inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
@@ -1391,7 +1391,6 @@ impl Env {
             self.dropping_assumption(&path.clone().deref())
         } else if let Some(tty) = ty.ty.as_tuple() {
             (0..tty.elems.len())
-                .into_iter()
                 .map(|i| self.dropping_assumption(&path.clone().tuple_proj(i)))
                 .collect()
         } else if let Some(ety) = ty.ty.as_enum() {
@@ -1439,7 +1438,7 @@ impl Env {
                             .map(|a| {
                                 a.map_var(|v| match v {
                                     rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(ev),
-                                    rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v.into()),
+                                    rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
                                     // TODO: (but otherwise we can't distinguish field existentials from them...)
                                     rty::RefinedTypeVar::Existential(_) => {
                                         panic!("cannot handle existentials in field_rty")

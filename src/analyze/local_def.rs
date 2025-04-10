@@ -36,13 +36,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return None;
         };
         let (lhs, rvalue) = &**assign;
-        if lhs.projection.as_ref().len() != 0 {
+        if !lhs.projection.as_ref().is_empty() {
             return None;
         }
         let lhs_local = lhs.local;
 
         if let mir::Rvalue::CopyForDeref(place) = &rvalue {
-            return Some((lhs_local, place.clone()));
+            return Some((lhs_local, *place));
         }
 
         let mir::Rvalue::Use(mir::Operand::Copy(place)) = &rvalue else {
@@ -405,7 +405,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut expected = expected.ty.as_function().cloned().unwrap();
         self.elaborate_mut_params(&mut expected);
 
-        let entry_ty = self.elaborate_unused_args(&entry_ty, &expected);
+        let entry_ty = self.elaborate_unused_args(entry_ty, &expected);
 
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry after");
         let clauses = rty::relate_sub_closed_type(&entry_ty.into(), &expected.into());

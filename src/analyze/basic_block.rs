@@ -51,7 +51,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn basic_block_ty(&self, bb: BasicBlock) -> &BasicBlockType {
-        &self.ctx.basic_block_ty(self.local_def_id, bb)
+        self.ctx.basic_block_ty(self.local_def_id, bb)
     }
 
     fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>) {
@@ -494,7 +494,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
 
-        let mut p = place.clone();
+        let mut p = *place;
         p.projection = self.tcx.mk_place_elems(&projection);
         p
     }
@@ -562,7 +562,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if self.is_defined(lhs.local) {
             // assignment
             // ReborrowVisitor must transform every assignment into this form
-            assert!(lhs.projection.as_slice() == &[mir::PlaceElem::Deref]);
+            assert!(lhs.projection.as_slice() == [mir::PlaceElem::Deref]);
             self.assign_to_local(lhs.local, rvalue.clone());
             return;
         }
@@ -572,7 +572,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         if let Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent) = rvalue {
             // mutable borrow
-            let rty = self.mutable_borrow(stmt_idx, referent.clone());
+            let rty = self.mutable_borrow(stmt_idx, *referent);
             self.bind_local(lhs.local, rty);
             return;
         }
@@ -642,30 +642,28 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     #[tracing::instrument(skip(self), fields(term = ?term.kind))]
     fn analyze_terminator_binds(&mut self, term: &mir::Terminator<'tcx>) {
-        match &term.kind {
-            TerminatorKind::Call {
-                func,
-                args,
-                destination,
-                ..
-            } => {
-                let destination = match destination {
-                    p if p.projection.len() == 0 => p.local,
-                    _ => unimplemented!(),
-                };
-                if self.is_defined(destination) {
-                    unimplemented!()
-                }
-
-                let decl = self.local_decls[destination].clone();
-                let rty = self
-                    .ctx
-                    .build_template_ty_with_scope(&self.env)
-                    .refined_ty(decl.ty);
-                self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
-                self.bind_local(destination, rty);
+        if let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &term.kind
+        {
+            let destination = match destination {
+                p if p.projection.len() == 0 => p.local,
+                _ => unimplemented!(),
+            };
+            if self.is_defined(destination) {
+                unimplemented!()
             }
-            _ => {}
+
+            let decl = self.local_decls[destination].clone();
+            let rty = self
+                .ctx
+                .build_template_ty_with_scope(&self.env)
+                .refined_ty(decl.ty);
+            self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
+            self.bind_local(destination, rty);
         }
     }
 
@@ -677,23 +675,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) {
         match &term.kind {
             TerminatorKind::Return => {
-                self.type_return(&expected_ret);
+                self.type_return(expected_ret);
             }
             TerminatorKind::Goto { target } => {
-                self.type_goto(*target, &expected_ret);
+                self.type_goto(*target, expected_ret);
             }
             TerminatorKind::SwitchInt { discr, targets } => {
-                self.type_switch_int(
-                    discr.clone(),
-                    targets.clone(),
-                    &expected_ret,
-                    |a, target| {
-                        for local in a.drop_points.after_terminator(&target).iter() {
-                            tracing::info!(?local, ?target, "implicitly dropped for target");
-                            a.drop_local(local);
-                        }
-                    },
-                );
+                self.type_switch_int(discr.clone(), targets.clone(), expected_ret, |a, target| {
+                    for local in a.drop_points.after_terminator(&target).iter() {
+                        tracing::info!(?local, ?target, "implicitly dropped for target");
+                        a.drop_local(local);
+                    }
+                });
             }
             TerminatorKind::Call { target, .. } => {
                 if let Some(target) = target {
@@ -701,7 +694,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         tracing::info!(?local, "implicitly dropped after call");
                         self.drop_local(local);
                     }
-                    self.type_goto(*target, &expected_ret);
+                    self.type_goto(*target, expected_ret);
                 }
             }
             TerminatorKind::Drop { target, .. } => {
@@ -709,7 +702,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     tracing::info!(?local, "dropped");
                     self.drop_local(local);
                 }
-                self.type_goto(*target, &expected_ret);
+                self.type_goto(*target, expected_ret);
             }
             TerminatorKind::Assert {
                 cond,
@@ -728,7 +721,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         chc::Term::bool(*expected),
                     ),
                 );
-                self.type_goto(*target, &expected_ret);
+                self.type_goto(*target, expected_ret);
             }
             TerminatorKind::UnwindResume {} => {}
             TerminatorKind::Unreachable {} => {}
@@ -916,9 +909,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn unbind_atoms(&self) -> UnbindAtoms<rty::FunctionParamIdx> {
         let bb_ty = self.basic_block_ty(self.basic_block);
         let mut atoms = UnbindAtoms::default();
-        if self.is_defined(mir::RETURN_PLACE.into())
-            && !bb_ty.as_ref().ret.ty.to_sort().is_singleton()
-        {
+        if self.is_defined(mir::RETURN_PLACE) && !bb_ty.as_ref().ret.ty.to_sort().is_singleton() {
             let r_ty = self.operand_type(Operand::Move(mir::RETURN_PLACE.into()));
             atoms.push(rty::RefinedTypeVar::Value, r_ty);
         }

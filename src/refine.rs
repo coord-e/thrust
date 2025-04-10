@@ -11,6 +11,6 @@ use crate::chc::DatatypeSymbol;
 use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
-pub fn datatype_symbol<'tcx>(tcx: mir_ty::TyCtxt<'tcx>, did: DefId) -> DatatypeSymbol {
+pub fn datatype_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> DatatypeSymbol {
     DatatypeSymbol::new(tcx.def_path_str(did).replace("::", "."))
 }

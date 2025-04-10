@@ -419,7 +419,6 @@ impl<'ctx, 'a> std::fmt::Display for MatcherPredFun<'ctx, 'a> {
         for ctor in &self.inner.ctors {
             let args = List::open(
                 (0..ctor.selectors.len())
-                    .into_iter()
                     .map(|i| i + offset)
                     .map(|i| format!("x{i}")),
             );
@@ -470,7 +469,7 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
         }
-        writeln!(f, "")?;
+        writeln!(f)?;
         for (p, def) in self.inner.pred_vars.iter_enumerated() {
             if !def.debug_info.is_empty() {
                 writeln!(f, "{}", def.debug_info.display("; "))?;

@@ -209,10 +209,7 @@ fn monomorphize_datatype(
     sort: &chc::DatatypeSort,
     datatypes: &[chc::Datatype],
 ) -> Option<chc::Datatype> {
-    let datatype = datatypes
-        .iter()
-        .find(|d| &d.symbol == &sort.symbol)
-        .unwrap();
+    let datatype = datatypes.iter().find(|d| d.symbol == sort.symbol).unwrap();
     if datatype.params == 0 {
         return None;
     }

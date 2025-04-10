@@ -52,7 +52,7 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             let ty = self.analyzer.local_decls[place.local].ty;
             let new_local = self.insert_borrow(place.local.into(), ty);
             let new_place = self.tcx.mk_place_deref(new_local.into());
-            ReplacePlacesVisitor::with_replacement(self.tcx, place.local.into(), new_place.clone())
+            ReplacePlacesVisitor::with_replacement(self.tcx, place.local.into(), new_place)
                 .visit_rvalue(rvalue, location);
             *place = new_place;
             self.super_assign(place, rvalue, location);
@@ -75,16 +75,16 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
         let ty = inner_place.ty(&self.analyzer.local_decls, self.tcx).ty;
         let (new_local, new_place) = match ty.kind() {
             mir_ty::TyKind::Ref(_, inner_ty, m) if m.is_mut() => {
-                let new_local = self.insert_reborrow(place.clone(), *inner_ty);
+                let new_local = self.insert_reborrow(*place, *inner_ty);
                 (new_local, new_local.into())
             }
             mir_ty::TyKind::Adt(adt, args) if adt.is_box() => {
                 let inner_ty = args.type_at(0);
-                let new_local = self.insert_borrow(place.clone(), inner_ty);
+                let new_local = self.insert_borrow(*place, inner_ty);
                 (new_local, new_local.into())
             }
             _ => {
-                let new_local = self.insert_borrow(place.clone(), ty);
+                let new_local = self.insert_borrow(*place, ty);
                 (new_local, self.tcx.mk_place_deref(new_local.into()))
             }
         };

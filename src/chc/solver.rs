@@ -116,7 +116,7 @@ impl Config {
         }
         config.solver.load_args("THRUST_SOLVER_ARGS");
         config.solver.load_timeout("THRUST_SOLVER_TIMEOUT_SECS");
-        if let Some(preproc) = std::env::var("THRUST_PREPROCESSOR").ok() {
+        if let Ok(preproc) = std::env::var("THRUST_PREPROCESSOR") {
             let mut preproc_config = CommandConfig {
                 name: preproc,
                 args: vec![],
@@ -126,7 +126,7 @@ impl Config {
             preproc_config.load_timeout("THRUST_PREPROCESSOR_TIMEOUT_SECS");
             config.preprocessor = Some(preproc_config);
         }
-        if let Some(dir) = std::env::var("THRUST_OUTPUT_DIR").ok() {
+        if let Ok(dir) = std::env::var("THRUST_OUTPUT_DIR") {
             config.output_dir = Some(dir.into());
         }
         config
@@ -146,7 +146,7 @@ impl Config {
         }
 
         if let Some(preproc) = &self.preprocessor {
-            let output = preproc.run(&file.path(), std::process::Stdio::piped())?;
+            let output = preproc.run(file.path(), std::process::Stdio::piped())?;
             file.as_file_mut().set_len(0)?;
             file.rewind()?;
             write!(file, "{}", output)?;
@@ -155,9 +155,7 @@ impl Config {
             }
         }
 
-        let output = self
-            .solver
-            .run(&file.path(), std::process::Stdio::piped())?;
+        let output = self.solver.run(file.path(), std::process::Stdio::piped())?;
         drop(file);
         match output.trim() {
             "sat" => Ok(()),

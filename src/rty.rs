@@ -210,17 +210,11 @@ impl<T> PointerType<T> {
     }
 
     pub fn is_mut(&self) -> bool {
-        match self.kind {
-            PointerKind::Ref(RefKind::Mut) => true,
-            _ => false,
-        }
+        matches!(self.kind, PointerKind::Ref(RefKind::Mut))
     }
 
     pub fn is_own(&self) -> bool {
-        match self.kind {
-            PointerKind::Own => true,
-            _ => false,
-        }
+        matches!(self.kind, PointerKind::Own)
     }
 
     pub fn own(ty: Type<T>) -> Self {
@@ -719,13 +713,13 @@ impl<T> Type<T> {
             Type::Param(ty) => chc::Sort::param(ty.index().into()),
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.ty.to_sort();
-                let sort = match ty.kind {
+
+                match ty.kind {
                     PointerKind::Ref(RefKind::Immut) | PointerKind::Own => {
                         chc::Sort::box_(elem_sort)
                     }
                     PointerKind::Ref(RefKind::Mut) => chc::Sort::mut_(elem_sort),
-                };
-                sort
+                }
             }
             Type::Function { .. } => chc::Sort::null(),
             Type::Tuple(ty) => {
@@ -1258,13 +1252,13 @@ impl<FV> RefinedType<FV> {
                     self.ty = replacement_ty;
                 }
             }
-            Type::Pointer(ty) => ty.subst_ty_params(&subst),
+            Type::Pointer(ty) => ty.subst_ty_params(subst),
             Type::Function(ty) => {
                 let subst = subst.clone().strip_refinement();
                 ty.subst_ty_params(&subst)
             }
-            Type::Tuple(ty) => ty.subst_ty_params(&subst),
-            Type::Enum(ty) => ty.subst_ty_params(&subst),
+            Type::Tuple(ty) => ty.subst_ty_params(subst),
+            Type::Enum(ty) => ty.subst_ty_params(subst),
         }
     }
 
