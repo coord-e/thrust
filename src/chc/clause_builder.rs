@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use rustc_index::IndexVec;
 
-use super::{Atom, Clause, DebugInfo, Sort, TermVarIdx};
+use super::{Atom, Clause, DebugInfo, Formula, Sort, TermVarIdx};
 
 pub trait Var: Eq + Ord + Hash + Copy + Debug + 'static {}
 impl<T: Eq + Ord + Hash + Copy + Debug + 'static> Var for T {}
@@ -107,21 +107,22 @@ impl ClauseBuilder {
 
     pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
         let vars = self.vars.clone();
-        let mut body: Vec<_> = self
+        let mut body_atoms: Vec<_> = self
             .body
             .clone()
             .into_iter()
             .filter(|a| !a.is_top())
             .collect();
-        if body.is_empty() {
-            body = vec![Atom::top()];
-        } else if body.iter().any(Atom::is_bottom) {
-            body = vec![Atom::bottom()];
+        if body_atoms.is_empty() {
+            body_atoms = vec![Atom::top()];
+        } else if body_atoms.iter().any(Atom::is_bottom) {
+            body_atoms = vec![Atom::bottom()];
         }
         Clause {
             vars,
             head,
-            body,
+            body_atoms,
+            body_formula: Formula::top(),
             debug_info: DebugInfo::from_current_span(),
         }
     }

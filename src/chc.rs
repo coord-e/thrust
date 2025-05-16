@@ -1180,13 +1180,28 @@ impl<V> Formula<V> {
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
         }
     }
+
+    pub fn atoms(&self) -> impl Iterator<Item = &Atom<V>> {
+        self.atoms_impl()
+    }
+
+    fn atoms_impl(&self) -> Box<dyn Iterator<Item = &Atom<V>> + '_> {
+        match self {
+            Formula::Atom(atom) => Box::new(std::iter::once(atom)),
+            Formula::Not(fo) => Box::new(fo.atoms()),
+            Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::atoms)),
+            Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::atoms)),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Clause {
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
-    pub body: Vec<Atom<TermVarIdx>>,
+    pub body_atoms: Vec<Atom<TermVarIdx>>,
+    // body_formula doesn't contain PredVar
+    pub body_formula: Formula<TermVarIdx>,
     pub debug_info: DebugInfo,
 }
 
@@ -1204,12 +1219,7 @@ where
                 allocator.text(",").append(allocator.line()),
             )
             .group();
-        let body = allocator.intersperse(
-            &self.body,
-            allocator
-                .text("∧")
-                .enclose(allocator.line(), allocator.space()),
-        );
+        let body = self.body().pretty(allocator);
         let imp = self
             .head
             .pretty(allocator)
@@ -1228,6 +1238,23 @@ where
 }
 
 impl Clause {
+    pub fn body(&self) -> Formula {
+        Formula::And(
+            self.body_atoms
+                .clone()
+                .into_iter()
+                .map(Formula::from)
+                .collect(),
+        )
+        .and(self.body_formula.clone())
+    }
+
+    pub fn is_nop(&self) -> bool {
+        self.head.is_top()
+            || self.body_atoms.iter().any(Atom::is_bottom)
+            || self.body_formula.is_bottom()
+    }
+
     fn term_sort(&self, term: &Term<TermVarIdx>) -> Sort {
         term.sort(|v| self.vars[*v].clone())
     }
@@ -1279,7 +1306,7 @@ impl System {
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
-        if clause.head.is_top() || clause.body.iter().any(Atom::is_bottom) {
+        if clause.is_nop() {
             return None;
         }
         tracing::debug!(clause = %clause.display(), id = ?self.clauses.next_index(), "push_clause");
