@@ -1029,6 +1029,160 @@ impl<V> Atom<V> {
 }
 
 #[derive(Debug, Clone)]
+pub enum Formula<V = TermVarIdx> {
+    Atom(Atom<V>),
+    Not(Box<Formula<V>>),
+    And(Vec<Formula<V>>),
+    Or(Vec<Formula<V>>),
+}
+
+impl<V> From<Atom<V>> for Formula<V> {
+    fn from(atom: Atom<V>) -> Formula<V> {
+        Formula::Atom(atom)
+    }
+}
+
+impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Formula<V>
+where
+    V: Var,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        match self {
+            Formula::Atom(atom) => atom.pretty(allocator),
+            Formula::Not(fo) => allocator
+                .text("¬")
+                .append(fo.pretty_atom(allocator))
+                .group(),
+            Formula::And(fs) => {
+                let inner = allocator.intersperse(
+                    fs.iter().map(|f| f.pretty_atom(allocator)),
+                    allocator.text("∧").append(allocator.line()),
+                );
+                inner.group()
+            }
+            Formula::Or(fs) => {
+                let inner = allocator.intersperse(
+                    fs.iter().map(|f| f.pretty_atom(allocator)),
+                    allocator.text("∨").append(allocator.line()),
+                );
+                inner.group()
+            }
+        }
+    }
+}
+
+impl<V> Formula<V> {
+    fn pretty_atom<'a, 'b, D>(
+        &'b self,
+        allocator: &'a D,
+    ) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec>
+    where
+        V: Var,
+        D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+        D::Doc: Clone,
+    {
+        match self {
+            Formula::And(_) | Formula::Or(_) => self.pretty(allocator).parens(),
+            _ => self.pretty(allocator),
+        }
+    }
+
+    pub fn top() -> Self {
+        Formula::Atom(Atom::top())
+    }
+
+    pub fn bottom() -> Self {
+        Formula::Atom(Atom::bottom())
+    }
+
+    pub fn is_top(&self) -> bool {
+        match self {
+            Formula::Atom(atom) => atom.is_top(),
+            Formula::Not(fo) => fo.is_bottom(),
+            Formula::And(fs) => fs.iter().all(Formula::is_top),
+            Formula::Or(fs) => fs.iter().any(Formula::is_top),
+        }
+    }
+
+    pub fn is_bottom(&self) -> bool {
+        match self {
+            Formula::Atom(atom) => atom.is_bottom(),
+            Formula::Not(fo) => fo.is_top(),
+            Formula::And(fs) => fs.iter().any(Formula::is_bottom),
+            Formula::Or(fs) => fs.iter().all(Formula::is_bottom),
+        }
+    }
+
+    pub fn not(self) -> Self {
+        match self {
+            Formula::Not(fo) => *fo,
+            _ => Formula::Not(Box::new(self)),
+        }
+    }
+
+    pub fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Formula::And(mut fs), Formula::And(others)) => {
+                fs.extend(others);
+                Formula::And(fs)
+            }
+            (f1, f2) => Formula::And(vec![f1, f2]),
+        }
+    }
+
+    pub fn or(self, other: Self) -> Self {
+        match (self, other) {
+            (Formula::Or(mut fs), Formula::Or(others)) => {
+                fs.extend(others);
+                Formula::Or(fs)
+            }
+            (f1, f2) => Formula::Or(vec![f1, f2]),
+        }
+    }
+
+    pub fn subst_var<F, W>(self, mut f: F) -> Formula<W>
+    where
+        F: FnMut(V) -> Term<W>,
+    {
+        match self {
+            Formula::Atom(atom) => Formula::Atom(atom.subst_var(&mut f)),
+            Formula::Not(fo) => Formula::Not(Box::new(fo.subst_var(f))),
+            Formula::And(fs) => {
+                Formula::And(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect())
+            }
+            Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect()),
+        }
+    }
+
+    pub fn map_var<F, W>(self, mut f: F) -> Formula<W>
+    where
+        F: FnMut(V) -> W,
+    {
+        match self {
+            Formula::Atom(atom) => Formula::Atom(atom.map_var(&mut f)),
+            Formula::Not(fo) => Formula::Not(Box::new(fo.map_var(&mut f))),
+            Formula::And(fs) => Formula::And(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
+            Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
+        }
+    }
+
+    pub fn fv(&self) -> impl Iterator<Item = &V> {
+        self.fv_impl()
+    }
+
+    fn fv_impl(&self) -> Box<dyn Iterator<Item = &V> + '_> {
+        match self {
+            Formula::Atom(atom) => Box::new(atom.fv()),
+            Formula::Not(fo) => Box::new(fo.fv()),
+            Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
+            Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Clause {
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
