@@ -800,6 +800,8 @@ impl KnownPred {
 
     pub const LESS_THAN_OR_EQUAL: KnownPred = KnownPred::infix("<=");
     pub const GREATER_THAN_OR_EQUAL: KnownPred = KnownPred::infix(">=");
+    pub const LESS_THAN: KnownPred = KnownPred::infix("<");
+    pub const GREATER_THAN: KnownPred = KnownPred::infix(">");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

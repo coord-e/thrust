@@ -288,7 +288,7 @@ where
         }
 
         let (lhs, _) = self.parse_atom_term()?;
-        let pred = match self.next_token("<=, >=, == or !=")? {
+        let pred = match self.next_token("<=, >=, <, >, == or !=")? {
             Token {
                 kind: TokenKind::EqEq,
                 ..
@@ -305,6 +305,14 @@ where
                 kind: TokenKind::Le,
                 ..
             } => chc::KnownPred::LESS_THAN_OR_EQUAL,
+            Token {
+                kind: TokenKind::Gt,
+                ..
+            } => chc::KnownPred::GREATER_THAN,
+            Token {
+                kind: TokenKind::Lt,
+                ..
+            } => chc::KnownPred::LESS_THAN,
             t => return Err(ParseAttrError::unexpected_token("==", t.clone())),
         };
         let (rhs, _) = self.parse_term()?;
