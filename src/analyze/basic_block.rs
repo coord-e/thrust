@@ -769,7 +769,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 #[derive(Debug, Clone)]
 pub struct UnbindAtoms<T> {
     existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-    atoms: Vec<chc::Atom<rty::RefinedTypeVar<Var>>>,
+    formula: rty::FormulaWithAtoms<rty::RefinedTypeVar<Var>>,
     target_equations: Vec<(rty::RefinedTypeVar<T>, chc::Term<rty::RefinedTypeVar<Var>>)>,
 }
 
@@ -777,7 +777,7 @@ impl<T> Default for UnbindAtoms<T> {
     fn default() -> Self {
         UnbindAtoms {
             existentials: Default::default(),
-            atoms: Default::default(),
+            formula: Default::default(),
             target_equations: Default::default(),
         }
     }
@@ -785,11 +785,10 @@ impl<T> Default for UnbindAtoms<T> {
 
 impl<T> UnbindAtoms<T> {
     pub fn push(&mut self, target: rty::RefinedTypeVar<T>, var_ty: PlaceType) {
-        self.atoms.extend(
+        self.formula.push_conj(
             var_ty
-                .conds
-                .into_iter()
-                .map(|a| a.map_var(|v| v.shift_existential(self.existentials.len()).into())),
+                .formula
+                .map_var(|v| v.shift_existential(self.existentials.len()).into()),
         );
         self.target_equations.push((
             target,
@@ -807,14 +806,11 @@ impl<T> UnbindAtoms<T> {
         } = ty;
         let rty::Refinement {
             existentials,
-            atoms,
+            formula,
         } = refinement;
 
-        self.atoms.extend(
-            atoms
-                .into_iter()
-                .map(|a| a.map_var(|v| v.shift_existential(self.existentials.len()))),
-        );
+        self.formula
+            .push_conj(formula.map_var(|v| v.shift_existential(self.existentials.len())));
         self.existentials.extend(existentials);
 
         let mut substs = HashMap::new();
@@ -823,25 +819,29 @@ impl<T> UnbindAtoms<T> {
             substs.insert(v, ev);
         }
 
-        let atoms = self
-            .atoms
-            .into_iter()
-            .map(|a| {
-                a.map_var(|v| match v {
-                    rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
-                    rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
-                    rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
+        let mut formula = self.formula.map_var(|v| match v {
+            rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
+            rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
+            rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
+        });
+        formula.push_conj(
+            self.target_equations
+                .into_iter()
+                .map(|(t, term)| {
+                    chc::Term::var(t).equal_to(term.map_var(|v| match v {
+                        rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
+                        rty::RefinedTypeVar::Free(v) => {
+                            rty::RefinedTypeVar::Existential(substs[&v])
+                        }
+                        rty::RefinedTypeVar::Existential(ev) => {
+                            rty::RefinedTypeVar::Existential(ev)
+                        }
+                    }))
                 })
-            })
-            .chain(self.target_equations.into_iter().map(|(t, term)| {
-                chc::Term::var(t).equal_to(term.map_var(|v| match v {
-                    rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
-                    rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
-                    rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
-                }))
-            }))
-            .collect();
-        let refinement = rty::Refinement::new(self.existentials, atoms);
+                .collect::<Vec<_>>(),
+        );
+
+        let refinement = rty::Refinement::with_formula(self.existentials, formula);
         // TODO: polymorphic datatypes: template needed?
         rty::RefinedType::new(src_ty.assert_closed().vacuous(), refinement)
     }
@@ -880,11 +880,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
 
                 let local_ty = self.env.local_type(local);
-                assumption.conds.extend(
+                assumption.formula.push_conj(
                     local_ty
-                        .conds
-                        .into_iter()
-                        .map(|a| a.map_var(|v| v.shift_existential(assumption.existentials.len()))),
+                        .formula
+                        .map_var(|v| v.shift_existential(assumption.existentials.len())),
                 );
                 let term = local_ty
                     .term
@@ -897,16 +896,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for (idx, param) in expected_params.iter_enumerated() {
             let rty::Refinement {
                 existentials,
-                atoms,
+                formula,
             } = param.refinement.clone();
-            assumption.conds.extend(atoms.into_iter().map(|a| {
-                a.subst_var(|v| match v {
-                    rty::RefinedTypeVar::Value => param_terms[&idx].clone(),
-                    rty::RefinedTypeVar::Free(v) => param_terms[&v].clone(),
-                    rty::RefinedTypeVar::Existential(ev) => chc::Term::var(
-                        PlaceTypeVar::Existential(ev + assumption.existentials.len()),
-                    ),
-                })
+            assumption.formula.push_conj(formula.subst_var(|v| match v {
+                rty::RefinedTypeVar::Value => param_terms[&idx].clone(),
+                rty::RefinedTypeVar::Free(v) => param_terms[&v].clone(),
+                rty::RefinedTypeVar::Existential(ev) => chc::Term::var(PlaceTypeVar::Existential(
+                    ev + assumption.existentials.len(),
+                )),
             }));
             assumption.existentials.extend(existentials);
         }
