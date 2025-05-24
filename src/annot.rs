@@ -7,14 +7,14 @@ use crate::chc;
 use crate::rty;
 
 #[derive(Debug, Clone)]
-pub enum AnnotAtom<T> {
+pub enum AnnotFormula<T> {
     Auto,
-    Atom(chc::Atom<T>),
+    Formula(chc::Formula<T>),
 }
 
-impl<T> AnnotAtom<T> {
+impl<T> AnnotFormula<T> {
     pub fn top() -> Self {
-        AnnotAtom::Atom(chc::Atom::top())
+        AnnotFormula::Formula(chc::Formula::top())
     }
 }
 
@@ -200,7 +200,9 @@ where
                     resolver: self.boxed_resolver(),
                     cursor: s.trees(),
                 };
-                return parser.parse_term();
+                let term = parser.parse_term()?;
+                parser.end_of_input()?;
+                return Ok(term);
             }
             _ => unimplemented!(),
         };
@@ -306,8 +308,59 @@ where
             t => return Err(ParseAttrError::unexpected_token("==", t.clone())),
         };
         let (rhs, _) = self.parse_term()?;
-        self.end_of_input()?;
         Ok(chc::Atom::new(pred.into(), vec![lhs, rhs]))
+    }
+
+    fn parse_formula_atom(&mut self) -> Result<chc::Formula<T::Output>> {
+        match self.look_ahead_token_tree(0).cloned() {
+            Some(TokenTree::Token(Token { kind: TokenKind::Not, .. }, _)) => {
+                self.consume();
+                let atom = self.parse_atom()?;
+                Ok(chc::Formula::Atom(atom).not())
+            },
+            Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, s)) => {
+                self.consume();
+                let mut parser = Parser {
+                    resolver: self.boxed_resolver(),
+                    cursor: s.trees(),
+                };
+                let formula = parser.parse_formula()?;
+                parser.end_of_input()?;
+                Ok(formula)
+            }
+            _ => {
+                let atom = self.parse_atom()?;
+                Ok(chc::Formula::Atom(atom))
+            }
+        }
+    }
+
+    fn parse_formula_and(&mut self) -> Result<chc::Formula<T::Output>> {
+        let mut formula = self.parse_formula_atom()?;
+        while let Some(Token {
+            kind: TokenKind::AndAnd,
+            ..
+        }) = self.look_ahead_token(0)
+        {
+            self.consume();
+            let next_formula = self.parse_formula_atom()?;
+            formula = formula.and(next_formula);
+        }
+        Ok(formula)
+    }
+
+    fn parse_formula(&mut self) -> Result<chc::Formula<T::Output>> {
+        let mut formula = self.parse_formula_and()?;
+        while let Some(Token {
+            kind: TokenKind::OrOr,
+            ..
+        }) = self.look_ahead_token(0)
+        {
+            self.consume();
+            let next_formula = self.parse_formula_and()?;
+            formula = formula.or(next_formula);
+        }
+        Ok(formula)
     }
 
     fn parse_ty(&mut self) -> Result<rty::Type<T::Output>> {
@@ -408,6 +461,7 @@ where
                         Some(t) => return Err(ParseAttrError::unexpected_token(",", t.clone())),
                     }
                 }
+                parser.end_of_input()?;
                 Ok(rty::TupleType::new(rtys).into())
             }
             t => Err(ParseAttrError::unexpected_token_tree("ty", t.clone())),
@@ -456,17 +510,18 @@ where
                 .resolver
                 .set_self(self_ident, TermKind::from_sort(&ty.to_sort()));
         }
-        let atom = parser.parse_atom()?;
-        Ok(rty::RefinedType::new(ty, atom.into()))
+        let formula = parser.parse_formula()?;
+        parser.end_of_input()?;
+        Ok(rty::RefinedType::new(ty, formula.into()))
     }
 
-    pub fn parse_annot_atom(&mut self) -> Result<AnnotAtom<T::Output>> {
+    pub fn parse_annot_formula(&mut self) -> Result<AnnotFormula<T::Output>> {
         if let Some((ident, _)) = self.look_ahead_token(0).and_then(|t| t.ident()) {
             if ident.as_str() == "auto" {
-                return Ok(AnnotAtom::Auto);
+                return Ok(AnnotFormula::Auto);
             }
         }
-        self.parse_atom().map(AnnotAtom::Atom)
+        self.parse_formula().map(AnnotFormula::Formula)
     }
 }
 
@@ -578,14 +633,18 @@ where
             resolver: &self.resolver,
             cursor: ts.trees(),
         };
-        parser.parse_rty()
+        let rty = parser.parse_rty()?;
+        parser.end_of_input()?;
+        Ok(rty)
     }
 
-    pub fn parse_atom(&self, ts: TokenStream) -> Result<AnnotAtom<T::Output>> {
+    pub fn parse_formula(&self, ts: TokenStream) -> Result<AnnotFormula<T::Output>> {
         let mut parser = Parser {
             resolver: &self.resolver,
             cursor: ts.trees(),
         };
-        parser.parse_annot_atom()
+        let formula = parser.parse_annot_formula()?;
+        parser.end_of_input()?;
+        Ok(formula)
     }
 }
