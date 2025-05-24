@@ -758,6 +758,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 }
 
+/// Turns [`rty::RefinedType<Var>`] into [`rty::RefinedType<T>`].
+///
+/// We sometimes need to replace [`rty::RefinedTypeVar<Var>`] with [`rty::RefinedTypeVar<T>`].
+/// In [`analyze::basic_block`] module, `T` is [`rty::FunctionParamIdx`]. The type we get as
+/// a function result is obtained as [`rty::RefinedTypeVar<Var>`], but we need to express it using
+/// only function parameters for the subtyping. [`UnbindAtoms`] holds the relation between
+/// the function parameters and their representaion under the environment and
+/// let the type in environment be expressed only under the function parameters using existentials.
 #[derive(Debug, Clone)]
 pub struct UnbindAtoms<T> {
     existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
