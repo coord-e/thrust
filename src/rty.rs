@@ -1026,10 +1026,12 @@ where
                 .text("∧")
                 .enclose(allocator.line(), allocator.space()),
         );
-        if self.formula.is_top() {
+        let formula = self.formula.pretty(allocator);
+        if self.atoms.is_empty() {
+            formula
+        } else if self.formula.is_top() {
             atoms.group()
         } else {
-            let formula = self.formula.pretty(allocator);
             atoms
                 .append(allocator.line())
                 .append(allocator.text("∧"))
