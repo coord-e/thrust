@@ -450,10 +450,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let ret2 = chc::Term::var(param2_var)
                     .mut_current()
                     .equal_to(chc::Term::var(param1_var).mut_final());
-                let ret_refinement = self
-                    .ctx
-                    .implied_atom(vec![ret1, ret2], |_| param1.ty.to_sort());
-                let ret = rty::RefinedType::new(rty::Type::unit(), ret_refinement.into());
+                let ret_formula = chc::Formula::Atom(ret1).and(chc::Formula::Atom(ret2));
+                let ret = rty::RefinedType::new(rty::Type::unit(), ret_formula.into());
                 rty::FunctionType::new([param1, param2].into_iter().collect(), ret).into()
             }
             Some((def_id, args)) => {

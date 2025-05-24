@@ -99,23 +99,9 @@ impl ClauseBuilder {
         self
     }
 
-    pub fn add_body_mapped<T>(&mut self, atom: Atom<T>) -> &mut Self
-    where
-        T: Var + Debug,
-    {
-        self.add_body(atom.map_var(|v| self.mapped_var(v)))
-    }
-
     pub fn add_body_formula(&mut self, formula: Formula<TermVarIdx>) -> &mut Self {
         self.body_formula.push_conj(formula);
         self
-    }
-
-    pub fn add_body_formula_mapped<T>(&mut self, formula: Formula<T>) -> &mut Self
-    where
-        T: Var + Debug,
-    {
-        self.add_body_formula(formula.map_var(|v| self.mapped_var(v)))
     }
 
     pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
@@ -142,10 +128,28 @@ impl ClauseBuilder {
         }
     }
 
-    pub fn head_mapped<T>(&self, head: Atom<T>) -> Clause
-    where
-        T: Var + Debug,
-    {
-        self.head(head.map_var(|v| self.mapped_var(v)))
-    }
+    // Currently, variables are mapped by rty::Instantiator built from `mapped_var`
+    // (see rty::RefinementClauseBuilder)
+    // Maybe we should remove chc::ClauseBuilder and integrate it into rty::RefinementClauseBuilder
+    //
+    // pub fn add_body_mapped<T>(&mut self, atom: Atom<T>) -> &mut Self
+    // where
+    //     T: Var + Debug,
+    // {
+    //     self.add_body(atom.map_var(|v| self.mapped_var(v)))
+    // }
+    //
+    // pub fn add_body_formula_mapped<T>(&mut self, formula: Formula<T>) -> &mut Self
+    // where
+    //     T: Var + Debug,
+    // {
+    //     self.add_body_formula(formula.map_var(|v| self.mapped_var(v)))
+    // }
+    //
+    // pub fn head_mapped<T>(&self, head: Atom<T>) -> Clause
+    // where
+    //     T: Var + Debug,
+    // {
+    //     self.head(head.map_var(|v| self.mapped_var(v)))
+    // }
 }
