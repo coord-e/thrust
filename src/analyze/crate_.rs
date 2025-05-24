@@ -218,11 +218,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             builder.add_body(chc::Atom::top());
             for param_ty in entry_ty.params {
-                let clause = builder
+                let cs = builder
                     .clone()
                     .with_value_var(&param_ty.ty)
                     .head(param_ty.refinement);
-                self.ctx.add_clause(clause);
+                self.ctx.extend_clauses(cs);
             }
         }
     }

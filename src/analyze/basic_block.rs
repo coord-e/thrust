@@ -101,23 +101,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         for ((param_idx, got_ty), expected_ty) in got.params.iter_enumerated().zip(&expected_args) {
             // TODO we can use relate_sub_refined_type here when we implemenented builder-aware relate_*
-            let clause = builder
+            let cs = builder
                 .clone()
                 .with_value_var(&got_ty.ty)
                 .add_body(expected_ty.refinement.clone())
                 .head(got_ty.refinement.clone());
-            clauses.push(clause);
+            clauses.extend(cs);
             builder
                 .with_mapped_value_var(param_idx)
                 .add_body(expected_ty.refinement.clone());
             clauses.extend(builder.relate_sub_type(&expected_ty.ty, &got_ty.ty));
         }
 
-        let clause = builder
+        let cs = builder
             .with_value_var(&got.ret.ty)
             .add_body(got.ret.refinement)
             .head(expected_ret.refinement);
-        clauses.push(clause);
+        clauses.extend(cs);
         clauses.extend(builder.relate_sub_type(&got.ret.ty, &expected_ret.ty));
         clauses
     }

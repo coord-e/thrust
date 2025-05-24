@@ -63,7 +63,7 @@ impl<'a> RefinementClauseBuilder<'a> {
         self
     }
 
-    pub fn head<T>(self, refinement: Refinement<T>) -> chc::Clause
+    pub fn head<T>(self, refinement: Refinement<T>) -> Vec<chc::Clause>
     where
         T: chc::Var,
     {
@@ -76,15 +76,19 @@ impl<'a> RefinementClauseBuilder<'a> {
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);
         }
-        let FormulaWithAtoms { mut atoms, formula } = instantiator.instantiate();
-        // TODO
-        if !formula.is_top() || atoms.len() > 1 {
-            panic!(
-                "head refinement must contain exactly one atom, but got {:?} /\\ {:?}",
-                atoms, formula,
-            );
+        let FormulaWithAtoms { atoms, formula } = instantiator.instantiate();
+        let mut cs = atoms
+            .into_iter()
+            .map(|a| self.builder.head(a))
+            .collect::<Vec<_>>();
+        if !formula.is_top() {
+            cs.push({
+                let mut builder = self.builder.clone();
+                builder
+                    .add_body_formula(formula.not())
+                    .head(chc::Atom::bottom())
+            });
         }
-        self.builder
-            .head(atoms.pop().unwrap_or_else(|| chc::Atom::top()))
+        cs
     }
 }

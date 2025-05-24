@@ -951,6 +951,20 @@ impl<V> FormulaWithAtoms<V> {
         FormulaWithAtoms { atoms, formula }
     }
 
+    pub fn top() -> Self {
+        FormulaWithAtoms {
+            atoms: vec![],
+            formula: chc::Formula::top(),
+        }
+    }
+
+    pub fn bottom() -> Self {
+        FormulaWithAtoms {
+            atoms: vec![],
+            formula: chc::Formula::bottom(),
+        }
+    }
+
     pub fn is_top(&self) -> bool {
         self.formula.is_top() && self.atoms.iter().all(|a| a.is_top())
     }
@@ -1130,14 +1144,11 @@ impl<FV> Refinement<FV> {
     }
 
     pub fn top() -> Self {
-        Refinement::new(IndexVec::new(), vec![])
+        Refinement::with_formula(IndexVec::new(), FormulaWithAtoms::top())
     }
 
     pub fn bottom() -> Self {
-        Refinement {
-            existentials: IndexVec::new(),
-            formula: FormulaWithAtoms::new(vec![chc::Atom::bottom()], chc::Formula::top()),
-        }
+        Refinement::with_formula(IndexVec::new(), FormulaWithAtoms::bottom())
     }
 
     pub fn extend(&mut self, other: Refinement<FV>) {
