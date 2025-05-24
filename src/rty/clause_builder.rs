@@ -1,6 +1,6 @@
 use crate::chc;
 
-use super::{Refinement, Type};
+use super::{FormulaWithAtoms, Refinement, Type};
 
 pub trait ClauseBuilderExt {
     fn with_value_var<'a, T>(&'a mut self, ty: &Type<T>) -> RefinementClauseBuilder<'a>;
@@ -55,9 +55,11 @@ impl<'a> RefinementClauseBuilder<'a> {
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);
         }
-        for atom in instantiator.into_atoms() {
+        let FormulaWithAtoms { atoms, formula } = instantiator.instantiate();
+        for atom in atoms {
             self.builder.add_body(atom);
         }
+        self.builder.add_body_formula(formula);
         self
     }
 
@@ -74,16 +76,15 @@ impl<'a> RefinementClauseBuilder<'a> {
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);
         }
-        let mut atoms: Vec<_> = instantiator.into_atoms().filter(|a| !a.is_top()).collect();
-        if atoms.is_empty() {
-            atoms.push(chc::Atom::top());
-        }
-        if atoms.len() != 1 {
+        let FormulaWithAtoms { mut atoms, formula } = instantiator.instantiate();
+        // TODO
+        if !formula.is_top() || atoms.len() > 1 {
             panic!(
-                "head refinement must contain exactly one atom, but got {:?}",
-                atoms
+                "head refinement must contain exactly one atom, but got {:?} /\\ {:?}",
+                atoms, formula,
             );
         }
-        self.builder.head(atoms.pop().unwrap())
+        self.builder
+            .head(atoms.pop().unwrap_or_else(|| chc::Atom::top()))
     }
 }

@@ -1036,6 +1036,12 @@ pub enum Formula<V = TermVarIdx> {
     Or(Vec<Formula<V>>),
 }
 
+impl<V> Default for Formula<V> {
+    fn default() -> Self {
+        Formula::top()
+    }
+}
+
 impl<V> From<Atom<V>> for Formula<V> {
     fn from(atom: Atom<V>) -> Formula<V> {
         Formula::Atom(atom)
@@ -1142,12 +1148,14 @@ impl<V> Formula<V> {
         }
     }
 
-    pub fn subst_var<F, W>(self, mut f: F) -> Formula<W>
+    pub fn subst_var<F, W>(self, f: F) -> Formula<W>
     where
         F: FnMut(V) -> Term<W>,
     {
+        // TODO: remove this
+        let mut f: Box<dyn FnMut(V) -> Term<W>> = Box::new(f);
         match self {
-            Formula::Atom(atom) => Formula::Atom(atom.subst_var(&mut f)),
+            Formula::Atom(atom) => Formula::Atom(atom.subst_var(f)),
             Formula::Not(fo) => Formula::Not(Box::new(fo.subst_var(f))),
             Formula::And(fs) => {
                 Formula::And(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect())
@@ -1156,12 +1164,14 @@ impl<V> Formula<V> {
         }
     }
 
-    pub fn map_var<F, W>(self, mut f: F) -> Formula<W>
+    pub fn map_var<F, W>(self, f: F) -> Formula<W>
     where
         F: FnMut(V) -> W,
     {
+        // TODO: remove this
+        let mut f: Box<dyn FnMut(V) -> W> = Box::new(f);
         match self {
-            Formula::Atom(atom) => Formula::Atom(atom.map_var(&mut f)),
+            Formula::Atom(atom) => Formula::Atom(atom.map_var(f)),
             Formula::Not(fo) => Formula::Not(Box::new(fo.map_var(&mut f))),
             Formula::And(fs) => Formula::And(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
             Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
@@ -1191,6 +1201,47 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Box::new(fo.atoms()),
             Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::atoms)),
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::atoms)),
+        }
+    }
+
+    pub fn push_conj(&mut self, other: Self) {
+        match self {
+            Formula::And(fs) => {
+                fs.push(other);
+            }
+            _ => {
+                let orig = std::mem::take(self);
+                *self = Formula::And(vec![orig, other]);
+            }
+        }
+    }
+
+    pub fn simplify(&mut self) {
+        match self {
+            Formula::Atom(_atom) => {}
+            Formula::Not(fo) => fo.simplify(),
+            Formula::And(fs) => {
+                for fo in &mut *fs {
+                    fo.simplify();
+                }
+                fs.retain(|f| !f.is_top());
+                if fs.is_empty() {
+                    *self = Formula::top();
+                } else if fs.len() == 1 {
+                    *self = fs.pop().unwrap();
+                }
+            }
+            Formula::Or(fs) => {
+                for fo in &mut *fs {
+                    fo.simplify();
+                }
+                fs.retain(|f| !f.is_bottom());
+                if fs.is_empty() {
+                    *self = Formula::bottom();
+                } else if fs.len() == 1 {
+                    *self = fs.pop().unwrap();
+                }
+            }
         }
     }
 }
