@@ -219,6 +219,10 @@ where
                 ),
                 _ => unimplemented!(),
             },
+            TokenKind::BinOp(BinOpToken::Minus) => {
+                let (operand, _) = self.parse_atom_term()?;
+                (operand.neg(), TermKind::Other)
+            }
             TokenKind::BinOp(BinOpToken::Star) => {
                 let (operand, kind) = self.parse_atom_term()?;
                 match kind {
@@ -237,11 +241,12 @@ where
             }
             _ => {
                 return Err(ParseAttrError::unexpected_token_tree(
-                    "*, ^, (, identifier, or literal",
+                    "-, *, ^, (, identifier, or literal",
                     tt,
                 ))
             }
         };
+
         Ok((term, kind))
     }
 
@@ -264,10 +269,35 @@ where
                 let (rhs, _) = self.parse_atom_term()?;
                 lhs.mul(rhs)
             }
+            Some(TokenKind::EqEq) => {
+                self.consume();
+                let (rhs, _) = self.parse_atom_term()?;
+                lhs.eq(rhs)
+            }
+            Some(TokenKind::Ne) => {
+                self.consume();
+                let (rhs, _) = self.parse_atom_term()?;
+                lhs.ne(rhs)
+            }
             Some(TokenKind::Ge) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
                 lhs.ge(rhs)
+            }
+            Some(TokenKind::Le) => {
+                self.consume();
+                let (rhs, _) = self.parse_atom_term()?;
+                lhs.le(rhs)
+            }
+            Some(TokenKind::Gt) => {
+                self.consume();
+                let (rhs, _) = self.parse_atom_term()?;
+                lhs.gt(rhs)
+            }
+            Some(TokenKind::Lt) => {
+                self.consume();
+                let (rhs, _) = self.parse_atom_term()?;
+                lhs.lt(rhs)
             }
             _ => return Ok((lhs, lhs_kind)),
         };
@@ -321,11 +351,17 @@ where
 
     fn parse_formula_atom(&mut self) -> Result<chc::Formula<T::Output>> {
         match self.look_ahead_token_tree(0).cloned() {
-            Some(TokenTree::Token(Token { kind: TokenKind::Not, .. }, _)) => {
+            Some(TokenTree::Token(
+                Token {
+                    kind: TokenKind::Not,
+                    ..
+                },
+                _,
+            )) => {
                 self.consume();
                 let atom = self.parse_atom()?;
                 Ok(chc::Formula::Atom(atom).not())
-            },
+            }
             Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, s)) => {
                 self.consume();
                 let mut parser = Parser {
@@ -347,7 +383,10 @@ where
         let mut formula = self.parse_formula_atom()?;
         loop {
             match self.look_ahead_token(0) {
-                Some(Token { kind: TokenKind::AndAnd, .. }) => {
+                Some(Token {
+                    kind: TokenKind::AndAnd,
+                    ..
+                }) => {
                     self.consume();
                     let next_formula = self.parse_formula_atom()?;
                     formula = formula.and(next_formula);
@@ -362,7 +401,10 @@ where
         let mut formula = self.parse_formula_and()?;
         loop {
             match self.look_ahead_token(0) {
-                Some(Token { kind: TokenKind::OrOr, .. }) => {
+                Some(Token {
+                    kind: TokenKind::OrOr,
+                    ..
+                }) => {
                     self.consume();
                     let next_formula = self.parse_formula_and()?;
                     formula = formula.or(next_formula);
