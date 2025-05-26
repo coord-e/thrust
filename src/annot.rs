@@ -4,6 +4,7 @@ use rustc_index::IndexVec;
 use rustc_span::symbol::Ident;
 
 use crate::chc;
+use crate::pretty::PrettyDisplayExt as _;
 use crate::rty;
 
 #[derive(Debug, Clone)]
@@ -18,38 +19,9 @@ impl<T> AnnotFormula<T> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum TermKind {
-    Box(Box<TermKind>),
-    Mut(Box<TermKind>),
-    Other,
-}
-
-impl TermKind {
-    pub fn box_(inner: TermKind) -> Self {
-        TermKind::Box(Box::new(inner))
-    }
-
-    pub fn mut_(inner: TermKind) -> Self {
-        TermKind::Mut(Box::new(inner))
-    }
-
-    pub fn other() -> Self {
-        TermKind::Other
-    }
-
-    pub fn from_sort(sort: &chc::Sort) -> Self {
-        match sort {
-            chc::Sort::Box(s) => TermKind::Box(Box::new(TermKind::from_sort(s))),
-            chc::Sort::Mut(s) => TermKind::Mut(Box::new(TermKind::from_sort(s))),
-            _ => TermKind::Other,
-        }
-    }
-}
-
 pub trait Resolver {
     type Output;
-    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)>;
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)>;
 }
 
 impl<'a, T> Resolver for &'a T
@@ -57,7 +29,7 @@ where
     T: Resolver,
 {
     type Output = T::Output;
-    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)> {
         (*self).resolve(ident)
     }
 }
@@ -67,7 +39,7 @@ where
     T: Resolver + ?Sized,
 {
     type Output = T::Output;
-    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)> {
         (**self).resolve(ident)
     }
 }
@@ -95,6 +67,8 @@ pub enum ParseAttrError {
     },
     #[error("unknown identifier {ident:?}")]
     UnknownIdent { ident: Ident },
+    #[error("operator {op:?} cannot be applied to a term of sort {}", .sort.display())]
+    UnsortedOp { op: &'static str, sort: chc::Sort },
 }
 
 impl ParseAttrError {
@@ -113,6 +87,10 @@ impl ParseAttrError {
 
     fn unknown_ident(ident: Ident) -> Self {
         ParseAttrError::UnknownIdent { ident }
+    }
+
+    fn unsorted_op(op: &'static str, sort: chc::Sort) -> Self {
+        ParseAttrError::UnsortedOp { op, sort }
     }
 }
 
@@ -183,14 +161,14 @@ where
         }
     }
 
-    fn resolve(&self, ident: Ident) -> Result<(T::Output, TermKind)> {
+    fn resolve(&self, ident: Ident) -> Result<(T::Output, chc::Sort)> {
         match self.resolver.resolve(ident) {
             Some(res) => Ok(res),
             None => Err(ParseAttrError::unknown_ident(ident)),
         }
     }
 
-    fn parse_atom_term(&mut self) -> Result<(chc::Term<T::Output>, TermKind)> {
+    fn parse_atom_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
         let tt = self.next_token_tree("term")?.clone();
 
         let t = match &tt {
@@ -208,35 +186,35 @@ where
         };
 
         if let Some((ident, _)) = t.ident() {
-            let (v, kind) = self.resolve(ident)?;
-            return Ok((chc::Term::var(v), kind));
+            let (v, sort) = self.resolve(ident)?;
+            return Ok((chc::Term::var(v), sort));
         }
-        let (term, kind) = match t.kind {
+        let (term, sort) = match t.kind {
             TokenKind::Literal(lit) => match lit.kind {
                 LitKind::Integer => (
                     chc::Term::int(lit.symbol.as_str().parse().unwrap()),
-                    TermKind::Other,
+                    chc::Sort::int(),
                 ),
                 _ => unimplemented!(),
             },
             TokenKind::BinOp(BinOpToken::Minus) => {
-                let (operand, _) = self.parse_atom_term()?;
-                (operand.neg(), TermKind::Other)
+                let (operand, sort) = self.parse_atom_term()?;
+                (operand.neg(), sort)
             }
             TokenKind::BinOp(BinOpToken::Star) => {
-                let (operand, kind) = self.parse_atom_term()?;
-                match kind {
-                    TermKind::Box(inner) => (chc::Term::box_current(operand), *inner),
-                    TermKind::Mut(inner) => (chc::Term::mut_current(operand), *inner),
-                    TermKind::Other => panic!("unexpected term kind"),
+                let (operand, sort) = self.parse_atom_term()?;
+                match sort {
+                    chc::Sort::Box(inner) => (chc::Term::box_current(operand), *inner),
+                    chc::Sort::Mut(inner) => (chc::Term::mut_current(operand), *inner),
+                    _ => return Err(ParseAttrError::unsorted_op("*", sort)),
                 }
             }
             TokenKind::BinOp(BinOpToken::Caret) => {
-                let (operand, kind) = self.parse_atom_term()?;
-                if let TermKind::Mut(inner) = kind {
+                let (operand, sort) = self.parse_atom_term()?;
+                if let chc::Sort::Mut(inner) = sort {
                     (chc::Term::mut_final(operand), *inner)
                 } else {
-                    panic!("unexpected term kind");
+                    return Err(ParseAttrError::unsorted_op("^", sort));
                 }
             }
             _ => {
@@ -247,62 +225,62 @@ where
             }
         };
 
-        Ok((term, kind))
+        Ok((term, sort))
     }
 
-    fn parse_term(&mut self) -> Result<(chc::Term<T::Output>, TermKind)> {
-        let (lhs, lhs_kind) = self.parse_atom_term()?;
+    fn parse_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
+        let (lhs, lhs_sort) = self.parse_atom_term()?;
 
-        let term = match self.look_ahead_token(0).map(|t| &t.kind) {
+        let (term, sort) = match self.look_ahead_token(0).map(|t| &t.kind) {
             Some(TokenKind::BinOp(BinOpToken::Plus)) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.add(rhs)
+                (lhs.add(rhs), chc::Sort::int())
             }
             Some(TokenKind::BinOp(BinOpToken::Minus)) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.sub(rhs)
+                (lhs.sub(rhs), chc::Sort::int())
             }
             Some(TokenKind::BinOp(BinOpToken::Star)) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.mul(rhs)
+                (lhs.mul(rhs), chc::Sort::int())
             }
             Some(TokenKind::EqEq) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.eq(rhs)
+                (lhs.eq(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Ne) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.ne(rhs)
+                (lhs.ne(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Ge) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.ge(rhs)
+                (lhs.ge(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Le) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.le(rhs)
+                (lhs.le(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Gt) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.gt(rhs)
+                (lhs.gt(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Lt) => {
                 self.consume();
                 let (rhs, _) = self.parse_atom_term()?;
-                lhs.lt(rhs)
+                (lhs.lt(rhs), chc::Sort::bool())
             }
-            _ => return Ok((lhs, lhs_kind)),
+            _ => return Ok((lhs, lhs_sort)),
         };
 
-        Ok((term, TermKind::Other))
+        Ok((term, sort))
     }
 
     fn parse_atom(&mut self) -> Result<chc::Atom<T::Output>> {
@@ -550,9 +528,7 @@ where
             cursor: parser.cursor,
         };
         if let Some(self_ident) = self_ident {
-            parser
-                .resolver
-                .set_self(self_ident, TermKind::from_sort(&ty.to_sort()));
+            parser.resolver.set_self(self_ident, ty.to_sort());
         }
         let formula = parser.parse_formula()?;
         parser.end_of_input()?;
@@ -571,20 +547,20 @@ where
 
 struct RefinementResolver<'a, T> {
     resolver: Box<dyn Resolver<Output = T> + 'a>,
-    self_: Option<(Ident, TermKind)>,
+    self_: Option<(Ident, chc::Sort)>,
 }
 
 impl<'a, T> Resolver for RefinementResolver<'a, T> {
     type Output = rty::RefinedTypeVar<T>;
-    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
-        if let Some((self_ident, kind)) = &self.self_ {
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)> {
+        if let Some((self_ident, sort)) = &self.self_ {
             if ident == *self_ident {
-                return Some((rty::RefinedTypeVar::Value, kind.clone()));
+                return Some((rty::RefinedTypeVar::Value, sort.clone()));
             }
         }
         self.resolver
             .resolve(ident)
-            .map(|(v, kind)| (rty::RefinedTypeVar::Free(v), kind))
+            .map(|(v, sort)| (rty::RefinedTypeVar::Free(v), sort))
     }
 }
 
@@ -596,8 +572,8 @@ impl<'a, T> RefinementResolver<'a, T> {
         }
     }
 
-    fn set_self(&mut self, ident: Ident, kind: TermKind) -> &mut Self {
-        self.self_ = Some((ident, kind));
+    fn set_self(&mut self, ident: Ident, sort: chc::Sort) -> &mut Self {
+        self.self_ = Some((ident, sort));
         self
     }
 }
@@ -612,10 +588,10 @@ where
     F: Fn(T) -> U,
 {
     type Output = U;
-    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)> {
         self.resolver
             .resolve(ident)
-            .map(|(v, kind)| ((self.map)(v), kind))
+            .map(|(v, sort)| ((self.map)(v), sort))
     }
 }
 
@@ -640,7 +616,7 @@ impl<'a, T> Default for StackedResolver<'a, T> {
 
 impl<'a, T> Resolver for StackedResolver<'a, T> {
     type Output = T;
-    fn resolve(&self, ident: Ident) -> Option<(Self::Output, TermKind)> {
+    fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)> {
         for resolver in &self.resolvers {
             if let Some(res) = resolver.resolve(ident) {
                 return Some(res);

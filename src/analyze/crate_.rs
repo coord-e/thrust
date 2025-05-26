@@ -120,13 +120,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
-            param_resolver.push_param(input_ident.name, input_ty);
+            let input_ty = self.ctx.unrefined_ty(*input_ty);
+            param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
         let mut require_annot = self.extract_require_annot(&param_resolver, def_id);
         let mut ensure_annot = {
+            let output_ty = self.ctx.unrefined_ty(sig.output());
             let resolver = annot::StackedResolver::default()
-                .resolver(analyze::annot::ResultResolver::new(&sig.output()))
+                .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
                 .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
             self.extract_ensure_annot(resolver, def_id)
         };
