@@ -176,7 +176,7 @@ impl Sort {
         }
     }
 
-    fn tuple_elem(self, index: usize) -> Self {
+    pub fn tuple_elem(self, index: usize) -> Self {
         match self {
             Sort::Tuple(ss) => ss[index].clone(),
             _ => panic!("invalid tuple_elem"),

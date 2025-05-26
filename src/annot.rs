@@ -168,6 +168,28 @@ where
         }
     }
 
+    fn parse_term_or_tuple(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
+        let mut terms_and_sorts = Vec::new();
+        loop {
+            terms_and_sorts.push(self.parse_term()?);
+            if let Some(Token {
+                kind: TokenKind::Comma,
+                ..
+            }) = self.look_ahead_token(0)
+            {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+        if terms_and_sorts.len() == 1 {
+            Ok(terms_and_sorts.pop().unwrap())
+        } else {
+            let (terms, sorts) = terms_and_sorts.into_iter().unzip();
+            Ok((chc::Term::tuple(terms), chc::Sort::tuple(sorts)))
+        }
+    }
+
     fn parse_atom_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
         let tt = self.next_token_tree("term")?.clone();
 
@@ -178,103 +200,141 @@ where
                     resolver: self.boxed_resolver(),
                     cursor: s.trees(),
                 };
-                let term = parser.parse_term()?;
+                let (term, sort) = parser.parse_term_or_tuple()?;
                 parser.end_of_input()?;
-                return Ok(term);
+                return Ok((term, sort));
             }
-            _ => unimplemented!(),
+            _ => return Err(ParseAttrError::unexpected_token_tree("token", tt)),
         };
 
-        if let Some((ident, _)) = t.ident() {
+        let (term, sort) = if let Some((ident, _)) = t.ident() {
             let (v, sort) = self.resolve(ident)?;
-            return Ok((chc::Term::var(v), sort));
-        }
-        let (term, sort) = match t.kind {
-            TokenKind::Literal(lit) => match lit.kind {
-                LitKind::Integer => (
-                    chc::Term::int(lit.symbol.as_str().parse().unwrap()),
-                    chc::Sort::int(),
-                ),
-                _ => unimplemented!(),
-            },
-            TokenKind::BinOp(BinOpToken::Minus) => {
-                let (operand, sort) = self.parse_atom_term()?;
-                (operand.neg(), sort)
-            }
-            TokenKind::BinOp(BinOpToken::Star) => {
-                let (operand, sort) = self.parse_atom_term()?;
-                match sort {
-                    chc::Sort::Box(inner) => (chc::Term::box_current(operand), *inner),
-                    chc::Sort::Mut(inner) => (chc::Term::mut_current(operand), *inner),
-                    _ => return Err(ParseAttrError::unsorted_op("*", sort)),
+            (chc::Term::var(v), sort)
+        } else {
+            match t.kind {
+                TokenKind::Literal(lit) => match lit.kind {
+                    LitKind::Integer => (
+                        chc::Term::int(lit.symbol.as_str().parse().unwrap()),
+                        chc::Sort::int(),
+                    ),
+                    _ => unimplemented!(),
+                },
+                _ => {
+                    return Err(ParseAttrError::unexpected_token(
+                        "identifier, or literal",
+                        t.clone(),
+                    ));
                 }
-            }
-            TokenKind::BinOp(BinOpToken::Caret) => {
-                let (operand, sort) = self.parse_atom_term()?;
-                if let chc::Sort::Mut(inner) = sort {
-                    (chc::Term::mut_final(operand), *inner)
-                } else {
-                    return Err(ParseAttrError::unsorted_op("^", sort));
-                }
-            }
-            _ => {
-                return Err(ParseAttrError::unexpected_token_tree(
-                    "-, *, ^, (, identifier, or literal",
-                    tt,
-                ))
             }
         };
 
         Ok((term, sort))
     }
 
+    fn parse_postfix_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
+        let (term, sort) = self.parse_atom_term()?;
+
+        let mut fields = Vec::new();
+        while let Some(Token {
+            kind: TokenKind::Dot,
+            ..
+        }) = self.look_ahead_token(0)
+        {
+            self.consume();
+            match self.next_token("field")? {
+                Token {
+                    kind: TokenKind::Literal(lit),
+                    ..
+                } if matches!(lit.kind, LitKind::Integer) => {
+                    let idx = lit.symbol.as_str().parse().unwrap();
+                    fields.push(idx);
+                }
+                t => return Err(ParseAttrError::unexpected_token("field", t.clone())),
+            }
+        }
+
+        let term = fields.iter().fold(term, |acc, idx| acc.tuple_proj(*idx));
+        let sort = fields.iter().fold(sort, |acc, idx| acc.tuple_elem(*idx));
+        Ok((term, sort))
+    }
+
+    fn parse_prefix_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
+        let (term, sort) = match self.look_ahead_token(0).map(|t| &t.kind) {
+            Some(TokenKind::BinOp(BinOpToken::Minus)) => {
+                self.consume();
+                let (operand, sort) = self.parse_postfix_term()?;
+                (operand.neg(), sort)
+            }
+            Some(TokenKind::BinOp(BinOpToken::Star)) => {
+                self.consume();
+                let (operand, sort) = self.parse_postfix_term()?;
+                match sort {
+                    chc::Sort::Box(inner) => (chc::Term::box_current(operand), *inner),
+                    chc::Sort::Mut(inner) => (chc::Term::mut_current(operand), *inner),
+                    _ => return Err(ParseAttrError::unsorted_op("*", sort)),
+                }
+            }
+            Some(TokenKind::BinOp(BinOpToken::Caret)) => {
+                self.consume();
+                let (operand, sort) = self.parse_postfix_term()?;
+                if let chc::Sort::Mut(inner) = sort {
+                    (chc::Term::mut_final(operand), *inner)
+                } else {
+                    return Err(ParseAttrError::unsorted_op("^", sort));
+                }
+            }
+            _ => self.parse_postfix_term()?,
+        };
+        Ok((term, sort))
+    }
+
     fn parse_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
-        let (lhs, lhs_sort) = self.parse_atom_term()?;
+        let (lhs, lhs_sort) = self.parse_prefix_term()?;
 
         let (term, sort) = match self.look_ahead_token(0).map(|t| &t.kind) {
             Some(TokenKind::BinOp(BinOpToken::Plus)) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.add(rhs), chc::Sort::int())
             }
             Some(TokenKind::BinOp(BinOpToken::Minus)) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.sub(rhs), chc::Sort::int())
             }
             Some(TokenKind::BinOp(BinOpToken::Star)) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.mul(rhs), chc::Sort::int())
             }
             Some(TokenKind::EqEq) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.eq(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Ne) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.ne(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Ge) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.ge(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Le) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.le(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Gt) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.gt(rhs), chc::Sort::bool())
             }
             Some(TokenKind::Lt) => {
                 self.consume();
-                let (rhs, _) = self.parse_atom_term()?;
+                let (rhs, _) = self.parse_prefix_term()?;
                 (lhs.lt(rhs), chc::Sort::bool())
             }
             _ => return Ok((lhs, lhs_sort)),
@@ -295,7 +355,7 @@ where
             }
         }
 
-        let (lhs, _) = self.parse_atom_term()?;
+        let (lhs, _) = self.parse_prefix_term()?;
         let pred = match self.next_token("<=, >=, <, >, == or !=")? {
             Token {
                 kind: TokenKind::EqEq,
@@ -321,7 +381,12 @@ where
                 kind: TokenKind::Lt,
                 ..
             } => chc::KnownPred::LESS_THAN,
-            t => return Err(ParseAttrError::unexpected_token("==", t.clone())),
+            t => {
+                return Err(ParseAttrError::unexpected_token(
+                    "<=, >=, <, >, == or !=",
+                    t.clone(),
+                ))
+            }
         };
         let (rhs, _) = self.parse_term()?;
         Ok(chc::Atom::new(pred.into(), vec![lhs, rhs]))
@@ -340,16 +405,16 @@ where
                 let atom = self.parse_atom()?;
                 Ok(chc::Formula::Atom(atom).not())
             }
-            Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, s)) => {
-                self.consume();
-                let mut parser = Parser {
-                    resolver: self.boxed_resolver(),
-                    cursor: s.trees(),
-                };
-                let formula = parser.parse_formula()?;
-                parser.end_of_input()?;
-                Ok(formula)
-            }
+            //Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, s)) => {
+            //    self.consume();
+            //    let mut parser = Parser {
+            //        resolver: self.boxed_resolver(),
+            //        cursor: s.trees(),
+            //    };
+            //    let formula = parser.parse_formula()?;
+            //    parser.end_of_input()?;
+            //    Ok(formula)
+            //}
             _ => {
                 let atom = self.parse_atom()?;
                 Ok(chc::Formula::Atom(atom))

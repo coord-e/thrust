@@ -8,8 +8,8 @@ fn rand() -> i64 { unimplemented!() }
 
 #[thrust::requires(true)]
 #[thrust::ensures(
-    (*ma >= *mb && *mb == ^mb && ma == result) ||
-    (*ma < *mb && *ma == ^ma && mb == result)
+    *ma >= *mb && *mb == ^mb && ma == result ||
+    *ma < *mb && *ma == ^ma && mb == result
 )]
 fn take_max<'a>(ma: &'a mut i64, mb: &'a mut i64) -> &'a mut i64 {
   if *ma >= *mb {
