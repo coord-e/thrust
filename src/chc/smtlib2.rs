@@ -243,6 +243,42 @@ impl<'ctx, 'a> Atom<'ctx, 'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct Formula<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    clause: &'a chc::Clause,
+    inner: &'a chc::Formula,
+}
+
+impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.inner {
+            chc::Formula::Atom(atom) => {
+                let atom = Atom::new(self.ctx, self.clause, atom);
+                write!(f, "{}", atom)
+            }
+            chc::Formula::Not(fo) => {
+                let fo = Formula::new(self.ctx, self.clause, fo);
+                write!(f, "(not {})", fo)
+            }
+            chc::Formula::And(fs) => {
+                let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.clause, fo)));
+                write!(f, "(and {})", fs)
+            }
+            chc::Formula::Or(fs) => {
+                let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.clause, fo)));
+                write!(f, "(or {})", fs)
+            }
+        }
+    }
+}
+
+impl<'ctx, 'a> Formula<'ctx, 'a> {
+    pub fn new(ctx: &'ctx FormatContext, clause: &'a chc::Clause, inner: &'a chc::Formula) -> Self {
+        Self { ctx, clause, inner }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Clause<'ctx, 'a> {
     ctx: &'ctx FormatContext,
     inner: &'a chc::Clause,
@@ -253,12 +289,13 @@ impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
         if !self.inner.debug_info.is_empty() {
             writeln!(f, "{}", self.inner.debug_info.display("; "))?;
         }
-        let body = List::open(
+        let body_atoms = List::open(
             self.inner
-                .body
+                .body_atoms
                 .iter()
                 .map(|a| Atom::new(self.ctx, self.inner, a)),
         );
+        let body_formula = Formula::new(self.ctx, self.inner, &self.inner.body_formula);
         let head = Atom::new(self.ctx, self.inner, &self.inner.head);
         if !self.inner.vars.is_empty() {
             let vars = List::closed(
@@ -269,11 +306,7 @@ impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
             );
             write!(f, "(forall {vars} ")?;
         }
-        if self.inner.body.len() == 1 {
-            write!(f, "(=> {body} {head})")?;
-        } else {
-            write!(f, "(=> (and {body}) {head})")?;
-        }
+        write!(f, "(=> (and {body_atoms} {body_formula}) {head})")?;
         if !self.inner.vars.is_empty() {
             write!(f, ")")?;
         }

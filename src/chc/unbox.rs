@@ -44,20 +44,32 @@ fn unbox_sort(sort: Sort) -> Sort {
     }
 }
 
+fn unbox_formula(formula: Formula) -> Formula {
+    match formula {
+        Formula::Atom(atom) => Formula::Atom(unbox_atom(atom)),
+        Formula::Not(fo) => Formula::Not(Box::new(unbox_formula(*fo))),
+        Formula::And(fs) => Formula::And(fs.into_iter().map(unbox_formula).collect()),
+        Formula::Or(fs) => Formula::Or(fs.into_iter().map(unbox_formula).collect()),
+    }
+}
+
 fn unbox_clause(clause: Clause) -> Clause {
     let Clause {
         vars,
         head,
-        body,
+        body_atoms,
+        body_formula,
         debug_info,
     } = clause;
     let vars = vars.into_iter().map(unbox_sort).collect();
     let head = unbox_atom(head);
-    let body = body.into_iter().map(unbox_atom).collect();
+    let body_atoms = body_atoms.into_iter().map(unbox_atom).collect();
+    let body_formula = unbox_formula(body_formula);
     Clause {
         vars,
         head,
-        body,
+        body_atoms,
+        body_formula,
         debug_info,
     }
 }

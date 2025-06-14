@@ -126,12 +126,12 @@ where
 
         let mut clauses = self.relate_sub_type(&got.ty, &expected.ty);
 
-        let clause = self
+        let cs = self
             .build_clause()
             .with_value_var(&got.ty)
             .add_body(got.refinement.clone())
             .head(expected.refinement.clone());
-        clauses.push(clause);
+        clauses.extend(cs);
         clauses
     }
 
