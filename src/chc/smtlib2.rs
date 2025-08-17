@@ -279,6 +279,32 @@ impl<'ctx, 'a> Formula<'ctx, 'a> {
 }
 
 #[derive(Debug, Clone)]
+pub struct Body<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    clause: &'a chc::Clause,
+    inner: &'a chc::Body,
+}
+
+impl<'ctx, 'a> std::fmt::Display for Body<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let atoms = List::open(
+            self.inner
+                .atoms
+                .iter()
+                .map(|a| Atom::new(self.ctx, self.clause, a)),
+        );
+        let formula = Formula::new(self.ctx, self.clause, &self.inner.formula);
+        write!(f, "(and {atoms} {formula})")
+    }
+}
+
+impl<'ctx, 'a> Body<'ctx, 'a> {
+    pub fn new(ctx: &'ctx FormatContext, clause: &'a chc::Clause, inner: &'a chc::Body) -> Self {
+        Self { ctx, clause, inner }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Clause<'ctx, 'a> {
     ctx: &'ctx FormatContext,
     inner: &'a chc::Clause,
@@ -289,13 +315,7 @@ impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
         if !self.inner.debug_info.is_empty() {
             writeln!(f, "{}", self.inner.debug_info.display("; "))?;
         }
-        let body_atoms = List::open(
-            self.inner
-                .body_atoms
-                .iter()
-                .map(|a| Atom::new(self.ctx, self.inner, a)),
-        );
-        let body_formula = Formula::new(self.ctx, self.inner, &self.inner.body_formula);
+        let body = Body::new(self.ctx, self.inner, &self.inner.body);
         let head = Atom::new(self.ctx, self.inner, &self.inner.head);
         if !self.inner.vars.is_empty() {
             let vars = List::closed(
@@ -306,7 +326,7 @@ impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
             );
             write!(f, "(forall {vars} ")?;
         }
-        write!(f, "(=> (and {body_atoms} {body_formula}) {head})")?;
+        write!(f, "(=> {body} {head})")?;
         if !self.inner.vars.is_empty() {
             write!(f, ")")?;
         }

@@ -1,6 +1,6 @@
 use crate::chc;
 
-use super::{FormulaWithAtoms, Refinement, Type};
+use super::{Refinement, Type};
 
 pub trait ClauseBuilderExt {
     fn with_value_var<'a, T>(&'a mut self, ty: &Type<T>) -> RefinementClauseBuilder<'a>;
@@ -55,11 +55,11 @@ impl<'a> RefinementClauseBuilder<'a> {
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);
         }
-        let FormulaWithAtoms { atoms, formula } = instantiator.instantiate();
+        let chc::Body { atoms, formula } = instantiator.instantiate();
         for atom in atoms {
             self.builder.add_body(atom);
         }
-        self.builder.add_body_formula(formula);
+        self.builder.add_body(formula);
         self
     }
 
@@ -76,7 +76,7 @@ impl<'a> RefinementClauseBuilder<'a> {
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);
         }
-        let FormulaWithAtoms { atoms, formula } = instantiator.instantiate();
+        let chc::Body { atoms, formula } = instantiator.instantiate();
         let mut cs = atoms
             .into_iter()
             .map(|a| self.builder.head(a))
@@ -84,9 +84,7 @@ impl<'a> RefinementClauseBuilder<'a> {
         if !formula.is_top() {
             cs.push({
                 let mut builder = self.builder.clone();
-                builder
-                    .add_body_formula(formula.not())
-                    .head(chc::Atom::bottom())
+                builder.add_body(formula.not()).head(chc::Atom::bottom())
             });
         }
         cs

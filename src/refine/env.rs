@@ -225,7 +225,7 @@ pub struct PlaceType {
     pub ty: rty::Type<Var>,
     pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
     pub term: chc::Term<PlaceTypeVar>,
-    pub formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+    pub formula: chc::Body<PlaceTypeVar>,
 }
 
 impl From<PlaceType> for rty::RefinedType<Var> {
@@ -564,7 +564,7 @@ impl PlaceType {
             tys: Vec<rty::Type<Var>>,
             terms: Vec<chc::Term<PlaceTypeVar>>,
             existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-            formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+            formula: chc::Body<PlaceTypeVar>,
         }
         let State {
             tys,
@@ -612,7 +612,7 @@ impl PlaceType {
         struct State {
             existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
             terms: Vec<chc::Term<PlaceTypeVar>>,
-            formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+            formula: chc::Body<PlaceTypeVar>,
         }
         let State {
             mut existentials,
@@ -658,14 +658,13 @@ impl PlaceType {
 #[derive(Debug, Clone, Default)]
 pub struct UnboundAssumption {
     pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-    pub formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+    pub formula: chc::Body<PlaceTypeVar>,
 }
 
 impl From<chc::Atom<Var>> for UnboundAssumption {
     fn from(atom: chc::Atom<Var>) -> Self {
         let existentials = IndexVec::new();
-        let formula =
-            rty::FormulaWithAtoms::new(vec![atom.map_var(Into::into)], Default::default());
+        let formula = chc::Body::new(vec![atom.map_var(Into::into)], Default::default());
         UnboundAssumption {
             existentials,
             formula,
@@ -732,7 +731,7 @@ where
 impl UnboundAssumption {
     pub fn new(
         existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-        formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+        formula: chc::Body<PlaceTypeVar>,
     ) -> Self {
         UnboundAssumption {
             existentials,
@@ -776,11 +775,11 @@ impl rty::ClauseScope for Env {
             if !rty.ty.to_sort().is_singleton() {
                 instantiator.value_var(builder.mapped_var(var));
             }
-            let rty::FormulaWithAtoms { formula, atoms } = instantiator.instantiate();
+            let chc::Body { formula, atoms } = instantiator.instantiate();
             for atom in atoms {
                 builder.add_body(atom);
             }
-            builder.add_body_formula(formula);
+            builder.add_body(formula);
         }
         for assumption in &self.unbound_assumptions {
             let mut evs = HashMap::new();
@@ -788,15 +787,14 @@ impl rty::ClauseScope for Env {
                 let tv = builder.add_var(sort.clone());
                 evs.insert(ev, tv);
             }
-            let rty::FormulaWithAtoms { formula, atoms } =
-                assumption.formula.clone().map_var(|v| match v {
-                    PlaceTypeVar::Var(v) => builder.mapped_var(v),
-                    PlaceTypeVar::Existential(ev) => evs[&ev],
-                });
+            let chc::Body { formula, atoms } = assumption.formula.clone().map_var(|v| match v {
+                PlaceTypeVar::Var(v) => builder.mapped_var(v),
+                PlaceTypeVar::Existential(ev) => evs[&ev],
+            });
             for atom in atoms {
                 builder.add_body(atom);
             }
-            builder.add_body_formula(formula);
+            builder.add_body(formula);
         }
         builder
     }

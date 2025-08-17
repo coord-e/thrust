@@ -905,151 +905,13 @@ impl<T> RefinedTypeVar<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct FormulaWithAtoms<V> {
-    pub atoms: Vec<chc::Atom<V>>,
-    pub formula: chc::Formula<V>,
-}
-
-impl<V> Default for FormulaWithAtoms<V> {
-    fn default() -> Self {
-        FormulaWithAtoms {
-            atoms: Default::default(),
-            formula: Default::default(),
-        }
-    }
-}
-
-impl<V> From<chc::Atom<V>> for FormulaWithAtoms<V> {
-    fn from(atom: chc::Atom<V>) -> Self {
-        FormulaWithAtoms {
-            atoms: vec![atom],
-            formula: chc::Formula::top(),
-        }
-    }
-}
-
-impl<V> From<Vec<chc::Atom<V>>> for FormulaWithAtoms<V> {
-    fn from(atoms: Vec<chc::Atom<V>>) -> Self {
-        FormulaWithAtoms {
-            atoms,
-            formula: chc::Formula::top(),
-        }
-    }
-}
-
-impl<V> From<chc::Formula<V>> for FormulaWithAtoms<V> {
-    fn from(formula: chc::Formula<V>) -> Self {
-        FormulaWithAtoms {
-            atoms: vec![],
-            formula,
-        }
-    }
-}
-
-impl<V> FormulaWithAtoms<V> {
-    pub fn new(atoms: Vec<chc::Atom<V>>, formula: chc::Formula<V>) -> Self {
-        FormulaWithAtoms { atoms, formula }
-    }
-
-    pub fn top() -> Self {
-        FormulaWithAtoms {
-            atoms: vec![],
-            formula: chc::Formula::top(),
-        }
-    }
-
-    pub fn bottom() -> Self {
-        FormulaWithAtoms {
-            atoms: vec![],
-            formula: chc::Formula::bottom(),
-        }
-    }
-
-    pub fn is_top(&self) -> bool {
-        self.formula.is_top() && self.atoms.iter().all(|a| a.is_top())
-    }
-
-    pub fn is_bottom(&self) -> bool {
-        self.formula.is_bottom() || self.atoms.iter().any(|a| a.is_bottom())
-    }
-
-    pub fn push_conj(&mut self, other: impl Into<FormulaWithAtoms<V>>) {
-        let FormulaWithAtoms { atoms, formula } = other.into();
-        self.atoms.extend(atoms);
-        self.formula.push_conj(formula);
-    }
-
-    pub fn map_var<F, W>(self, mut f: F) -> FormulaWithAtoms<W>
-    where
-        F: FnMut(V) -> W,
-    {
-        FormulaWithAtoms {
-            atoms: self.atoms.into_iter().map(|a| a.map_var(&mut f)).collect(),
-            formula: self.formula.map_var(f),
-        }
-    }
-
-    pub fn subst_var<F, W>(self, mut f: F) -> FormulaWithAtoms<W>
-    where
-        F: FnMut(V) -> chc::Term<W>,
-    {
-        FormulaWithAtoms {
-            atoms: self
-                .atoms
-                .into_iter()
-                .map(|a| a.subst_var(&mut f))
-                .collect(),
-            formula: self.formula.subst_var(f),
-        }
-    }
-
-    pub fn simplify(&mut self) {
-        self.formula.simplify();
-        self.atoms.retain(|a| !a.is_top());
-        if self.is_bottom() {
-            self.atoms = vec![chc::Atom::bottom()];
-            self.formula = chc::Formula::top();
-        }
-    }
-}
-
-impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b FormulaWithAtoms<V>
-where
-    V: chc::Var,
-    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-    D::Doc: Clone,
-{
-    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let atoms = allocator.intersperse(
-            &self.atoms,
-            allocator
-                .text("∧")
-                .enclose(allocator.line(), allocator.space()),
-        );
-        let formula = self.formula.pretty(allocator);
-        if self.atoms.is_empty() {
-            formula
-        } else if self.formula.is_top() {
-            atoms.group()
-        } else {
-            atoms
-                .append(allocator.line())
-                .append(allocator.text("∧"))
-                .append(allocator.line())
-                .append(formula)
-                .group()
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct Refinement<FV = Closed> {
     pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
-    pub formula: FormulaWithAtoms<RefinedTypeVar<FV>>,
+    pub formula: chc::Body<RefinedTypeVar<FV>>,
 }
 
-impl<FV> From<FormulaWithAtoms<RefinedTypeVar<FV>>> for Refinement<FV> {
-    fn from(formula: FormulaWithAtoms<RefinedTypeVar<FV>>) -> Self {
+impl<FV> From<chc::Body<RefinedTypeVar<FV>>> for Refinement<FV> {
+    fn from(formula: chc::Body<RefinedTypeVar<FV>>) -> Self {
         Refinement {
             existentials: IndexVec::new(),
             formula,
@@ -1061,7 +923,7 @@ impl<FV> From<chc::Atom<RefinedTypeVar<FV>>> for Refinement<FV> {
     fn from(atom: chc::Atom<RefinedTypeVar<FV>>) -> Self {
         Refinement {
             existentials: IndexVec::new(),
-            formula: FormulaWithAtoms::new(vec![atom], chc::Formula::top()),
+            formula: chc::Body::new(vec![atom], chc::Formula::top()),
         }
     }
 }
@@ -1070,7 +932,7 @@ impl<FV> From<chc::Formula<RefinedTypeVar<FV>>> for Refinement<FV> {
     fn from(formula: chc::Formula<RefinedTypeVar<FV>>) -> Self {
         Refinement {
             existentials: IndexVec::new(),
-            formula: FormulaWithAtoms::new(vec![], formula),
+            formula: chc::Body::new(vec![], formula),
         }
     }
 }
@@ -1107,7 +969,7 @@ where
 impl<FV> Refinement<FV> {
     pub fn with_formula(
         existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
-        formula: FormulaWithAtoms<RefinedTypeVar<FV>>,
+        formula: chc::Body<RefinedTypeVar<FV>>,
     ) -> Self {
         Refinement {
             existentials,
@@ -1121,7 +983,7 @@ impl<FV> Refinement<FV> {
     ) -> Self {
         let mut refinement = Refinement {
             existentials,
-            formula: FormulaWithAtoms::new(atoms, chc::Formula::top()),
+            formula: chc::Body::new(atoms, chc::Formula::top()),
         };
         refinement.formula.simplify();
         refinement
@@ -1144,11 +1006,11 @@ impl<FV> Refinement<FV> {
     }
 
     pub fn top() -> Self {
-        Refinement::with_formula(IndexVec::new(), FormulaWithAtoms::top())
+        Refinement::with_formula(IndexVec::new(), chc::Body::top())
     }
 
     pub fn bottom() -> Self {
-        Refinement::with_formula(IndexVec::new(), FormulaWithAtoms::bottom())
+        Refinement::with_formula(IndexVec::new(), chc::Body::bottom())
     }
 
     pub fn extend(&mut self, other: Refinement<FV>) {
@@ -1231,7 +1093,7 @@ impl<T> Instantiator<T> {
         self
     }
 
-    pub fn instantiate(self) -> FormulaWithAtoms<T>
+    pub fn instantiate(self) -> chc::Body<T>
     where
         T: Clone,
     {
