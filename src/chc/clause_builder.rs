@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use rustc_index::IndexVec;
 
-use super::{Atom, Clause, DebugInfo, Sort, TermVarIdx};
+use super::{Atom, Clause, DebugInfo, Formula, Sort, TermVarIdx};
 
 pub trait Var: Eq + Ord + Hash + Copy + Debug + 'static {}
 impl<T: Eq + Ord + Hash + Copy + Debug + 'static> Var for T {}
@@ -58,7 +58,8 @@ impl Hash for dyn Key {
 pub struct ClauseBuilder {
     vars: IndexVec<TermVarIdx, Sort>,
     mapped_var_indices: HashMap<Rc<dyn Key>, TermVarIdx>,
-    body: Vec<Atom<TermVarIdx>>,
+    body_atoms: Vec<Atom<TermVarIdx>>,
+    body_formula: Formula<TermVarIdx>,
 }
 
 impl ClauseBuilder {
@@ -94,42 +95,61 @@ impl ClauseBuilder {
     }
 
     pub fn add_body(&mut self, atom: Atom<TermVarIdx>) -> &mut Self {
-        self.body.push(atom);
+        self.body_atoms.push(atom);
         self
     }
 
-    pub fn add_body_mapped<T>(&mut self, atom: Atom<T>) -> &mut Self
-    where
-        T: Var + Debug,
-    {
-        self.add_body(atom.map_var(|v| self.mapped_var(v)))
+    pub fn add_body_formula(&mut self, formula: Formula<TermVarIdx>) -> &mut Self {
+        self.body_formula.push_conj(formula);
+        self
     }
 
     pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
         let vars = self.vars.clone();
-        let mut body: Vec<_> = self
-            .body
+        let mut body_atoms: Vec<_> = self
+            .body_atoms
             .clone()
             .into_iter()
             .filter(|a| !a.is_top())
             .collect();
-        if body.is_empty() {
-            body = vec![Atom::top()];
-        } else if body.iter().any(Atom::is_bottom) {
-            body = vec![Atom::bottom()];
+        if body_atoms.is_empty() {
+            body_atoms = vec![Atom::top()];
+        } else if body_atoms.iter().any(Atom::is_bottom) {
+            body_atoms = vec![Atom::bottom()];
         }
+        let mut body_formula = self.body_formula.clone();
+        body_formula.simplify();
         Clause {
             vars,
             head,
-            body,
+            body_atoms,
+            body_formula,
             debug_info: DebugInfo::from_current_span(),
         }
     }
 
-    pub fn head_mapped<T>(&self, head: Atom<T>) -> Clause
-    where
-        T: Var + Debug,
-    {
-        self.head(head.map_var(|v| self.mapped_var(v)))
-    }
+    // Currently, variables are mapped by rty::Instantiator built from `mapped_var`
+    // (see rty::RefinementClauseBuilder)
+    // Maybe we should remove chc::ClauseBuilder and integrate it into rty::RefinementClauseBuilder
+    //
+    // pub fn add_body_mapped<T>(&mut self, atom: Atom<T>) -> &mut Self
+    // where
+    //     T: Var + Debug,
+    // {
+    //     self.add_body(atom.map_var(|v| self.mapped_var(v)))
+    // }
+    //
+    // pub fn add_body_formula_mapped<T>(&mut self, formula: Formula<T>) -> &mut Self
+    // where
+    //     T: Var + Debug,
+    // {
+    //     self.add_body_formula(formula.map_var(|v| self.mapped_var(v)))
+    // }
+    //
+    // pub fn head_mapped<T>(&self, head: Atom<T>) -> Clause
+    // where
+    //     T: Var + Debug,
+    // {
+    //     self.head(head.map_var(|v| self.mapped_var(v)))
+    // }
 }

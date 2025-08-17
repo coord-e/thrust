@@ -10,6 +10,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - run: rustup component add rustfmt
       - run: cargo fmt --all -- --check
   clippy:
     runs-on: ubuntu-latest
@@ -17,6 +18,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - run: rustup component add clippy
       - run: cargo clippy -- -D warnings
   test:
     runs-on: ubuntu-latest
