@@ -13,8 +13,8 @@ use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, BasicBlockType, Env, PlaceType, PlaceTypeVar, TempVarIdx, TemplateTypeGenerator,
-    UnboundAssumption, UnrefinedTypeGenerator, Var,
+    self, Assumption, BasicBlockType, Env, PlaceType, PlaceTypeVar, TempVarIdx,
+    TemplateTypeGenerator, UnrefinedTypeGenerator, Var,
 };
 use crate::rty::{
     self, ClauseBuilderExt as _, ClauseScope as _, ShiftExistential as _, Subtyping as _,
@@ -341,11 +341,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.ctx.extend_clauses(clauses);
     }
 
-    fn with_assumptions<F, T>(
-        &mut self,
-        assumptions: Vec<impl Into<UnboundAssumption>>,
-        callback: F,
-    ) -> T
+    fn with_assumptions<F, T>(&mut self, assumptions: Vec<impl Into<Assumption>>, callback: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
@@ -356,7 +352,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         result
     }
 
-    fn with_assumption<F, T>(&mut self, assumption: impl Into<UnboundAssumption>, callback: F) -> T
+    fn with_assumption<F, T>(&mut self, assumption: impl Into<Assumption>, callback: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
@@ -851,7 +847,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         expected_params: &IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
     ) {
         let mut param_terms = HashMap::<rty::FunctionParamIdx, chc::Term<PlaceTypeVar>>::new();
-        let mut assumption = UnboundAssumption::default();
+        let mut assumption = Assumption::default();
 
         let bb_ty = self.basic_block_ty(self.basic_block).clone();
         let params = &bb_ty.as_ref().params;
@@ -877,7 +873,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
 
                 let local_ty = self.env.local_type(local);
-                assumption.formula.push_conj(
+                assumption.body.push_conj(
                     local_ty
                         .formula
                         .map_var(|v| v.shift_existential(assumption.existentials.len())),
@@ -892,7 +888,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         for (idx, param) in expected_params.iter_enumerated() {
             let rty::Refinement { existentials, body } = param.refinement.clone();
-            assumption.formula.push_conj(body.subst_var(|v| match v {
+            assumption.body.push_conj(body.subst_var(|v| match v {
                 rty::RefinedTypeVar::Value => param_terms[&idx].clone(),
                 rty::RefinedTypeVar::Free(v) => param_terms[&v].clone(),
                 rty::RefinedTypeVar::Existential(ev) => chc::Term::var(PlaceTypeVar::Existential(

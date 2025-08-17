@@ -5,7 +5,7 @@ mod basic_block;
 pub use basic_block::BasicBlockType;
 
 mod env;
-pub use env::{Env, PlaceType, PlaceTypeVar, TempVarIdx, UnboundAssumption, Var};
+pub use env::{Assumption, Env, PlaceType, PlaceTypeVar, TempVarIdx, Var};
 
 use crate::chc::DatatypeSymbol;
 use rustc_middle::ty as mir_ty;

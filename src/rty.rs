@@ -1009,10 +1009,7 @@ where
 }
 
 impl<V> Formula<V> {
-    pub fn new(
-        existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
-        body: chc::Body<V>,
-    ) -> Self {
+    pub fn new(existentials: IndexVec<ExistentialVarIdx, chc::Sort>, body: chc::Body<V>) -> Self {
         Formula { existentials, body }
     }
 
