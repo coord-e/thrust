@@ -7,7 +7,7 @@ use rustc_span::def_id::DefId;
 use rustc_span::symbol::Ident;
 
 use crate::analyze;
-use crate::annot::{self, AnnotAtom, AnnotParser, ResolverExt as _};
+use crate::annot::{self, AnnotFormula, AnnotParser, ResolverExt as _};
 use crate::chc;
 use crate::refine::{self, TemplateTypeGenerator, UnrefinedTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _};
@@ -27,7 +27,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn extract_require_annot<T>(&self, resolver: T, def_id: DefId) -> Option<AnnotAtom<T::Output>>
+    fn extract_require_annot<T>(
+        &self,
+        resolver: T,
+        def_id: DefId,
+    ) -> Option<AnnotFormula<T::Output>>
     where
         T: annot::Resolver,
     {
@@ -40,13 +44,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 unimplemented!();
             }
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let require = AnnotParser::new(&resolver).parse_atom(ts).unwrap();
+            let require = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
             require_annot = Some(require);
         }
         require_annot
     }
 
-    fn extract_ensure_annot<T>(&self, resolver: T, def_id: DefId) -> Option<AnnotAtom<T::Output>>
+    fn extract_ensure_annot<T>(&self, resolver: T, def_id: DefId) -> Option<AnnotFormula<T::Output>>
     where
         T: annot::Resolver,
     {
@@ -59,7 +63,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 unimplemented!();
             }
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ensure = AnnotParser::new(&resolver).parse_atom(ts).unwrap();
+            let ensure = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
             ensure_annot = Some(ensure);
         }
         ensure_annot
@@ -116,13 +120,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
-            param_resolver.push_param(input_ident.name, input_ty);
+            let input_ty = self.ctx.unrefined_ty(*input_ty);
+            param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
         let mut require_annot = self.extract_require_annot(&param_resolver, def_id);
         let mut ensure_annot = {
+            let output_ty = self.ctx.unrefined_ty(sig.output());
             let resolver = annot::StackedResolver::default()
-                .resolver(analyze::annot::ResultResolver::new(&sig.output()))
+                .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
                 .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
             self.extract_ensure_annot(resolver, def_id)
         };
@@ -139,8 +145,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 unimplemented!();
             }
 
-            require_annot = Some(AnnotAtom::top());
-            ensure_annot = Some(AnnotAtom::top());
+            require_annot = Some(AnnotFormula::top());
+            ensure_annot = Some(AnnotFormula::top());
         }
 
         assert!(require_annot.is_none() || param_annots.is_empty());
@@ -158,17 +164,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         let mut builder = self.ctx.build_function_template_ty(sig);
-        if let Some(AnnotAtom::Atom(require)) = require_annot {
-            let atom = require.map_var(|idx| {
+        if let Some(AnnotFormula::Formula(require)) = require_annot {
+            let formula = require.map_var(|idx| {
                 if idx.index() == sig.inputs().len() - 1 {
                     rty::RefinedTypeVar::Value
                 } else {
                     rty::RefinedTypeVar::Free(idx)
                 }
             });
-            builder.param_refinement(atom.into());
+            builder.param_refinement(formula.into());
         }
-        if let Some(AnnotAtom::Atom(ensure)) = ensure_annot {
+        if let Some(AnnotFormula::Formula(ensure)) = ensure_annot {
             builder.ret_refinement(ensure.into());
         }
         for (ident, annot_rty) in param_annots {
@@ -218,11 +224,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             builder.add_body(chc::Atom::top());
             for param_ty in entry_ty.params {
-                let clause = builder
+                let cs = builder
                     .clone()
                     .with_value_var(&param_ty.ty)
                     .head(param_ty.refinement);
-                self.ctx.add_clause(clause);
+                self.ctx.extend_clauses(cs);
             }
         }
     }
