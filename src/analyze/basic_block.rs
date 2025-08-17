@@ -767,7 +767,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 #[derive(Debug, Clone)]
 pub struct UnbindAtoms<T> {
     existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-    formula: rty::FormulaWithAtoms<rty::RefinedTypeVar<Var>>,
+    formula: chc::Body<rty::RefinedTypeVar<Var>>,
     target_equations: Vec<(rty::RefinedTypeVar<T>, chc::Term<rty::RefinedTypeVar<Var>>)>,
 }
 
