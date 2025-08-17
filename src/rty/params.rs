@@ -84,7 +84,7 @@ impl<T> TypeParamSubst<T> {
         for (idx, mut t1) in other.subst {
             t1.subst_ty_params(self);
             if let Some(t2) = self.subst.remove(&idx) {
-                t1.refinement.extend(t2.refinement);
+                t1.refinement.push_conj(t2.refinement);
             }
             self.subst.insert(idx, t1);
         }

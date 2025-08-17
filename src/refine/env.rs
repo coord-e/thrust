@@ -236,11 +236,11 @@ impl From<PlaceType> for rty::RefinedType<Var> {
             term,
             formula,
         } = ty;
-        let mut formula = formula.map_var(Into::into);
-        formula.push_conj(
+        let mut body = formula.map_var(Into::into);
+        body.push_conj(
             chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
         );
-        let refinement = rty::Refinement::with_formula(existentials, formula);
+        let refinement = rty::Refinement::new(existentials, body);
         rty::RefinedType::new(ty, refinement)
     }
 }
@@ -328,7 +328,7 @@ impl PlaceType {
         let rty::RefinedType { ty, refinement } = *inner_ty.elem;
         let rty::Refinement {
             existentials: inner_existentials,
-            formula: inner_formula,
+            body: inner_formula,
         } = refinement;
         let value_var_ex = existentials.push(ty.to_sort());
         let term = chc::Term::var(value_var_ex.into());
@@ -360,7 +360,7 @@ impl PlaceType {
         let rty::RefinedType { ty, refinement } = inner_ty.elems[idx].clone();
         let rty::Refinement {
             existentials: inner_existentials,
-            formula: inner_formula,
+            body: inner_formula,
         } = refinement;
         let value_var_ex = existentials.push(ty.to_sort());
         let term = chc::Term::var(value_var_ex.into());
@@ -408,7 +408,7 @@ impl PlaceType {
             field_terms.push(chc::Term::var(field_ex_var.into()));
             field_tys.push(ty);
 
-            formula.push_conj(refinement.formula.map_var(|v| match v {
+            formula.push_conj(refinement.body.map_var(|v| match v {
                 rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(field_ex_var),
                 rty::RefinedTypeVar::Existential(ev) => {
                     PlaceTypeVar::Existential(ev + existentials.len())
@@ -925,7 +925,7 @@ impl Env {
                     .collect(),
             );
             let mut existentials = tuple_ty.existentials;
-            let mut formula = refinement.formula.subst_var(|v| match v {
+            let mut formula = refinement.body.subst_var(|v| match v {
                 rty::RefinedTypeVar::Value => tuple_ty.term.clone(),
                 rty::RefinedTypeVar::Free(v) => chc::Term::var(PlaceTypeVar::Var(v)),
                 rty::RefinedTypeVar::Existential(ev) => {
@@ -984,7 +984,7 @@ impl Env {
         let value_var_ev = existentials.push(rty::Type::Enum(ty.clone()).to_sort());
         let mut assumption = UnboundAssumption {
             existentials,
-            formula: refinement.formula.map_var(|v| match v {
+            formula: refinement.body.map_var(|v| match v {
                 rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ev),
                 rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
                 rty::RefinedTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev),
@@ -1388,15 +1388,12 @@ impl Env {
                         ty: field_ty,
                         refinement,
                     } = field_rty;
-                    let rty::Refinement {
-                        formula,
-                        existentials,
-                    } = refinement;
+                    let rty::Refinement { body, existentials } = refinement;
                     PlaceType {
                         ty: field_ty,
                         existentials,
                         term: chc::Term::var(ev.into()),
-                        formula: formula.map_var(|v| match v {
+                        formula: body.map_var(|v| match v {
                             rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(ev),
                             rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
                             // TODO: (but otherwise we can't distinguish field existentials from them...)

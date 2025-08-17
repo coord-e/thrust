@@ -842,6 +842,10 @@ where
     }
 }
 
+pub trait ShiftExistential {
+    fn shift_existential(self, offset: usize) -> Self;
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RefinedTypeVar<FV> {
     Value,
@@ -895,8 +899,8 @@ where
     }
 }
 
-impl<T> RefinedTypeVar<T> {
-    pub fn shift_existential(self, offset: usize) -> Self {
+impl<T> ShiftExistential for RefinedTypeVar<T> {
+    fn shift_existential(self, offset: usize) -> Self {
         match self {
             RefinedTypeVar::Existential(v) => RefinedTypeVar::Existential(v + offset),
             v => v,
@@ -905,41 +909,79 @@ impl<T> RefinedTypeVar<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Refinement<FV = Closed> {
+pub struct Formula<V> {
     pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
-    pub formula: chc::Body<RefinedTypeVar<FV>>,
+    pub body: chc::Body<V>,
 }
 
-impl<FV> From<chc::Body<RefinedTypeVar<FV>>> for Refinement<FV> {
-    fn from(formula: chc::Body<RefinedTypeVar<FV>>) -> Self {
-        Refinement {
-            existentials: IndexVec::new(),
-            formula,
+impl<V> Default for Formula<V> {
+    fn default() -> Self {
+        Formula {
+            existentials: Default::default(),
+            body: Default::default(),
         }
     }
 }
 
-impl<FV> From<chc::Atom<RefinedTypeVar<FV>>> for Refinement<FV> {
-    fn from(atom: chc::Atom<RefinedTypeVar<FV>>) -> Self {
-        Refinement {
+impl<V> From<chc::Body<V>> for Formula<V> {
+    fn from(body: chc::Body<V>) -> Self {
+        Formula {
             existentials: IndexVec::new(),
-            formula: chc::Body::new(vec![atom], chc::Formula::top()),
+            body,
         }
     }
 }
 
-impl<FV> From<chc::Formula<RefinedTypeVar<FV>>> for Refinement<FV> {
-    fn from(formula: chc::Formula<RefinedTypeVar<FV>>) -> Self {
-        Refinement {
+impl<V> From<chc::Atom<V>> for Formula<V> {
+    fn from(atom: chc::Atom<V>) -> Self {
+        Formula {
             existentials: IndexVec::new(),
-            formula: chc::Body::new(vec![], formula),
+            body: chc::Body::new(vec![atom], chc::Formula::top()),
         }
     }
 }
 
-impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b Refinement<FV>
+impl<V> From<chc::Formula<V>> for Formula<V> {
+    fn from(formula: chc::Formula<V>) -> Self {
+        Formula {
+            existentials: IndexVec::new(),
+            body: chc::Body::new(vec![], formula),
+        }
+    }
+}
+
+impl<V> Extend<Formula<V>> for Formula<V>
 where
-    FV: chc::Var,
+    V: ShiftExistential,
+{
+    fn extend<T>(&mut self, iter: T)
+    where
+        T: IntoIterator<Item = Formula<V>>,
+    {
+        for formula in iter {
+            self.push_conj(formula);
+        }
+        self.body.simplify();
+    }
+}
+
+impl<V> FromIterator<Formula<V>> for Formula<V>
+where
+    V: ShiftExistential,
+{
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = Formula<V>>,
+    {
+        let mut result = Formula::default();
+        result.extend(iter);
+        result
+    }
+}
+
+impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Formula<V>
+where
+    V: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
 {
@@ -952,41 +994,26 @@ where
                 allocator.text(",").append(allocator.line()),
             )
             .group();
-        let formula = self.formula.pretty(allocator);
+        let body = self.body.pretty(allocator);
         if self.existentials.is_empty() {
-            formula
+            body
         } else {
             allocator
                 .text("∃")
                 .append(existentials.nest(2))
                 .append(allocator.text("."))
-                .append(allocator.line().append(formula).nest(2))
+                .append(allocator.line().append(body).nest(2))
                 .group()
         }
     }
 }
 
-impl<FV> Refinement<FV> {
-    pub fn with_formula(
-        existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
-        formula: chc::Body<RefinedTypeVar<FV>>,
-    ) -> Self {
-        Refinement {
-            existentials,
-            formula,
-        }
-    }
-
+impl<V> Formula<V> {
     pub fn new(
         existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
-        atoms: Vec<chc::Atom<RefinedTypeVar<FV>>>,
+        body: chc::Body<V>,
     ) -> Self {
-        let mut refinement = Refinement {
-            existentials,
-            formula: chc::Body::new(atoms, chc::Formula::top()),
-        };
-        refinement.formula.simplify();
-        refinement
+        Formula { existentials, body }
     }
 
     pub fn has_existentials(&self) -> bool {
@@ -998,39 +1025,45 @@ impl<FV> Refinement<FV> {
     }
 
     pub fn is_top(&self) -> bool {
-        self.formula.is_top()
+        self.body.is_top()
     }
 
     pub fn is_bottom(&self) -> bool {
-        self.formula.is_bottom()
+        self.body.is_bottom()
     }
 
     pub fn top() -> Self {
-        Refinement::with_formula(IndexVec::new(), chc::Body::top())
+        Formula::new(IndexVec::new(), chc::Body::top())
     }
 
     pub fn bottom() -> Self {
-        Refinement::with_formula(IndexVec::new(), chc::Body::bottom())
+        Formula::new(IndexVec::new(), chc::Body::bottom())
     }
+}
 
-    pub fn extend(&mut self, other: Refinement<FV>) {
-        let Refinement {
-            existentials,
-            formula,
-        } = other;
-        self.formula
-            .push_conj(formula.map_var(|v| v.shift_existential(self.existentials.len())));
+impl<V> Formula<V>
+where
+    V: ShiftExistential,
+{
+    pub fn push_conj(&mut self, other: Self) {
+        let Formula { existentials, body } = other;
+        self.body
+            .push_conj(body.map_var(|v| v.shift_existential(self.existentials.len())));
         self.existentials.extend(existentials);
-        self.formula.simplify();
+        self.body.simplify();
     }
+}
 
+pub type Refinement<FV = Closed> = Formula<RefinedTypeVar<FV>>;
+
+impl<FV> Refinement<FV> {
     pub fn subst_var<F, W>(self, mut f: F) -> Refinement<W>
     where
         F: FnMut(FV) -> chc::Term<W>,
     {
         Refinement {
             existentials: self.existentials,
-            formula: self.formula.subst_var(|v| match v {
+            body: self.body.subst_var(|v| match v {
                 RefinedTypeVar::Value => chc::Term::var(RefinedTypeVar::Value),
                 RefinedTypeVar::Existential(v) => chc::Term::var(RefinedTypeVar::Existential(v)),
                 RefinedTypeVar::Free(v) => f(v).map_var(RefinedTypeVar::Free),
@@ -1044,7 +1077,7 @@ impl<FV> Refinement<FV> {
     {
         Refinement {
             existentials: self.existentials,
-            formula: self.formula.subst_var(|v| match v {
+            body: self.body.subst_var(|v| match v {
                 RefinedTypeVar::Value => f(),
                 RefinedTypeVar::Existential(v) => chc::Term::var(RefinedTypeVar::Existential(v)),
                 RefinedTypeVar::Free(v) => chc::Term::var(RefinedTypeVar::Free(v)),
@@ -1058,7 +1091,7 @@ impl<FV> Refinement<FV> {
     {
         Refinement {
             existentials: self.existentials,
-            formula: self.formula.map_var(|v| match v {
+            body: self.body.map_var(|v| match v {
                 RefinedTypeVar::Value => RefinedTypeVar::Value,
                 RefinedTypeVar::Existential(v) => RefinedTypeVar::Existential(v),
                 RefinedTypeVar::Free(v) => RefinedTypeVar::Free(f(v)),
@@ -1102,7 +1135,7 @@ impl<T> Instantiator<T> {
             existentials,
             refinement,
         } = self;
-        refinement.formula.map_var(move |v| match v {
+        refinement.body.map_var(move |v| match v {
             RefinedTypeVar::Value => value_var.clone().unwrap(),
             RefinedTypeVar::Existential(v) => existentials[&v].clone(),
             RefinedTypeVar::Free(v) => v,
@@ -1209,7 +1242,7 @@ impl<FV> RefinedType<FV> {
     }
 
     pub fn extend_refinement(&mut self, refinement: Refinement<FV>) {
-        self.refinement.extend(refinement);
+        self.refinement.push_conj(refinement);
     }
 
     pub fn strip_refinement(self) -> Type<Closed> {
@@ -1232,7 +1265,7 @@ impl<FV> RefinedType<FV> {
                         ty: replacement_ty,
                         refinement,
                     } = rty.clone();
-                    self.refinement.extend(refinement);
+                    self.refinement.push_conj(refinement);
                     self.ty = replacement_ty;
                 }
             }
