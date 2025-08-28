@@ -13,10 +13,12 @@ use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, BasicBlockType, Env, PlaceType, PlaceTypeVar, TempVarIdx, TemplateTypeGenerator,
-    UnboundAssumption, UnrefinedTypeGenerator, Var,
+    self, Assumption, BasicBlockType, Env, PlaceType, PlaceTypeVar, TempVarIdx,
+    TemplateTypeGenerator, UnrefinedTypeGenerator, Var,
 };
-use crate::rty::{self, ClauseBuilderExt as _, ClauseScope as _, Subtyping as _};
+use crate::rty::{
+    self, ClauseBuilderExt as _, ClauseScope as _, ShiftExistential as _, Subtyping as _,
+};
 
 mod drop_point;
 mod visitor;
@@ -339,11 +341,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.ctx.extend_clauses(clauses);
     }
 
-    fn with_assumptions<F, T>(
-        &mut self,
-        assumptions: Vec<impl Into<UnboundAssumption>>,
-        callback: F,
-    ) -> T
+    fn with_assumptions<F, T>(&mut self, assumptions: Vec<impl Into<Assumption>>, callback: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
@@ -354,7 +352,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         result
     }
 
-    fn with_assumption<F, T>(&mut self, assumption: impl Into<UnboundAssumption>, callback: F) -> T
+    fn with_assumption<F, T>(&mut self, assumption: impl Into<Assumption>, callback: F) -> T
     where
         F: FnOnce(&mut Self) -> T,
     {
@@ -767,7 +765,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 #[derive(Debug, Clone)]
 pub struct UnbindAtoms<T> {
     existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-    formula: rty::FormulaWithAtoms<rty::RefinedTypeVar<Var>>,
+    body: chc::Body<rty::RefinedTypeVar<Var>>,
     target_equations: Vec<(rty::RefinedTypeVar<T>, chc::Term<rty::RefinedTypeVar<Var>>)>,
 }
 
@@ -775,7 +773,7 @@ impl<T> Default for UnbindAtoms<T> {
     fn default() -> Self {
         UnbindAtoms {
             existentials: Default::default(),
-            formula: Default::default(),
+            body: Default::default(),
             target_equations: Default::default(),
         }
     }
@@ -783,7 +781,7 @@ impl<T> Default for UnbindAtoms<T> {
 
 impl<T> UnbindAtoms<T> {
     pub fn push(&mut self, target: rty::RefinedTypeVar<T>, var_ty: PlaceType) {
-        self.formula.push_conj(
+        self.body.push_conj(
             var_ty
                 .formula
                 .map_var(|v| v.shift_existential(self.existentials.len()).into()),
@@ -802,13 +800,10 @@ impl<T> UnbindAtoms<T> {
             ty: src_ty,
             refinement,
         } = ty;
-        let rty::Refinement {
-            existentials,
-            formula,
-        } = refinement;
+        let rty::Refinement { existentials, body } = refinement;
 
-        self.formula
-            .push_conj(formula.map_var(|v| v.shift_existential(self.existentials.len())));
+        self.body
+            .push_conj(body.map_var(|v| v.shift_existential(self.existentials.len())));
         self.existentials.extend(existentials);
 
         let mut substs = HashMap::new();
@@ -817,12 +812,12 @@ impl<T> UnbindAtoms<T> {
             substs.insert(v, ev);
         }
 
-        let mut formula = self.formula.map_var(|v| match v {
+        let mut body = self.body.map_var(|v| match v {
             rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
             rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
             rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
         });
-        formula.push_conj(
+        body.push_conj(
             self.target_equations
                 .into_iter()
                 .map(|(t, term)| {
@@ -839,7 +834,7 @@ impl<T> UnbindAtoms<T> {
                 .collect::<Vec<_>>(),
         );
 
-        let refinement = rty::Refinement::with_formula(self.existentials, formula);
+        let refinement = rty::Refinement::new(self.existentials, body);
         // TODO: polymorphic datatypes: template needed?
         rty::RefinedType::new(src_ty.assert_closed().vacuous(), refinement)
     }
@@ -852,7 +847,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         expected_params: &IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
     ) {
         let mut param_terms = HashMap::<rty::FunctionParamIdx, chc::Term<PlaceTypeVar>>::new();
-        let mut assumption = UnboundAssumption::default();
+        let mut assumption = Assumption::default();
 
         let bb_ty = self.basic_block_ty(self.basic_block).clone();
         let params = &bb_ty.as_ref().params;
@@ -878,7 +873,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
 
                 let local_ty = self.env.local_type(local);
-                assumption.formula.push_conj(
+                assumption.body.push_conj(
                     local_ty
                         .formula
                         .map_var(|v| v.shift_existential(assumption.existentials.len())),
@@ -892,11 +887,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         for (idx, param) in expected_params.iter_enumerated() {
-            let rty::Refinement {
-                existentials,
-                formula,
-            } = param.refinement.clone();
-            assumption.formula.push_conj(formula.subst_var(|v| match v {
+            let rty::Refinement { existentials, body } = param.refinement.clone();
+            assumption.body.push_conj(body.subst_var(|v| match v {
                 rty::RefinedTypeVar::Value => param_terms[&idx].clone(),
                 rty::RefinedTypeVar::Free(v) => param_terms[&v].clone(),
                 rty::RefinedTypeVar::Existential(ev) => chc::Term::var(PlaceTypeVar::Existential(

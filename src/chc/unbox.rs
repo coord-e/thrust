@@ -53,23 +53,27 @@ fn unbox_formula(formula: Formula) -> Formula {
     }
 }
 
+fn unbox_body(body: Body) -> Body {
+    let Body { atoms, formula } = body;
+    let atoms = atoms.into_iter().map(unbox_atom).collect();
+    let formula = unbox_formula(formula);
+    Body { atoms, formula }
+}
+
 fn unbox_clause(clause: Clause) -> Clause {
     let Clause {
         vars,
         head,
-        body_atoms,
-        body_formula,
+        body,
         debug_info,
     } = clause;
     let vars = vars.into_iter().map(unbox_sort).collect();
     let head = unbox_atom(head);
-    let body_atoms = body_atoms.into_iter().map(unbox_atom).collect();
-    let body_formula = unbox_formula(body_formula);
+    let body = unbox_body(body);
     Clause {
         vars,
         head,
-        body_atoms,
-        body_formula,
+        body,
         debug_info,
     }
 }

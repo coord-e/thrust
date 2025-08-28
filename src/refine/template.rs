@@ -147,13 +147,10 @@ where
         &mut self,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
     ) -> &mut Self {
-        let rty::Refinement {
-            existentials,
-            formula,
-        } = refinement;
+        let rty::Refinement { existentials, body } = refinement;
         let refinement = rty::Refinement {
             existentials,
-            formula: formula.map_var(|v| match v {
+            body: body.map_var(|v| match v {
                 rty::RefinedTypeVar::Free(idx) if idx.index() == self.param_tys.len() - 1 => {
                     rty::RefinedTypeVar::Value
                 }
