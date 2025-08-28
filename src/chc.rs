@@ -1193,16 +1193,16 @@ impl<V> Formula<V> {
         }
     }
 
-    pub fn atoms(&self) -> impl Iterator<Item = &Atom<V>> {
-        self.atoms_impl()
+    pub fn iter_atoms(&self) -> impl Iterator<Item = &Atom<V>> {
+        self.iter_atoms_impl()
     }
 
-    fn atoms_impl(&self) -> Box<dyn Iterator<Item = &Atom<V>> + '_> {
+    fn iter_atoms_impl(&self) -> Box<dyn Iterator<Item = &Atom<V>> + '_> {
         match self {
             Formula::Atom(atom) => Box::new(std::iter::once(atom)),
-            Formula::Not(fo) => Box::new(fo.atoms()),
-            Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::atoms)),
-            Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::atoms)),
+            Formula::Not(fo) => Box::new(fo.iter_atoms()),
+            Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
+            Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
         }
     }
 
@@ -1249,12 +1249,153 @@ impl<V> Formula<V> {
 }
 
 #[derive(Debug, Clone)]
+pub struct Body<V = TermVarIdx> {
+    pub atoms: Vec<Atom<V>>,
+    // `formula` doesn't contain PredVar
+    pub formula: Formula<V>,
+}
+
+impl<V> Default for Body<V> {
+    fn default() -> Self {
+        Body {
+            atoms: Default::default(),
+            formula: Default::default(),
+        }
+    }
+}
+
+impl<V> From<Atom<V>> for Body<V> {
+    fn from(atom: Atom<V>) -> Self {
+        Body {
+            atoms: vec![atom],
+            formula: Formula::top(),
+        }
+    }
+}
+
+impl<V> From<Vec<Atom<V>>> for Body<V> {
+    fn from(atoms: Vec<Atom<V>>) -> Self {
+        Body {
+            atoms,
+            formula: Formula::top(),
+        }
+    }
+}
+
+impl<V> From<Formula<V>> for Body<V> {
+    fn from(formula: Formula<V>) -> Self {
+        Body {
+            atoms: vec![],
+            formula,
+        }
+    }
+}
+
+impl<V> Body<V> {
+    pub fn new(atoms: Vec<Atom<V>>, formula: Formula<V>) -> Self {
+        Body { atoms, formula }
+    }
+
+    pub fn top() -> Self {
+        Body {
+            atoms: vec![],
+            formula: Formula::top(),
+        }
+    }
+
+    pub fn bottom() -> Self {
+        Body {
+            atoms: vec![],
+            formula: Formula::bottom(),
+        }
+    }
+
+    pub fn is_top(&self) -> bool {
+        self.formula.is_top() && self.atoms.iter().all(|a| a.is_top())
+    }
+
+    pub fn is_bottom(&self) -> bool {
+        self.formula.is_bottom() || self.atoms.iter().any(|a| a.is_bottom())
+    }
+
+    pub fn push_conj(&mut self, other: impl Into<Body<V>>) {
+        let Body { atoms, formula } = other.into();
+        self.atoms.extend(atoms);
+        self.formula.push_conj(formula);
+    }
+
+    pub fn map_var<F, W>(self, mut f: F) -> Body<W>
+    where
+        F: FnMut(V) -> W,
+    {
+        Body {
+            atoms: self.atoms.into_iter().map(|a| a.map_var(&mut f)).collect(),
+            formula: self.formula.map_var(f),
+        }
+    }
+
+    pub fn subst_var<F, W>(self, mut f: F) -> Body<W>
+    where
+        F: FnMut(V) -> Term<W>,
+    {
+        Body {
+            atoms: self
+                .atoms
+                .into_iter()
+                .map(|a| a.subst_var(&mut f))
+                .collect(),
+            formula: self.formula.subst_var(f),
+        }
+    }
+
+    pub fn simplify(&mut self) {
+        self.formula.simplify();
+        self.atoms.retain(|a| !a.is_top());
+        if self.is_bottom() {
+            self.atoms = vec![Atom::bottom()];
+            self.formula = Formula::top();
+        }
+    }
+
+    pub fn iter_atoms(&self) -> impl Iterator<Item = &Atom<V>> {
+        self.formula.iter_atoms().chain(&self.atoms)
+    }
+}
+
+impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Body<V>
+where
+    V: Var,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let atoms = allocator.intersperse(
+            &self.atoms,
+            allocator
+                .text("∧")
+                .enclose(allocator.line(), allocator.space()),
+        );
+        let formula = self.formula.pretty(allocator);
+        if self.atoms.is_empty() {
+            formula
+        } else if self.formula.is_top() {
+            atoms.group()
+        } else {
+            atoms
+                .append(allocator.line())
+                .append(allocator.text("∧"))
+                .append(allocator.line())
+                .append(formula)
+                .group()
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Clause {
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
-    pub body_atoms: Vec<Atom<TermVarIdx>>,
-    // body_formula doesn't contain PredVar
-    pub body_formula: Formula<TermVarIdx>,
+    pub body: Body<TermVarIdx>,
     pub debug_info: DebugInfo,
 }
 
@@ -1272,7 +1413,7 @@ where
                 allocator.text(",").append(allocator.line()),
             )
             .group();
-        let body = self.body().pretty(allocator);
+        let body = self.body.pretty(allocator);
         let imp = self
             .head
             .pretty(allocator)
@@ -1291,21 +1432,8 @@ where
 }
 
 impl Clause {
-    pub fn body(&self) -> Formula {
-        Formula::And(
-            self.body_atoms
-                .clone()
-                .into_iter()
-                .map(Formula::from)
-                .collect(),
-        )
-        .and(self.body_formula.clone())
-    }
-
     pub fn is_nop(&self) -> bool {
-        self.head.is_top()
-            || self.body_atoms.iter().any(Atom::is_bottom)
-            || self.body_formula.is_bottom()
+        self.head.is_top() || self.body.is_bottom()
     }
 
     fn term_sort(&self, term: &Term<TermVarIdx>) -> Sort {

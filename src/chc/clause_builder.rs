@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use rustc_index::IndexVec;
 
-use super::{Atom, Clause, DebugInfo, Formula, Sort, TermVarIdx};
+use super::{Atom, Body, Clause, DebugInfo, Sort, TermVarIdx};
 
 pub trait Var: Eq + Ord + Hash + Copy + Debug + 'static {}
 impl<T: Eq + Ord + Hash + Copy + Debug + 'static> Var for T {}
@@ -58,8 +58,7 @@ impl Hash for dyn Key {
 pub struct ClauseBuilder {
     vars: IndexVec<TermVarIdx, Sort>,
     mapped_var_indices: HashMap<Rc<dyn Key>, TermVarIdx>,
-    body_atoms: Vec<Atom<TermVarIdx>>,
-    body_formula: Formula<TermVarIdx>,
+    body: Body<TermVarIdx>,
 }
 
 impl ClauseBuilder {
@@ -94,36 +93,19 @@ impl ClauseBuilder {
             .unwrap_or_else(|| panic!("unbound var {:?}", v))
     }
 
-    pub fn add_body(&mut self, atom: Atom<TermVarIdx>) -> &mut Self {
-        self.body_atoms.push(atom);
-        self
-    }
-
-    pub fn add_body_formula(&mut self, formula: Formula<TermVarIdx>) -> &mut Self {
-        self.body_formula.push_conj(formula);
+    pub fn add_body(&mut self, body: impl Into<Body<TermVarIdx>>) -> &mut Self {
+        self.body.push_conj(body);
         self
     }
 
     pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
         let vars = self.vars.clone();
-        let mut body_atoms: Vec<_> = self
-            .body_atoms
-            .clone()
-            .into_iter()
-            .filter(|a| !a.is_top())
-            .collect();
-        if body_atoms.is_empty() {
-            body_atoms = vec![Atom::top()];
-        } else if body_atoms.iter().any(Atom::is_bottom) {
-            body_atoms = vec![Atom::bottom()];
-        }
-        let mut body_formula = self.body_formula.clone();
-        body_formula.simplify();
+        let mut body = self.body.clone();
+        body.simplify();
         Clause {
             vars,
             head,
-            body_atoms,
-            body_formula,
+            body,
             debug_info: DebugInfo::from_current_span(),
         }
     }

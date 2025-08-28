@@ -9,7 +9,7 @@ use rustc_target::abi::{FieldIdx, VariantIdx};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine;
-use crate::rty;
+use crate::rty::{self, ShiftExistential as _};
 
 rustc_index::newtype_index! {
     #[orderable]
@@ -183,6 +183,15 @@ impl From<PlaceTypeVar> for rty::RefinedTypeVar<Var> {
     }
 }
 
+impl rty::ShiftExistential for PlaceTypeVar {
+    fn shift_existential(self, amount: usize) -> Self {
+        match self {
+            PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
+            PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + amount),
+        }
+    }
+}
+
 impl std::fmt::Debug for PlaceTypeVar {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -211,13 +220,6 @@ impl PlaceTypeVar {
             _ => None,
         }
     }
-
-    pub fn shift_existential(self, amount: usize) -> Self {
-        match self {
-            PlaceTypeVar::Var(v) => PlaceTypeVar::Var(v),
-            PlaceTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev + amount),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -225,7 +227,7 @@ pub struct PlaceType {
     pub ty: rty::Type<Var>,
     pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
     pub term: chc::Term<PlaceTypeVar>,
-    pub formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+    pub formula: chc::Body<PlaceTypeVar>,
 }
 
 impl From<PlaceType> for rty::RefinedType<Var> {
@@ -236,11 +238,11 @@ impl From<PlaceType> for rty::RefinedType<Var> {
             term,
             formula,
         } = ty;
-        let mut formula = formula.map_var(Into::into);
-        formula.push_conj(
+        let mut body = formula.map_var(Into::into);
+        body.push_conj(
             chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
         );
-        let refinement = rty::Refinement::with_formula(existentials, formula);
+        let refinement = rty::Refinement::new(existentials, body);
         rty::RefinedType::new(ty, refinement)
     }
 }
@@ -300,7 +302,7 @@ impl PlaceType {
         }
     }
 
-    pub fn into_assumption<F>(self, term_to_atom: F) -> UnboundAssumption
+    pub fn into_assumption<F>(self, term_to_atom: F) -> Assumption
     where
         F: FnOnce(chc::Term<PlaceTypeVar>) -> chc::Atom<PlaceTypeVar>,
     {
@@ -311,10 +313,7 @@ impl PlaceType {
             mut formula,
         } = self;
         formula.push_conj(term_to_atom(term));
-        UnboundAssumption {
-            existentials,
-            formula,
-        }
+        Assumption::new(existentials, formula)
     }
 
     pub fn deref(self) -> PlaceType {
@@ -328,7 +327,7 @@ impl PlaceType {
         let rty::RefinedType { ty, refinement } = *inner_ty.elem;
         let rty::Refinement {
             existentials: inner_existentials,
-            formula: inner_formula,
+            body: inner_formula,
         } = refinement;
         let value_var_ex = existentials.push(ty.to_sort());
         let term = chc::Term::var(value_var_ex.into());
@@ -360,7 +359,7 @@ impl PlaceType {
         let rty::RefinedType { ty, refinement } = inner_ty.elems[idx].clone();
         let rty::Refinement {
             existentials: inner_existentials,
-            formula: inner_formula,
+            body: inner_formula,
         } = refinement;
         let value_var_ex = existentials.push(ty.to_sort());
         let term = chc::Term::var(value_var_ex.into());
@@ -408,7 +407,7 @@ impl PlaceType {
             field_terms.push(chc::Term::var(field_ex_var.into()));
             field_tys.push(ty);
 
-            formula.push_conj(refinement.formula.map_var(|v| match v {
+            formula.push_conj(refinement.body.map_var(|v| match v {
                 rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(field_ex_var),
                 rty::RefinedTypeVar::Existential(ev) => {
                     PlaceTypeVar::Existential(ev + existentials.len())
@@ -477,7 +476,7 @@ impl PlaceType {
         }
     }
 
-    pub fn merge_into_assumption<F>(self, other: PlaceType, f: F) -> UnboundAssumption
+    pub fn merge_into_assumption<F>(self, other: PlaceType, f: F) -> Assumption
     where
         F: FnOnce(chc::Term<PlaceTypeVar>, chc::Term<PlaceTypeVar>) -> chc::Atom<PlaceTypeVar>,
     {
@@ -500,10 +499,7 @@ impl PlaceType {
         formula.push_conj(formula2.map_var(|v| v.shift_existential(existentials.len())));
         formula.push_conj(atom);
         existentials.extend(evs2);
-        UnboundAssumption {
-            existentials,
-            formula,
-        }
+        Assumption::new(existentials, formula)
     }
 
     pub fn merge<F>(self, other: PlaceType, f: F) -> PlaceType
@@ -564,7 +560,7 @@ impl PlaceType {
             tys: Vec<rty::Type<Var>>,
             terms: Vec<chc::Term<PlaceTypeVar>>,
             existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-            formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+            formula: chc::Body<PlaceTypeVar>,
         }
         let State {
             tys,
@@ -612,7 +608,7 @@ impl PlaceType {
         struct State {
             existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
             terms: Vec<chc::Term<PlaceTypeVar>>,
-            formula: rty::FormulaWithAtoms<PlaceTypeVar>,
+            formula: chc::Body<PlaceTypeVar>,
         }
         let State {
             mut existentials,
@@ -655,102 +651,14 @@ impl PlaceType {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct UnboundAssumption {
-    pub existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-    pub formula: rty::FormulaWithAtoms<PlaceTypeVar>,
-}
-
-impl From<chc::Atom<Var>> for UnboundAssumption {
-    fn from(atom: chc::Atom<Var>) -> Self {
-        let existentials = IndexVec::new();
-        let formula =
-            rty::FormulaWithAtoms::new(vec![atom.map_var(Into::into)], Default::default());
-        UnboundAssumption {
-            existentials,
-            formula,
-        }
-    }
-}
-
-impl Extend<UnboundAssumption> for UnboundAssumption {
-    fn extend<T>(&mut self, iter: T)
-    where
-        T: IntoIterator<Item = UnboundAssumption>,
-    {
-        for assumption in iter {
-            self.formula.push_conj(
-                assumption
-                    .formula
-                    .map_var(|v| v.shift_existential(self.existentials.len())),
-            );
-            self.existentials.extend(assumption.existentials);
-        }
-        self.formula.simplify();
-    }
-}
-
-impl FromIterator<UnboundAssumption> for UnboundAssumption {
-    fn from_iter<T>(iter: T) -> Self
-    where
-        T: IntoIterator<Item = UnboundAssumption>,
-    {
-        let mut result = UnboundAssumption::default();
-        result.extend(iter);
-        result
-    }
-}
-
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UnboundAssumption
-where
-    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-    D::Doc: Clone,
-{
-    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let existentials = allocator
-            .intersperse(
-                self.existentials
-                    .iter_enumerated()
-                    .map(|(v, s)| v.pretty(allocator).append(allocator.text(":")).append(s)),
-                allocator.text(",").append(allocator.line()),
-            )
-            .group();
-        let formula = self.formula.pretty(allocator);
-        if self.existentials.is_empty() {
-            formula
-        } else {
-            allocator
-                .text("∃")
-                .append(existentials.nest(2))
-                .append(allocator.text("."))
-                .append(allocator.line().append(formula).nest(2))
-                .group()
-        }
-    }
-}
-
-impl UnboundAssumption {
-    pub fn new(
-        existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-        formula: rty::FormulaWithAtoms<PlaceTypeVar>,
-    ) -> Self {
-        UnboundAssumption {
-            existentials,
-            formula,
-        }
-    }
-
-    pub fn is_top(&self) -> bool {
-        self.formula.is_top()
-    }
-}
+pub type Assumption = rty::Formula<PlaceTypeVar>;
 
 #[derive(Debug, Clone)]
 pub struct Env {
     locals: BTreeMap<Local, rty::RefinedType<Var>>,
     flow_locals: BTreeMap<Local, FlowBinding>,
     temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
-    unbound_assumptions: Vec<UnboundAssumption>,
+    assumptions: Vec<Assumption>,
 
     enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
 
@@ -776,27 +684,26 @@ impl rty::ClauseScope for Env {
             if !rty.ty.to_sort().is_singleton() {
                 instantiator.value_var(builder.mapped_var(var));
             }
-            let rty::FormulaWithAtoms { formula, atoms } = instantiator.instantiate();
+            let chc::Body { formula, atoms } = instantiator.instantiate();
             for atom in atoms {
                 builder.add_body(atom);
             }
-            builder.add_body_formula(formula);
+            builder.add_body(formula);
         }
-        for assumption in &self.unbound_assumptions {
+        for assumption in &self.assumptions {
             let mut evs = HashMap::new();
             for (ev, sort) in assumption.existentials.iter_enumerated() {
                 let tv = builder.add_var(sort.clone());
                 evs.insert(ev, tv);
             }
-            let rty::FormulaWithAtoms { formula, atoms } =
-                assumption.formula.clone().map_var(|v| match v {
-                    PlaceTypeVar::Var(v) => builder.mapped_var(v),
-                    PlaceTypeVar::Existential(ev) => evs[&ev],
-                });
+            let chc::Body { formula, atoms } = assumption.body.clone().map_var(|v| match v {
+                PlaceTypeVar::Var(v) => builder.mapped_var(v),
+                PlaceTypeVar::Existential(ev) => evs[&ev],
+            });
             for atom in atoms {
                 builder.add_body(atom);
             }
-            builder.add_body_formula(formula);
+            builder.add_body(formula);
         }
         builder
     }
@@ -818,7 +725,7 @@ impl Env {
             locals: Default::default(),
             flow_locals: Default::default(),
             temp_vars: IndexVec::new(),
-            unbound_assumptions: Vec::new(),
+            assumptions: Vec::new(),
             enum_defs,
             enum_expansion_depth_limit: std::env::var("THRUST_ENUM_EXPANSION_DEPTH_LIMIT")
                 .ok()
@@ -927,7 +834,7 @@ impl Env {
                     .collect(),
             );
             let mut existentials = tuple_ty.existentials;
-            let mut formula = refinement.formula.subst_var(|v| match v {
+            let mut formula = refinement.body.subst_var(|v| match v {
                 rty::RefinedTypeVar::Value => tuple_ty.term.clone(),
                 rty::RefinedTypeVar::Free(v) => chc::Term::var(PlaceTypeVar::Var(v)),
                 rty::RefinedTypeVar::Existential(ev) => {
@@ -936,10 +843,7 @@ impl Env {
             });
             formula.push_conj(tuple_ty.formula);
             existentials.extend(refinement.existentials);
-            UnboundAssumption {
-                existentials,
-                formula,
-            }
+            Assumption::new(existentials, formula)
         };
         self.assume(assumption);
         let binding = FlowBinding::Tuple(xs.clone());
@@ -984,20 +888,20 @@ impl Env {
 
         let mut existentials = refinement.existentials;
         let value_var_ev = existentials.push(rty::Type::Enum(ty.clone()).to_sort());
-        let mut assumption = UnboundAssumption {
+        let mut assumption = Assumption::new(
             existentials,
-            formula: refinement.formula.map_var(|v| match v {
+            refinement.body.map_var(|v| match v {
                 rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ev),
                 rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
                 rty::RefinedTypeVar::Existential(ev) => PlaceTypeVar::Existential(ev),
             }),
-        };
+        );
         let mut pred_args: Vec<_> = variants
             .iter()
             .flat_map(|v| &v.fields)
             .map(|&x| {
                 let ty = self.var_type(x.into());
-                assumption.formula.push_conj(
+                assumption.body.push_conj(
                     ty.formula
                         .map_var(|v| v.shift_existential(assumption.existentials.len())),
                 );
@@ -1010,7 +914,7 @@ impl Env {
             .collect();
         pred_args.push(chc::Term::var(value_var_ev.into()));
         assumption
-            .formula
+            .body
             .push_conj(chc::Atom::new(matcher_pred.into(), pred_args));
         let discr_var = self
             .temp_vars
@@ -1018,7 +922,7 @@ impl Env {
                 rty::Type::int(),
             )));
         assumption
-            .formula
+            .body
             .push_conj(
                 chc::Term::var(discr_var.into()).equal_to(chc::Term::datatype_discr(
                     def.name.clone(),
@@ -1081,14 +985,14 @@ impl Env {
         tracing::debug!(local = ?local, rty = %rty_disp.display(), place_type = %self.local_type(local).display(), "immut_bind");
     }
 
-    pub fn assume(&mut self, assumption: impl Into<UnboundAssumption>) {
+    pub fn assume(&mut self, assumption: impl Into<Assumption>) {
         let assumption = assumption.into();
         tracing::debug!(assumption = %assumption.display(), "assume");
-        self.unbound_assumptions.push(assumption);
+        self.assumptions.push(assumption);
     }
 
-    pub fn extend_assumptions(&mut self, assumptions: Vec<impl Into<UnboundAssumption>>) {
-        self.unbound_assumptions
+    pub fn extend_assumptions(&mut self, assumptions: Vec<impl Into<Assumption>>) {
+        self.assumptions
             .extend(assumptions.into_iter().map(Into::into));
     }
 
@@ -1345,7 +1249,7 @@ impl Env {
         self.path_type(&place.into())
     }
 
-    fn dropping_assumption(&mut self, path: &Path) -> UnboundAssumption {
+    fn dropping_assumption(&mut self, path: &Path) -> Assumption {
         let ty = self.path_type(path);
         if ty.ty.is_mut() {
             ty.into_assumption(|term| {
@@ -1390,15 +1294,12 @@ impl Env {
                         ty: field_ty,
                         refinement,
                     } = field_rty;
-                    let rty::Refinement {
-                        formula,
-                        existentials,
-                    } = refinement;
+                    let rty::Refinement { body, existentials } = refinement;
                     PlaceType {
                         ty: field_ty,
                         existentials,
                         term: chc::Term::var(ev.into()),
-                        formula: formula.map_var(|v| match v {
+                        formula: body.map_var(|v| match v {
                             rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(ev),
                             rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
                             // TODO: (but otherwise we can't distinguish field existentials from them...)
@@ -1409,24 +1310,21 @@ impl Env {
                     }
                 };
 
-                let UnboundAssumption {
+                let Assumption {
                     existentials: assumption_existentials,
-                    formula: assumption_formula,
+                    body: assumption_body,
                 } = self.dropping_assumption(&Path::PlaceTy(field_pty));
                 // dropping assumption should not generate any existential
                 assert!(assumption_existentials.is_empty());
-                formula.push_conj(assumption_formula);
+                formula.push_conj(assumption_body);
             }
 
             pred_args.push(term);
             formula.push_conj(chc::Atom::new(matcher_pred.into(), pred_args));
 
-            UnboundAssumption {
-                existentials,
-                formula,
-            }
+            Assumption::new(existentials, formula)
         } else {
-            UnboundAssumption::default()
+            Assumption::default()
         }
     }
 
