@@ -1,7 +1,18 @@
+//! A set of utilities for pretty-printing various data structures.
+//!
+//! It uses the [`pretty`] crate to provide a flexible and configurable way to format complex
+//! data structures for display. The main entry point is the [`PrettyDisplayExt`] trait,
+//! which provides a [`PrettyDisplayExt::display`] method that returns a [`Display`] object to
+//! turn [`Pretty`] values into [`std::fmt::Display`] that can be used with standard formatting macros.
+//!
+//! This is primarily used for debugging and logging purposes, to make the output of the tool
+//! more readable.
+
 use rustc_index::{IndexSlice, IndexVec};
 
 use pretty::{termcolor, BuildDoc, DocAllocator, DocPtr, Pretty};
 
+/// A wrapper around a [`crate::rty::FunctionType`] that provides a [`Pretty`] implementation.
 pub struct FunctionType<'a, FV> {
     pub params:
         &'a rustc_index::IndexVec<crate::rty::FunctionParamIdx, crate::rty::RefinedType<FV>>,
@@ -36,6 +47,7 @@ impl<'a, FV> FunctionType<'a, FV> {
     }
 }
 
+/// A wrapper around a slice that provides a [`Pretty`] implementation.
 #[derive(Debug, Clone)]
 pub struct PrettySlice<'a, T> {
     slice: &'a [T],
@@ -95,6 +107,7 @@ impl<I: rustc_index::Idx, T> PrettySliceExt for IndexVec<I, T> {
     }
 }
 
+/// A wrapper around a type that provides a [`std::fmt::Display`] implementation via [`Pretty`].
 #[derive(Debug, Clone)]
 pub struct Display<'a, T> {
     value: &'a T,
