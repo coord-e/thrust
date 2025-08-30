@@ -161,7 +161,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let (_rhs_ty, rhs_term) = builder.subsume(rhs_ty);
                 match (&lhs_ty, op) {
                     (rty::Type::Int, mir::BinOp::Add) => {
-                        builder.build(lhs_ty, rhs_term.add(lhs_term))
+                        builder.build(lhs_ty, lhs_term.add(rhs_term))
                     }
                     (rty::Type::Int, mir::BinOp::Sub) => {
                         builder.build(lhs_ty, lhs_term.sub(rhs_term))
