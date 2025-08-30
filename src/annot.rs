@@ -1,3 +1,13 @@
+//! A parser for refinement type and formula annotations.
+//!
+//! This module provides a parser for `#[thrust::...]` attributes in Thrust. The parser is
+//! parameterized by the [`Resolver`] trait, which abstracts over the resolution of variable
+//! names. This allows the parser to be used in different contexts with different sets of
+//! available variables.
+//!
+//! The main entry point is [`AnnotParser`], which parses a [`TokenStream`] into a
+//! [`rty::RefinedType`] or a [`chc::Formula`].
+
 use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Token, TokenKind};
 use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenStream, TokenTree};
 use rustc_index::IndexVec;
@@ -7,6 +17,9 @@ use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::rty;
 
+/// A formula in an annotation.
+///
+/// This can be either a logical formula or the special value `auto` which tells Thrust to infer it.
 #[derive(Debug, Clone)]
 pub enum AnnotFormula<T> {
     Auto,
@@ -19,6 +32,7 @@ impl<T> AnnotFormula<T> {
     }
 }
 
+/// A trait for resolving variables in annotations to their logical representation and their sorts.
 pub trait Resolver {
     type Output;
     fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)>;
@@ -56,6 +70,7 @@ pub trait ResolverExt: Resolver {
 
 impl<T> ResolverExt for T where T: Resolver {}
 
+/// An error that can occur when parsing an attribute.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ParseAttrError {
     #[error("unexpected end of input (expected {expected:?})")]
@@ -96,6 +111,7 @@ impl ParseAttrError {
 
 type Result<T> = std::result::Result<T, ParseAttrError>;
 
+/// A parser for refinement type annotations and formula annotations.
 struct Parser<'a, T> {
     resolver: T,
     cursor: RefTokenTreeCursor<'a>,
@@ -610,6 +626,7 @@ where
     }
 }
 
+/// A [`Resolver`] implementation for resolving specific variable as [`rty::RefinedTypeVar::Value`].
 struct RefinementResolver<'a, T> {
     resolver: Box<dyn Resolver<Output = T> + 'a>,
     self_: Option<(Ident, chc::Sort)>,
@@ -643,6 +660,7 @@ impl<'a, T> RefinementResolver<'a, T> {
     }
 }
 
+/// A [`Resolver`] that maps the output of another [`Resolver`].
 pub struct MappedResolver<'a, T, F> {
     resolver: Box<dyn Resolver<Output = T> + 'a>,
     map: F,
@@ -669,6 +687,9 @@ impl<'a, T, F> MappedResolver<'a, T, F> {
     }
 }
 
+/// A [`Resolver`] that stacks multiple [`Resolver`]s.
+///
+/// This resolver tries to resolve an identifier by querying a list of resolvers in order.
 pub struct StackedResolver<'a, T> {
     resolvers: Vec<Box<dyn Resolver<Output = T> + 'a>>,
 }
@@ -698,6 +719,7 @@ impl<'a, T> StackedResolver<'a, T> {
     }
 }
 
+/// A parser for annotations.
 #[derive(Debug, Clone)]
 pub struct AnnotParser<T> {
     resolver: T,

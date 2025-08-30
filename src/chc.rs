@@ -1,4 +1,5 @@
-/// Multi-sorted CHC system with tuples.
+//! A multi-sorted CHC system with tuples.
+
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
@@ -17,6 +18,7 @@ pub use debug::DebugInfo;
 pub use solver::{CheckSatError, Config};
 pub use unbox::unbox;
 
+/// A name of a datatype.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DatatypeSymbol {
     inner: String,
@@ -43,6 +45,10 @@ impl DatatypeSymbol {
     }
 }
 
+/// A datatype sort.
+///
+/// A datatype sort is a sort that is defined by a datatype. It has a symbol and a list of
+/// argument sorts.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DatatypeSort {
     symbol: DatatypeSymbol,
@@ -74,6 +80,7 @@ impl DatatypeSort {
     }
 }
 
+/// A sort is the type of a logical term.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
     Null,
@@ -271,6 +278,10 @@ impl Sort {
 }
 
 rustc_index::newtype_index! {
+    /// An index representing term-level variable.
+    ///
+    /// We manage term-level variables using indices that are unique in each clause.
+    /// [`Clause`] contains `IndexVec<TermVarIdx, Sort>` that manages the indices and the sorts of the variables.
     #[orderable]
     #[debug_format = "v{}"]
     pub struct TermVarIdx { }
@@ -297,6 +308,7 @@ impl TermVarIdx {
     }
 }
 
+/// A known function symbol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Function {
     name: &'static str,
@@ -376,6 +388,7 @@ impl Function {
     pub const NEG: Function = Function::new("-");
 }
 
+/// A logical term.
 #[derive(Debug, Clone)]
 pub enum Term<V = TermVarIdx> {
     Null,
@@ -693,6 +706,11 @@ impl<V> Term<V> {
 }
 
 rustc_index::newtype_index! {
+    /// An index representing predicate variables.
+    ///
+    /// We manage predicate variables using indices that are unique in a CHC system.
+    /// [`System`] contains `IndexVec<PredVarId, PredVarDef>` that manages the indices
+    /// and signatures of the predicate variables.
     #[debug_format = "p{}"]
     pub struct PredVarId { }
 }
@@ -720,6 +738,9 @@ impl PredVarId {
     }
 }
 
+/// A known predicate.
+///
+/// A known predicate is a predicate that has a fixed meaning, such as `true`, `false`, `=`, etc.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KnownPred {
     name: &'static str,
@@ -804,6 +825,25 @@ impl KnownPred {
     pub const GREATER_THAN: KnownPred = KnownPred::infix(">");
 }
 
+/// A matcher predicate.
+///
+/// A matcher predicate is a predicate that relates a value of a datatype with its contents.
+/// For example, given the following `enum` datatype:
+///
+/// ```rust
+/// pub enum X {
+///     A(i64),
+///     B(bool),
+/// }
+/// ```
+///
+/// The corresponding matcher predicate is defined as:
+///
+/// ```smtlib2
+/// (define-fun matcher_pred<X> ((x0 Int) (x1 Bool) (v X)) Bool (or (= v (X.A x0)) (= v (X.B x1))))
+/// ```
+///
+/// See the implementation in the [`smtlib2`] module for the details.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MatcherPred {
     datatype_symbol: DatatypeSymbol,
@@ -851,6 +891,7 @@ impl MatcherPred {
     }
 }
 
+/// A predicate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pred {
     Known(KnownPred),
@@ -942,6 +983,7 @@ impl Pred {
     }
 }
 
+/// An atom is a predicate applied to a list of terms.
 #[derive(Debug, Clone)]
 pub struct Atom<V = TermVarIdx> {
     pub pred: Pred,
@@ -1030,6 +1072,11 @@ impl<V> Atom<V> {
     }
 }
 
+/// An arbitrary formula built with atoms and logical connectives.
+///
+/// While it allows arbitrary [`Atom`] in its `Atom` variant, we only expect atoms with known
+/// predicates (i.e., predicates other than `Pred::Var`) to appear in formulas. It is our TODO to
+/// enforce this restriction statically. Also see the definition of [`Body`].
 #[derive(Debug, Clone)]
 pub enum Formula<V = TermVarIdx> {
     Atom(Atom<V>),
@@ -1248,10 +1295,11 @@ impl<V> Formula<V> {
     }
 }
 
+/// The body part of a clause, consisting of atoms and a formula.
 #[derive(Debug, Clone)]
 pub struct Body<V = TermVarIdx> {
     pub atoms: Vec<Atom<V>>,
-    // `formula` doesn't contain PredVar
+    /// NOTE: This doesn't contain predicate variables. Also see [`Formula`].
     pub formula: Formula<V>,
 }
 
@@ -1391,6 +1439,10 @@ where
     }
 }
 
+/// A constrained Horn clause.
+///
+/// A constrained Horn clause is a formula of the form `∀vars. body ⇒ head` where `body` is a conjunction of
+/// atoms and underlying logical formula, and `head` is an atom.
 #[derive(Debug, Clone)]
 pub struct Clause {
     pub vars: IndexVec<TermVarIdx, Sort>,
@@ -1441,12 +1493,18 @@ impl Clause {
     }
 }
 
+/// A selector for a datatype constructor.
+///
+/// A selector is a function that extracts a field from a datatype value.
+/// Through currently we don't use selectors to access datatype fields in [`Term`]s,
+/// we require the symbol as selector name to emit SMT-LIB2 representation of datatypes.
 #[derive(Debug, Clone)]
 pub struct DatatypeSelector {
     pub symbol: DatatypeSymbol,
     pub sort: Sort,
 }
 
+/// A datatype constructor.
 #[derive(Debug, Clone)]
 pub struct DatatypeCtor {
     pub symbol: DatatypeSymbol,
@@ -1454,6 +1512,7 @@ pub struct DatatypeCtor {
     pub discriminant: u32,
 }
 
+/// A datatype definition.
 #[derive(Debug, Clone)]
 pub struct Datatype {
     pub symbol: DatatypeSymbol,
@@ -1462,18 +1521,25 @@ pub struct Datatype {
 }
 
 rustc_index::newtype_index! {
+    /// An index of [`Clause`].
+    ///
+    /// [`System`] contains `IndexVec<ClauseId, Clause>` that manages the indices and the clauses.
     #[debug_format = "c{}"]
     pub struct ClauseId { }
 }
 
 pub type PredSig = Vec<Sort>;
 
+/// A predicate variable definition.
 #[derive(Debug, Clone)]
 pub struct PredVarDef {
     pub sig: PredSig,
+    /// We may attach a debug information to include in the resulting SMT-LIB2 file to indicate the
+    /// origin of predicate variables.
     pub debug_info: DebugInfo,
 }
 
+/// A CHC system.
 #[derive(Debug, Clone, Default)]
 pub struct System {
     pub datatypes: Vec<Datatype>,
@@ -1498,6 +1564,13 @@ impl System {
         smtlib2::System::new(self)
     }
 
+    /// Solves the CHC using an external SMT solver.
+    ///
+    /// This method first performs some optimization of the CHC,
+    /// then formats it to SMT-LIB2, and finally calls the configured CHC solver.
+    /// The solver and its arguments can be configured using environment
+    /// variables
+    /// (see <https://github.com/coord-e/thrust?tab=readme-ov-file#configuration>).
     pub fn solve(&self) -> Result<(), CheckSatError> {
         let system = unbox(self.clone());
         if let Ok(file) = std::env::var("THRUST_PRETTY_OUTPUT") {
