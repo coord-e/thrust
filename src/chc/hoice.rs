@@ -1,4 +1,5 @@
-/// hopv/hoice#73
+//! A workaround for a bug in the Hoice CHC solver.
+
 use std::collections::{HashMap, HashSet};
 
 use crate::chc;
@@ -53,6 +54,10 @@ impl<'a> SortDatatypes<'a> {
     }
 }
 
+/// Rename to ensure the referring datatype name is lexicographically larger than the referred one.
+///
+/// Workaround for <https://github.com/hopv/hoice/issues/73>. Applied indirectly via
+/// [`crate::chc::format_context::FormatContext`] when formatting [`crate::chc::System`] as SMT-LIB2.
 #[derive(Debug, Clone, Default)]
 pub struct HoiceDatatypeRenamer {
     prefixes: HashMap<chc::DatatypeSymbol, String>,

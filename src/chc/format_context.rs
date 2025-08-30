@@ -1,7 +1,22 @@
+//! A context for formatting a CHC system into SMT-LIB2.
+//!
+//! This module provides [`FormatContext`], which is responsible for translating parts of [`chc::System`]
+//! into a representation that is compatible with SMT solvers. It handles tasks like
+//! monomorphization of polymorphic datatypes and applying solver-specific workarounds.
+//! The [`super::smtlib2`] module uses this context to perform the final rendering to the SMT-LIB2 format.
+
 use std::collections::BTreeSet;
 
 use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 
+/// A context for formatting a CHC system.
+///
+/// This subsumes a representational difference between [`chc::System`] and resulting SMT-LIB2.
+/// - Gives a naming convention of symbols to represent built-in datatypes of [`chc::System`] in SMT-LIB2,
+/// - Gives a stringified representation of [`chc::Sort`]s,
+/// - Monomorphizes polymorphic datatypes of [`chc::System`] to be compatible with several CHC solvers,
+/// - Renames datatypes to be compatible with Hoice (see [`HoiceDatatypeRenamer`]),
+/// - etc.
 #[derive(Debug, Clone)]
 pub struct FormatContext {
     renamer: HoiceDatatypeRenamer,

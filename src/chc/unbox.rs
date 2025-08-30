@@ -1,3 +1,5 @@
+//! An optimization that removes `Box` sorts and terms from a CHC system.
+
 use super::*;
 
 fn unbox_term(term: Term) -> Term {
@@ -118,6 +120,11 @@ fn unbox_datatype(datatype: Datatype) -> Datatype {
     }
 }
 
+/// Remove all `Box` sorts and `Box`/`BoxCurrent` terms from the system.
+///
+/// The box values in Thrust represent an owned pointer, but are logically equivalent to the inner type.
+/// This pass removes them to reduce the complexity of the CHCs sent to the solver.
+/// This function traverses a [`System`] and removes all `Box` related constructs.
 pub fn unbox(system: System) -> System {
     let System {
         clauses,

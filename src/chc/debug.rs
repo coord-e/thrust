@@ -1,3 +1,10 @@
+//! Attachable debug information for CHC clauses.
+//!
+//! The [`DebugInfo`] struct captures contextual information (like `tracing` spans) at the time
+//! of a clause's creation. This information is then pretty-printed as comments in the
+//! generated SMT-LIB2 file, which helps in tracing a clause back to its origin in the
+//! Thrust codebase.
+
 #[derive(Debug, Clone)]
 pub struct Display<'a> {
     inner: &'a DebugInfo,
@@ -19,6 +26,7 @@ impl<'a> std::fmt::Display for Display<'a> {
     }
 }
 
+/// A purely informational metadata that can be attached to a clause.
 #[derive(Debug, Clone, Default)]
 pub struct DebugInfo {
     contexts: Vec<(String, String)>,
