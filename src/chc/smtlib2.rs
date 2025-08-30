@@ -1,5 +1,14 @@
+//! Wrappers around CHC structures to display them in SMT-LIB2 format.
+//!
+//! The main entry point is the [`System`] wrapper, which takes a [`chc::System`] and provides a
+//! [`std::fmt::Display`] implementation that produces a complete SMT-LIB2.
+//! It uses [`FormatContext`] to handle the complexities of the conversion,
+//! such as naming convention and solver-specific workarounds.
+//! The output of this module is what gets passed to the external CHC solver.
+
 use crate::chc::{self, format_context::FormatContext};
 
+/// A helper struct to display a list of items.
 #[derive(Debug, Clone)]
 struct List<T> {
     open: Option<&'static str>,
@@ -79,6 +88,7 @@ impl<T> List<T> {
     }
 }
 
+/// A wrapper around a [`chc::Term`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 struct Term<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -202,6 +212,7 @@ impl<'ctx, 'a> Term<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::Atom`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct Atom<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -242,6 +253,7 @@ impl<'ctx, 'a> Atom<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::Formula`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct Formula<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -278,6 +290,7 @@ impl<'ctx, 'a> Formula<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::Body`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct Body<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -304,6 +317,7 @@ impl<'ctx, 'a> Body<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::Clause`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct Clause<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -340,6 +354,7 @@ impl<'ctx, 'a> Clause<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::DatatypeSelector`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct DatatypeSelector<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -363,6 +378,7 @@ impl<'ctx, 'a> DatatypeSelector<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::DatatypeCtor`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct DatatypeCtor<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -386,6 +402,7 @@ impl<'ctx, 'a> DatatypeCtor<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a slice of [`chc::Datatype`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct Datatypes<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -423,6 +440,8 @@ impl<'ctx, 'a> Datatypes<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::Datatype`] that provides a [`std::fmt::Display`] implementation for the
+/// discriminant function in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct DatatypeDiscrFun<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -458,6 +477,8 @@ impl<'ctx, 'a> DatatypeDiscrFun<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::Datatype`] that provides a [`std::fmt::Display`] implementation for the
+/// matcher predicate in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct MatcherPredFun<'ctx, 'a> {
     ctx: &'ctx FormatContext,
@@ -507,6 +528,7 @@ impl<'ctx, 'a> MatcherPredFun<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::System`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct System<'a> {
     ctx: FormatContext,

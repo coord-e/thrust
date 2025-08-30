@@ -1,3 +1,10 @@
+//! A generic interface for running external command-line CHC solvers.
+//!
+//! This module provides the [`Config`] struct for configuring and running an external
+//! CHC solver. It supports setting the solver command, arguments, and timeout, and can
+//! be configured through environment variables.
+
+/// An error that can occur when solving a [`crate::chc::System`].
 #[derive(Debug, thiserror::Error)]
 pub enum CheckSatError {
     #[error("unsat")]
@@ -12,6 +19,7 @@ pub enum CheckSatError {
     Io(#[from] std::io::Error),
 }
 
+/// A configuration for running a command-line CHC solver.
 #[derive(Debug, Clone)]
 pub struct CommandConfig {
     pub name: String,
@@ -84,6 +92,13 @@ impl CommandConfig {
     }
 }
 
+/// A configuration for solving a [`crate::chc::System`].
+///
+/// This struct holds the configuration for the solver, including the solver command, its
+/// arguments, and a timeout. It can also be configured to run a preprocessor on the SMT-LIB2
+/// file before passing it to the solver.
+///
+/// The configuration can be loaded from environment variables using [`Config::from_env`].
 #[derive(Debug, Clone)]
 pub struct Config {
     pub solver: CommandConfig,
