@@ -1,3 +1,11 @@
+//! A builder for [`Clause`]s.
+//!
+//! This module provides [`ClauseBuilder`], a helper for constructing [`Clause`]s. It is
+//! particularly useful for managing the universally quantified variables of a clause. It can
+//! automatically create fresh [`TermVarIdx`] for variables from other domains (e.g.,
+//! [`crate::rty::FunctionParamIdx`]), simplifying the generation of clauses from higher-level
+//! representations.
+
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -8,6 +16,7 @@ use rustc_index::IndexVec;
 
 use super::{Atom, Body, Clause, DebugInfo, Sort, TermVarIdx};
 
+/// A convenience trait to represent constraints on variables used in [`ClauseBuilder`] at once.
 pub trait Var: Eq + Ord + Hash + Copy + Debug + 'static {}
 impl<T: Eq + Ord + Hash + Copy + Debug + 'static> Var for T {}
 
@@ -54,6 +63,17 @@ impl Hash for dyn Key {
     }
 }
 
+/// A builder for a [`Clause`].
+///
+/// [`Clause`] contains a list of universally quantified variables, a head atom, and a body formula.
+/// When building the head and body, we usually have some formulas that represents variables using
+/// something other than [`TermVarIdx`] (e.g. [`crate::rty::FunctionParamIdx`] or [`crate::refine::Var`]).
+/// These variables are usually OK to be universally quantified in the clause, so we want to keep
+/// the mapping of them to [`TermVarIdx`] and use it to convert the variables in the formulas
+/// during the construction of the clause.
+///
+/// Also see [`crate::rty::ClauseBuilderExt`], which provides a higher-level API on top of this
+/// to build clauses from [`crate::rty::Refinement`]s.
 #[derive(Clone, Default)]
 pub struct ClauseBuilder {
     vars: IndexVec<TermVarIdx, Sort>,
