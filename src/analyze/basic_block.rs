@@ -13,7 +13,7 @@ use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, Assumption, BasicBlockType, Env, PlaceType, PlaceTypeVar, TempVarIdx,
+    self, Assumption, BasicBlockType, Env, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx,
     TemplateTypeGenerator, UnrefinedTypeGenerator, Var,
 };
 use crate::rty::{
@@ -138,12 +138,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             Rvalue::Use(operand) => self.operand_type(operand),
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
-                match (&operand_ty.ty, op) {
+
+                let mut builder = PlaceTypeBuilder::default();
+                let (operand_ty, operand_term) = builder.subsume(operand_ty);
+                match (&operand_ty, op) {
                     (rty::Type::Bool, mir::UnOp::Not) => {
-                        operand_ty.replace(|_, term| (rty::Type::Bool, term.not()))
+                        builder.build(rty::Type::Bool, operand_term.not())
                     }
                     (rty::Type::Int, mir::UnOp::Neg) => {
-                        operand_ty.replace(|_, term| (rty::Type::Int, term.neg()))
+                        builder.build(rty::Type::Int, operand_term.neg())
                     }
                     _ => unimplemented!("ty={}, op={:?}", operand_ty.display(), op),
                 }
@@ -152,51 +155,47 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let (lhs, rhs) = *operands;
                 let lhs_ty = self.operand_type(lhs);
                 let rhs_ty = self.operand_type(rhs);
-                match (&lhs_ty.ty, op) {
-                    (rty::Type::Int, mir::BinOp::Add) => lhs_ty
-                        .merge(rhs_ty, |(lhs_ty, lhs_term), (_, rhs_term)| {
-                            (lhs_ty, lhs_term.add(rhs_term))
-                        }),
-                    (rty::Type::Int, mir::BinOp::Sub) => lhs_ty
-                        .merge(rhs_ty, |(lhs_ty, lhs_term), (_, rhs_term)| {
-                            (lhs_ty, lhs_term.sub(rhs_term))
-                        }),
-                    (rty::Type::Int, mir::BinOp::Mul) => lhs_ty
-                        .merge(rhs_ty, |(lhs_ty, lhs_term), (_, rhs_term)| {
-                            (lhs_ty, lhs_term.mul(rhs_term))
-                        }),
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => lhs_ty
-                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
-                            (rty::Type::Bool, lhs_term.ge(rhs_term))
-                        }),
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Gt) => lhs_ty
-                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
-                            (rty::Type::Bool, lhs_term.gt(rhs_term))
-                        }),
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Le) => lhs_ty
-                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
-                            (rty::Type::Bool, lhs_term.le(rhs_term))
-                        }),
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Lt) => lhs_ty
-                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
-                            (rty::Type::Bool, lhs_term.lt(rhs_term))
-                        }),
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Eq) => lhs_ty
-                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
-                            (rty::Type::Bool, lhs_term.eq(rhs_term))
-                        }),
-                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ne) => lhs_ty
-                        .merge(rhs_ty, |(_, lhs_term), (_, rhs_term)| {
-                            (rty::Type::Bool, lhs_term.ne(rhs_term))
-                        }),
+
+                let mut builder = PlaceTypeBuilder::default();
+                let (lhs_ty, lhs_term) = builder.subsume(lhs_ty);
+                let (_rhs_ty, rhs_term) = builder.subsume(rhs_ty);
+                match (&lhs_ty, op) {
+                    (rty::Type::Int, mir::BinOp::Add) => {
+                        builder.build(lhs_ty, rhs_term.add(lhs_term))
+                    }
+                    (rty::Type::Int, mir::BinOp::Sub) => {
+                        builder.build(lhs_ty, lhs_term.sub(rhs_term))
+                    }
+                    (rty::Type::Int, mir::BinOp::Mul) => {
+                        builder.build(lhs_ty, lhs_term.mul(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
+                        builder.build(rty::Type::Bool, lhs_term.ge(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Gt) => {
+                        builder.build(rty::Type::Bool, lhs_term.gt(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Le) => {
+                        builder.build(rty::Type::Bool, lhs_term.le(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Lt) => {
+                        builder.build(rty::Type::Bool, lhs_term.lt(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Eq) => {
+                        builder.build(rty::Type::Bool, lhs_term.eq(rhs_term))
+                    }
+                    (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ne) => {
+                        builder.build(rty::Type::Bool, lhs_term.ne(rhs_term))
+                    }
                     _ => unimplemented!("ty={}, op={:?}", lhs_ty.display(), op),
                 }
             }
             Rvalue::Ref(_, mir::BorrowKind::Shared, place) => {
                 let ty = self.env.place_type(self.elaborate_place(&place));
-                ty.replace(|ty, term| {
-                    (rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
-                })
+
+                let mut builder = PlaceTypeBuilder::default();
+                let (ty, term) = builder.subsume(ty);
+                builder.build(rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
             }
             Rvalue::Aggregate(kind, fields) => {
                 // elaboration: all fields are boxed
@@ -240,12 +239,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
                         let sort_args: Vec<_> = params.iter().map(|rty| rty.ty.to_sort()).collect();
                         let ty = rty::EnumType::new(ty_sym.clone(), params).into();
-                        PlaceType::aggregate(
-                            field_tys,
-                            |_| ty,
-                            |fields_term| {
-                                chc::Term::datatype_ctor(ty_sym, sort_args, v_sym, fields_term)
-                            },
+
+                        let mut builder = PlaceTypeBuilder::default();
+                        let mut field_terms = Vec::new();
+                        for field_ty in field_tys {
+                            let (_, field_term) = builder.subsume(field_ty);
+                            field_terms.push(field_term);
+                        }
+                        builder.build(
+                            ty,
+                            chc::Term::datatype_ctor(ty_sym, sort_args, v_sym, field_terms),
                         )
                     }
                     _ => PlaceType::tuple(field_tys),
@@ -276,7 +279,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .expect("discriminant of non-enum")
                     .symbol
                     .clone();
-                ty.replace(|_ty, term| (rty::Type::Int, chc::Term::datatype_discr(sym, term)))
+
+                let mut builder = PlaceTypeBuilder::default();
+                let (_, term) = builder.subsume(ty);
+                builder.build(rty::Type::Int, chc::Term::datatype_discr(sym, term))
             }
             _ => unimplemented!(
                 "rvalue={:?} ({:?})",
@@ -383,20 +389,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 _ => unimplemented!(),
             };
 
-            self.with_assumption(
-                discr_ty
-                    .clone()
-                    .into_assumption(|term| term.equal_to(target_term.clone())),
-                |ecx| {
-                    callback(ecx, bb);
-                    ecx.type_goto(bb, expected_ret);
-                },
-            );
-            negations.push(
-                discr_ty
-                    .clone()
-                    .into_assumption(|term| term.not_equal_to(target_term)),
-            );
+            let pos_assumption = {
+                let mut builder = PlaceTypeBuilder::default();
+                let (_, discr_term) = builder.subsume(discr_ty.clone());
+                builder.push_formula(discr_term.equal_to(target_term.clone()));
+                builder.build_assumption()
+            };
+            self.with_assumption(pos_assumption, |ecx| {
+                callback(ecx, bb);
+                ecx.type_goto(bb, expected_ret);
+            });
+            let neg_assumption = {
+                let mut builder = PlaceTypeBuilder::default();
+                let (_, discr_term) = builder.subsume(discr_ty.clone());
+                builder.push_formula(discr_term.not_equal_to(target_term.clone()));
+                builder.build_assumption()
+            };
+            negations.push(neg_assumption);
         }
         self.with_assumptions(negations, |ecx| {
             callback(ecx, targets.otherwise());
@@ -508,11 +517,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let local_ty = self.env.local_type(local);
         let rvalue_ty = self.rvalue_type(rvalue);
         if !rvalue_ty.ty.to_sort().is_singleton() {
-            self.env.assume(
-                local_ty.merge_into_assumption(rvalue_ty, |local_term, rvalue_term| {
-                    local_term.mut_final().equal_to(rvalue_term)
-                }),
-            );
+            let mut builder = PlaceTypeBuilder::default();
+            let (_, local_term) = builder.subsume(local_ty);
+            let (_, rvalue_term) = builder.subsume(rvalue_ty);
+            builder.push_formula(local_term.mut_final().equal_to(rvalue_term));
+            let assumption = builder.build_assumption();
+            self.env.assume(assumption);
         }
     }
 

@@ -222,6 +222,75 @@ impl PlaceTypeVar {
     }
 }
 
+/// A builder for `PlaceType` and `Assumption`.
+///
+/// We often combine multiple [`PlaceType`]s and [`rty::RefinedType`]s into a single one in order to
+/// construct another [`PlaceType`], while retaining formulas from each. [`PlaceTypeBuilder`] helps
+/// this by properly managing existential variable indices.
+#[derive(Debug, Clone, Default)]
+pub struct PlaceTypeBuilder {
+    existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+    formula: chc::Body<PlaceTypeVar>,
+}
+
+impl PlaceTypeBuilder {
+    pub fn subsume(&mut self, pty: PlaceType) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>) {
+        let PlaceType {
+            ty,
+            existentials,
+            term,
+            formula,
+        } = pty;
+        self.formula
+            .push_conj(formula.map_var(|v| v.shift_existential(self.existentials.len())));
+        let term = term.map_var(|v| v.shift_existential(self.existentials.len()));
+        self.existentials.extend(existentials);
+        (ty, term)
+    }
+
+    pub fn subsume_rty(
+        &mut self,
+        rty: rty::RefinedType<Var>,
+    ) -> (rty::Type<Var>, rty::ExistentialVarIdx) {
+        let rty::RefinedType { ty, refinement } = rty;
+        let rty::Refinement { existentials, body } = refinement;
+        let value_var_ex = self.existentials.push(ty.to_sort());
+        self.formula.push_conj(body.map_var(|v| match v {
+            rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ex),
+            rty::RefinedTypeVar::Existential(ev) => {
+                PlaceTypeVar::Existential(ev + self.existentials.len())
+            }
+            rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
+        }));
+        self.existentials.extend(existentials);
+        (ty, value_var_ex)
+    }
+
+    pub fn push_formula(&mut self, formula: impl Into<chc::Body<PlaceTypeVar>>) {
+        self.formula.push_conj(formula);
+    }
+
+    pub fn push_existential(&mut self, sort: chc::Sort) -> rty::ExistentialVarIdx {
+        self.existentials.push(sort)
+    }
+
+    pub fn build(self, ty: rty::Type<Var>, term: chc::Term<PlaceTypeVar>) -> PlaceType {
+        PlaceType {
+            ty,
+            existentials: self.existentials,
+            term,
+            formula: self.formula,
+        }
+    }
+
+    pub fn build_assumption(self) -> Assumption {
+        Assumption {
+            existentials: self.existentials,
+            body: self.formula,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlaceType {
     pub ty: rty::Type<Var>,
@@ -302,82 +371,26 @@ impl PlaceType {
         }
     }
 
-    pub fn into_assumption<F>(self, term_to_atom: F) -> Assumption
-    where
-        F: FnOnce(chc::Term<PlaceTypeVar>) -> chc::Atom<PlaceTypeVar>,
-    {
-        let PlaceType {
-            ty: _,
-            existentials,
-            term,
-            mut formula,
-        } = self;
-        formula.push_conj(term_to_atom(term));
-        Assumption::new(existentials, formula)
-    }
-
     pub fn deref(self) -> PlaceType {
-        let PlaceType {
-            ty: inner_ty,
-            mut existentials,
-            term: inner_term,
-            mut formula,
-        } = self;
+        let mut builder = PlaceTypeBuilder::default();
+        let (inner_ty, inner_term) = builder.subsume(self);
         let inner_ty = inner_ty.into_pointer().unwrap();
-        let rty::RefinedType { ty, refinement } = *inner_ty.elem;
-        let rty::Refinement {
-            existentials: inner_existentials,
-            body: inner_formula,
-        } = refinement;
-        let value_var_ex = existentials.push(ty.to_sort());
+        let (ty, value_var_ex) = builder.subsume_rty(*inner_ty.elem);
+
         let term = chc::Term::var(value_var_ex.into());
-        formula.push_conj(term.clone().equal_to(inner_ty.kind.deref_term(inner_term)));
-        formula.push_conj(inner_formula.map_var(|v| match v {
-            rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ex),
-            rty::RefinedTypeVar::Existential(ev) => {
-                PlaceTypeVar::Existential(ev + existentials.len())
-            }
-            rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
-        }));
-        existentials.extend(inner_existentials);
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
+        builder.push_formula(term.clone().equal_to(inner_ty.kind.deref_term(inner_term)));
+        builder.build(ty, term)
     }
 
     pub fn tuple_proj(self, idx: usize) -> PlaceType {
-        let PlaceType {
-            ty: inner_ty,
-            mut existentials,
-            term: inner_term,
-            mut formula,
-        } = self;
+        let mut builder = PlaceTypeBuilder::default();
+        let (inner_ty, inner_term) = builder.subsume(self);
         let inner_ty = inner_ty.into_tuple().unwrap();
-        let rty::RefinedType { ty, refinement } = inner_ty.elems[idx].clone();
-        let rty::Refinement {
-            existentials: inner_existentials,
-            body: inner_formula,
-        } = refinement;
-        let value_var_ex = existentials.push(ty.to_sort());
+        let (ty, value_var_ex) = builder.subsume_rty(inner_ty.elems[idx].clone());
+
         let term = chc::Term::var(value_var_ex.into());
-        formula.push_conj(term.clone().equal_to(inner_term.tuple_proj(idx)));
-        formula.push_conj(inner_formula.map_var(|v| match v {
-            rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(value_var_ex),
-            rty::RefinedTypeVar::Existential(ev) => {
-                PlaceTypeVar::Existential(ev + existentials.len())
-            }
-            rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
-        }));
-        existentials.extend(inner_existentials);
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
+        builder.push_formula(term.clone().equal_to(inner_term.tuple_proj(idx)));
+        builder.build(ty, term)
     }
 
     pub fn downcast(
@@ -386,12 +399,8 @@ impl PlaceType {
         field_idx: FieldIdx,
         enum_defs: &HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
     ) -> PlaceType {
-        let PlaceType {
-            ty: inner_ty,
-            mut existentials,
-            term: inner_term,
-            mut formula,
-        } = self;
+        let mut builder = PlaceTypeBuilder::default();
+        let (inner_ty, inner_term) = builder.subsume(self);
         let inner_ty = inner_ty.into_enum().unwrap();
         let def = &enum_defs[&inner_ty.symbol];
         let variant = &def.variants[variant_idx];
@@ -401,23 +410,13 @@ impl PlaceType {
         for field_ty in variant.field_tys.clone() {
             let mut rty = rty::RefinedType::unrefined(field_ty.vacuous());
             rty.instantiate_ty_params(inner_ty.args.clone());
-            let rty::RefinedType { ty, refinement } = rty.boxed();
+            let (ty, field_ex_var) = builder.subsume_rty(rty.boxed());
 
-            let field_ex_var = existentials.push(ty.to_sort());
             field_terms.push(chc::Term::var(field_ex_var.into()));
             field_tys.push(ty);
-
-            formula.push_conj(refinement.body.map_var(|v| match v {
-                rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(field_ex_var),
-                rty::RefinedTypeVar::Existential(ev) => {
-                    PlaceTypeVar::Existential(ev + existentials.len())
-                }
-                rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
-            }));
-            existentials.extend(refinement.existentials);
         }
 
-        formula.push_conj(
+        builder.push_formula(
             chc::Term::datatype_ctor(
                 def.name.clone(),
                 inner_ty.arg_sorts(),
@@ -429,113 +428,15 @@ impl PlaceType {
 
         let ty = field_tys[field_idx.index()].clone();
         let term = field_terms[field_idx.index()].clone();
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
+        builder.build(ty, term)
     }
 
     pub fn boxed(self) -> PlaceType {
-        let PlaceType {
-            ty: inner_ty,
-            existentials,
-            term: inner_term,
-            formula,
-        } = self;
+        let mut builder = PlaceTypeBuilder::default();
+        let (inner_ty, inner_term) = builder.subsume(self);
         let term = chc::Term::box_(inner_term);
         let ty = rty::PointerType::own(inner_ty).into();
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
-    }
-
-    pub fn replace<F>(self, f: F) -> PlaceType
-    where
-        F: FnOnce(
-            rty::Type<Var>,
-            chc::Term<PlaceTypeVar>,
-        ) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>),
-    {
-        let PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        } = self;
-        let (ty, term) = f(ty, term);
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
-    }
-
-    pub fn merge_into_assumption<F>(self, other: PlaceType, f: F) -> Assumption
-    where
-        F: FnOnce(chc::Term<PlaceTypeVar>, chc::Term<PlaceTypeVar>) -> chc::Atom<PlaceTypeVar>,
-    {
-        let PlaceType {
-            ty: _ty1,
-            mut existentials,
-            term: term1,
-            mut formula,
-        } = self;
-        let PlaceType {
-            ty: _ty2,
-            existentials: evs2,
-            term: term2,
-            formula: formula2,
-        } = other;
-        let atom = f(
-            term1,
-            term2.map_var(|v| v.shift_existential(existentials.len())),
-        );
-        formula.push_conj(formula2.map_var(|v| v.shift_existential(existentials.len())));
-        formula.push_conj(atom);
-        existentials.extend(evs2);
-        Assumption::new(existentials, formula)
-    }
-
-    pub fn merge<F>(self, other: PlaceType, f: F) -> PlaceType
-    where
-        F: FnOnce(
-            (rty::Type<Var>, chc::Term<PlaceTypeVar>),
-            (rty::Type<Var>, chc::Term<PlaceTypeVar>),
-        ) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>),
-    {
-        let PlaceType {
-            ty: ty1,
-            mut existentials,
-            term: term1,
-            mut formula,
-        } = self;
-        let PlaceType {
-            ty: ty2,
-            existentials: evs2,
-            term: term2,
-            formula: formula2,
-        } = other;
-        let (ty, term) = f(
-            (ty1, term1),
-            (
-                ty2,
-                term2.map_var(|v| v.shift_existential(existentials.len())),
-            ),
-        );
-        formula.push_conj(formula2.map_var(|v| v.shift_existential(existentials.len())));
-        existentials.extend(evs2);
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
+        builder.build(ty, term)
     }
 
     pub fn mut_with_proph_term(self, proph: chc::Term<Var>) -> PlaceType {
@@ -544,58 +445,29 @@ impl PlaceType {
     }
 
     pub fn mut_with(self, proph: PlaceType) -> PlaceType {
-        self.merge(proph, |(ty1, term1), (_, term2)|
-            // TODO: check ty1 = ty2
-            (rty::PointerType::mut_to(ty1).into(), chc::Term::mut_(term1, term2)))
+        let mut builder = PlaceTypeBuilder::default();
+        let (ty1, term1) = builder.subsume(self);
+        let (_ty2, term2) = builder.subsume(proph);
+        // TODO: check ty1 = ty2
+        let ty = rty::PointerType::mut_to(ty1).into();
+        let term = chc::Term::mut_(term1, term2);
+        builder.build(ty, term)
     }
 
-    pub fn aggregate<I, F, G>(ptys: I, make_ty: F, make_term: G) -> PlaceType
-    where
-        I: IntoIterator<Item = PlaceType>,
-        F: FnOnce(Vec<rty::Type<Var>>) -> rty::Type<Var>,
-        G: FnOnce(Vec<chc::Term<PlaceTypeVar>>) -> chc::Term<PlaceTypeVar>,
-    {
-        #[derive(Default)]
-        struct State {
-            tys: Vec<rty::Type<Var>>,
-            terms: Vec<chc::Term<PlaceTypeVar>>,
-            existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-            formula: chc::Body<PlaceTypeVar>,
-        }
-        let State {
-            tys,
-            terms,
-            existentials,
-            formula,
-        } = ptys
-            .into_iter()
-            .fold(Default::default(), |mut st: State, ty| {
-                let PlaceType {
-                    ty,
-                    existentials,
-                    term,
-                    formula,
-                } = ty;
-                st.tys.push(ty);
-                st.terms
-                    .push(term.map_var(|v| v.shift_existential(st.existentials.len())));
-                st.formula
-                    .push_conj(formula.map_var(|v| v.shift_existential(st.existentials.len())));
-                st.existentials.extend(existentials);
-                st
-            });
-        let ty = make_ty(tys);
-        let term = make_term(terms);
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
-    }
+    pub fn tuple(ptys: Vec<PlaceType>) -> PlaceType {
+        let mut builder = PlaceTypeBuilder::default();
+        let mut tys = Vec::new();
+        let mut terms = Vec::new();
 
-    pub fn tuple(tys: Vec<PlaceType>) -> PlaceType {
-        PlaceType::aggregate(tys, |tys| rty::TupleType::new(tys).into(), chc::Term::tuple)
+        for ty in ptys {
+            let (ty, term) = builder.subsume(ty);
+            tys.push(ty);
+            terms.push(term);
+        }
+
+        let ty = rty::TupleType::new(tys);
+        let term = chc::Term::tuple(terms);
+        builder.build(ty.into(), term)
     }
 
     pub fn enum_(
@@ -604,50 +476,27 @@ impl PlaceType {
         discr: TempVarIdx,
         field_tys: Vec<PlaceType>,
     ) -> PlaceType {
-        #[derive(Default)]
-        struct State {
-            existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-            terms: Vec<chc::Term<PlaceTypeVar>>,
-            formula: chc::Body<PlaceTypeVar>,
+        let mut builder = PlaceTypeBuilder::default();
+        let mut terms = Vec::new();
+
+        for ty in field_tys {
+            let (_, term) = builder.subsume(ty);
+            terms.push(term);
         }
-        let State {
-            mut existentials,
-            terms,
-            mut formula,
-        } = field_tys
-            .into_iter()
-            .fold(Default::default(), |mut st: State, ty| {
-                let PlaceType {
-                    ty: _,
-                    existentials,
-                    term,
-                    formula,
-                } = ty;
-                st.terms
-                    .push(term.map_var(|v| v.shift_existential(st.existentials.len())));
-                st.formula
-                    .push_conj(formula.map_var(|v| v.shift_existential(st.existentials.len())));
-                st.existentials.extend(existentials);
-                st
-            });
+
         let ty: rty::Type<_> = enum_ty.clone().into();
-        let value_var_ev = existentials.push(ty.to_sort());
+        let value_var_ev = builder.push_existential(ty.to_sort());
         let term = chc::Term::var(value_var_ev.into());
         let mut pred_args = terms;
         pred_args.push(chc::Term::var(value_var_ev.into()));
-        formula.push_conj(chc::Atom::new(matcher_pred, pred_args));
-        formula.push_conj(
+        builder.push_formula(chc::Atom::new(matcher_pred, pred_args));
+        builder.push_formula(
             chc::Term::var(discr.into()).equal_to(chc::Term::datatype_discr(
                 enum_ty.symbol.clone(),
                 chc::Term::var(value_var_ev.into()),
             )),
         );
-        PlaceType {
-            ty,
-            existentials,
-            term,
-            formula,
-        }
+        builder.build(ty, term)
     }
 }
 
@@ -1252,10 +1101,10 @@ impl Env {
     fn dropping_assumption(&mut self, path: &Path) -> Assumption {
         let ty = self.path_type(path);
         if ty.ty.is_mut() {
-            ty.into_assumption(|term| {
-                let term = term.map_var(Into::into);
-                term.clone().mut_final().equal_to(term.mut_current())
-            })
+            let mut builder = PlaceTypeBuilder::default();
+            let (_, term) = builder.subsume(ty);
+            builder.push_formula(term.clone().mut_final().equal_to(term.mut_current()));
+            builder.build_assumption()
         } else if ty.ty.is_own() {
             self.dropping_assumption(&path.clone().deref())
         } else if let Some(tty) = ty.ty.as_tuple() {
