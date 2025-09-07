@@ -1,3 +1,5 @@
+//! Retrieves and caches well-known [`DefId`]s.
+
 use std::cell::OnceCell;
 
 use rustc_middle::ty::TyCtxt;
@@ -10,6 +12,10 @@ struct DefIds {
     nonnull: OnceCell<Option<DefId>>,
 }
 
+/// Retrieves and caches well-known [`DefId`]s.
+///
+/// [`DefId`]s of some well-known types can be retrieved as lang items or via the definition of
+/// lang items. This struct implements that logic and caches the results.
 #[derive(Clone)]
 pub struct DefIdCache<'tcx> {
     tcx: TyCtxt<'tcx>,

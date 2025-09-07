@@ -1,3 +1,5 @@
+//! Analyze a local definition.
+
 use std::collections::{HashMap, HashSet};
 
 use rustc_index::bit_set::BitSet;
@@ -12,6 +14,10 @@ use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{BasicBlockType, TemplateTypeGenerator};
 use crate::rty;
 
+/// An implementation of the typing of local definitions.
+///
+/// The current implementation only applies to function definitions. The entry point is
+/// [`Analyzer::run`], which generates constraints during typing, given the expected type of the function.
 pub struct Analyzer<'tcx, 'ctx> {
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
     tcx: TyCtxt<'tcx>,

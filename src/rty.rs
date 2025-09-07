@@ -1,3 +1,42 @@
+//! Data structures for refinement types.
+//!
+//! Thrust is a refinement type system, and so its analysis is about giving refinement types to
+//! variables and terms. This module defines the data structures for representing refinement
+//! types. The central data structure is [`RefinedType`], which is just [`Type`] plus [`Refinement`].
+//!
+//! Note that there are two notions of "variables" in this module. First is a type variable which is
+//! a polymorphic type parameter which is represented by [`TypeParamIdx`], and forms one of valid type as [`ParamType`].
+//! `T` in `struct S<T> { f: T }` is a type variable. See [`params`] module for the handling of type parameters.
+//! Second is a logical variable which is a variable that can appear in logical predicates.
+//! `x` and `y` in `{ x: int | x > y }` are logical variables.
+//! The actual representation of logical variables varies by context and so it is often parameterized
+//! as a type parameter in this module (`T` in `Type<T>`). In [`FunctionType`], logical variables are
+//! function parameters (`Type<FunctionParamIdx`), and during the actual analysis, logical variables are
+//! program variables bound in the environment (`Type<Var>`, see [`crate::refine::Var`]).
+//! We have [`RefinedTypeVar<T>`] to denote logical variables in refinement predicates, which
+//! accepts existential variables and a variable bound in the refinement type (`x` in `{ x: T | phi
+//! }`) in addition to variables `T` from the outer scope. This module also contains [`Closed`] which is
+//! used to denote a closed type, so `Type<Closed>` ensures no logical variables from the outer scope
+//! appear in that type.
+//!
+//! We have distinct types for each variant of [`Type`], such as [`FunctionType`] and
+//! [`PointerType`]. [`Type`], [`RefinedType`] and these variant types share some common operations:
+//!
+//! - `subst_var`: Substitutes logical variables with logical terms.
+//! - `map_var`: Maps logical variables to other logical variables.
+//! - `free_ty_params`: Collects free type parameters [`TypeParamIdx`] in the type.
+//! - `subst_ty_params`: Substitutes type parameters with other types. Since this replaces
+//!   type parameters with refinement types, [`Type`] does not implement this, and
+//!   [`RefinedType::subst_ty_params`] handles the substitution logic instead.
+//! - `strip_refinement`: Strips the refinements recursively and returns a [`Closed`] type.
+//!
+//! This module also implements several logics for manipulating refinement types and is extensively used in
+//! upstream logic in the [`crate::refine`] and [`crate::analyze`] modules.
+//!
+//! - [`template`]: Generates "template" refinement types with unknown predicates to be inferred.
+//! - [`subtyping`]: Generates CHC constraints [`crate::chc`] from subtyping relations between types.
+//! - [`clause_builder`]: Helper to build [`crate::chc::Clause`] from the refinement types.
+
 use std::collections::{HashMap, HashSet};
 
 use pretty::{termcolor, Pretty};
@@ -19,6 +58,11 @@ mod params;
 pub use params::{TypeParamIdx, TypeParamSubst, TypeParams};
 
 rustc_index::newtype_index! {
+    /// An index representing function parameter.
+    ///
+    /// We manage function parameters using indices that are unique in a function.
+    /// [`FunctionType`] contains `IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>`
+    /// that manages the indices and types of the function parameters.
     #[orderable]
     #[debug_format = "${}"]
     pub struct FunctionParamIdx { }
@@ -39,6 +83,11 @@ where
     }
 }
 
+/// A function type.
+///
+/// In Thrust, function types are closed. Because of that, function types, thus its parameters and
+/// return type only refer to the parameters of the function itself using [`FunctionParamIdx`] and
+/// do not accept other type of variables from the environment.
 #[derive(Debug, Clone)]
 pub struct FunctionType {
     pub params: IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
@@ -74,6 +123,8 @@ impl FunctionType {
         }
     }
 
+    /// Because function types are always closed in Thrust, we can convert this into
+    /// [`Type<Closed>`].
     pub fn into_closed_ty(self) -> Type<Closed> {
         Type::Function(self)
     }
@@ -104,6 +155,7 @@ impl FunctionType {
     }
 }
 
+/// The kind of a reference, which is either mutable or immutable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefKind {
     Mut,
@@ -128,6 +180,7 @@ where
     }
 }
 
+/// The kind of a pointer, which is either a reference or an owned pointer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerKind {
     Ref(RefKind),
@@ -167,6 +220,7 @@ impl PointerKind {
     }
 }
 
+/// A pointer type.
 #[derive(Debug, Clone)]
 pub struct PointerType<T> {
     pub kind: PointerKind,
@@ -275,6 +329,11 @@ impl<T> PointerType<T> {
     }
 }
 
+/// A tuple type.
+///
+/// Note that the current implementation uses tuples to represent structs. See
+/// implementation in `crate::refine::template` module for details.
+/// It is our TODO to improve the struct representation.
 #[derive(Debug, Clone)]
 pub struct TupleType<T> {
     pub elems: Vec<RefinedType<T>>,
@@ -374,6 +433,7 @@ impl<T> TupleType<T> {
     }
 }
 
+/// A definition of an enum variant, found in [`EnumDatatypeDef`].
 #[derive(Debug, Clone)]
 pub struct EnumVariantDef {
     pub name: chc::DatatypeSymbol,
@@ -381,6 +441,7 @@ pub struct EnumVariantDef {
     pub field_tys: Vec<Type<Closed>>,
 }
 
+/// A definition of an enum datatype.
 #[derive(Debug, Clone)]
 pub struct EnumDatatypeDef {
     pub name: chc::DatatypeSymbol,
@@ -394,6 +455,9 @@ impl EnumDatatypeDef {
     }
 }
 
+/// An enum type.
+///
+/// An enum type includes its type arguments and the argument types can refer to outer variables `T`.
 #[derive(Debug, Clone)]
 pub struct EnumType<T> {
     pub symbol: chc::DatatypeSymbol,
@@ -495,6 +559,7 @@ impl<T> EnumType<T> {
     }
 }
 
+/// A type parameter.
 #[derive(Debug, Clone)]
 pub struct ParamType {
     pub idx: TypeParamIdx,
@@ -523,6 +588,7 @@ impl ParamType {
     }
 }
 
+/// An underlying type of a refinement type.
 #[derive(Debug, Clone)]
 pub enum Type<T> {
     Int,
@@ -803,6 +869,10 @@ impl Type<Closed> {
     }
 }
 
+/// A marker type for closed types.
+///
+/// Because the value of `Closed` can never exist, `Type<Closed>` ensures that no
+/// logical variables from outer scope appear in the type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Closed {}
 
@@ -822,6 +892,11 @@ where
 }
 
 rustc_index::newtype_index! {
+    /// An index representing existential variables.
+    ///
+    /// We manage existential variables using indices that are unique in a [`Formula`].
+    /// [`Formula`] contains `IndexVec<ExistentialVarIdx, chc::Sort>` that manages the indices
+    /// and sorts of the existential variables.
     #[orderable]
     #[debug_format = "e{}"]
     pub struct ExistentialVarIdx { }
@@ -846,6 +921,15 @@ pub trait ShiftExistential {
     fn shift_existential(self, offset: usize) -> Self;
 }
 
+/// A logical variable in a refinement predicate.
+///
+/// Given a refinement type `{ v: T | ∃e. φ }`, there are three cases of logical variables
+/// occurring in the predicate `φ`:
+///
+/// - `RefinedTypeVar::Value`: a variable `v` representing the value of the type
+/// - `RefinedTypeVar::Existential`: an existential variable `e`
+/// - `RefinedTypeVar::Free`: a variable from the outer scope, such as function parameters or
+///    variables bound in the environment
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RefinedTypeVar<FV> {
     Value,
@@ -908,6 +992,9 @@ impl<T> ShiftExistential for RefinedTypeVar<T> {
     }
 }
 
+/// A formula, potentially equipped with an existential quantifier.
+///
+/// Note: This is not to be confused with [`crate::chc::Formula`] in the [`crate::chc`] module, which is a different notion.
 #[derive(Debug, Clone)]
 pub struct Formula<V> {
     pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
@@ -1051,6 +1138,10 @@ where
     }
 }
 
+/// A refinement predicate in a refinement type.
+///
+/// This is a [`Formula`], but gives an explicit representation of the kinds of variables that can appear in
+/// the refinement predicates. See [`RefinedTypeVar`] for details.
 pub type Refinement<FV = Closed> = Formula<RefinedTypeVar<FV>>;
 
 impl<FV> Refinement<FV> {
@@ -1105,6 +1196,10 @@ impl<FV> Refinement<FV> {
     }
 }
 
+/// A helper type to map logical variables in a refinement at once.
+///
+/// This is essentially just calling `Refinement::map_var`, but provides a convenient interface to
+/// construct the mapping of the variables.
 #[derive(Debug, Clone)]
 pub struct Instantiator<T> {
     value_var: Option<T>,
@@ -1140,6 +1235,7 @@ impl<T> Instantiator<T> {
     }
 }
 
+/// A refinement type.
 #[derive(Debug, Clone)]
 pub struct RefinedType<FV = Closed> {
     pub ty: Type<FV>,
