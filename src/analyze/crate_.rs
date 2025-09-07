@@ -1,3 +1,5 @@
+//! Analyze a local crate.
+
 use std::collections::HashSet;
 
 use rustc_hir::def::DefKind;
@@ -12,6 +14,16 @@ use crate::chc;
 use crate::refine::{self, TemplateTypeGenerator, UnrefinedTypeGenerator};
 use crate::rty::{self, ClauseBuilderExt as _};
 
+/// An implementation of local crate analysis.
+///
+/// The entry point is [`Analyzer::run`], which performs the following steps in order:
+///
+/// 1. Register enum definitions found in the crate.
+/// 2. Give initial refinement types to local function definitions based on their signatures and
+///    annotations. This generates template refinement types with predicate variables for parameters and
+///    return types that are not known via annotations.
+/// 3. Type local function definition bodies via [`super::local_def::Analyzer`] using the refinement types
+///    generated in the previous step.
 pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
