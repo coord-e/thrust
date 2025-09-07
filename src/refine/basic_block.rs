@@ -1,3 +1,5 @@
+//! The refinement type for a basic block.
+
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 use rustc_middle::mir::Local;
@@ -5,8 +7,11 @@ use rustc_middle::ty as mir_ty;
 
 use crate::rty;
 
-/// `BasicBlockType` is a special case of `FunctionType` whose parameters are
-/// associated with `Local`s.
+/// A special case of [`rty::FunctionType`] whose parameters are associated with [`Local`]s.
+///
+/// Thrust handles basic blocks as functions, but it needs to associate function
+/// parameters with MIR [`Local`]s during its analysis. [`BasicBlockType`] includes this mapping
+/// from function parameters to [`Local`]s, along with the underlying function type.
 #[derive(Debug, Clone)]
 pub struct BasicBlockType {
     // TODO: make this completely private by exposing appropriate ctor
