@@ -1,3 +1,5 @@
+//! Supporting implementation for parsing Thrust annotations.
+
 use rustc_ast::ast::Attribute;
 use rustc_ast::tokenstream::TokenStream;
 use rustc_index::IndexVec;
@@ -31,6 +33,10 @@ pub fn callable_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("callable")]
 }
 
+/// A [`annot::Resolver`] implementation for resolving function parameters.
+///
+/// The parameter names and their sorts needs to be configured via
+/// [`ParamResolver::push_param`] before use.
 #[derive(Debug, Clone, Default)]
 pub struct ParamResolver {
     params: IndexVec<rty::FunctionParamIdx, (Symbol, chc::Sort)>,
@@ -52,6 +58,10 @@ impl ParamResolver {
     }
 }
 
+/// A [`annot::Resolver`] implementation for resolving the special identifier `result`.
+///
+/// The `result` identifier is used to refer to [`rty::RefinedTypeVar::Value`] in postconditions, denoting
+/// the return value of a function.
 #[derive(Debug, Clone)]
 pub struct ResultResolver {
     result_symbol: Symbol,

@@ -1,9 +1,22 @@
+//! "Template" refinement types with unknown predicates to be inferred.
+//!
+//! A [`Template`] is used to generate a [`RefinedType`] with a refinement consisting of a
+//! single atom with a fresh predicate variable. The unknown predicate can carry dependencies,
+//! which are the arguments to the predicate. When Thrust infers refinement types, it
+//! first generates template refinement types with unknown refinements, and then
+//! generates constraints on the predicate variables in these templates.
+
 use std::collections::BTreeMap;
 
 use crate::chc;
 
 use super::{RefinedType, RefinedTypeVar, Type};
 
+/// A template of a refinement type.
+///
+/// This is a refinement type in the form of `{ T | P(x1, ..., xn) }` where `P` is a
+/// predicate variable, `T` is a type, and `x1, ..., xn` are the dependencies. The predicate
+/// variable is actually allocated when [`Template::into_refined_type`] is called.
 #[derive(Debug, Clone)]
 pub struct Template<FV> {
     pred_sig: chc::PredSig,
@@ -24,6 +37,11 @@ impl<FV> Template<FV> {
     }
 }
 
+/// A builder for a [`Template`].
+///
+/// Note that we have a convenient mechanism in the [`crate::refine`] module
+/// to prepare a [`TemplateBuilder`] with variables in scope, and we usually don't
+/// construct a [`TemplateBuilder`] directly.
 #[derive(Debug, Clone)]
 pub struct TemplateBuilder<FV> {
     dependencies: BTreeMap<RefinedTypeVar<FV>, chc::Sort>,

@@ -1,3 +1,5 @@
+//! Data structures for type parameters and substitutions.
+
 use std::collections::BTreeMap;
 
 use pretty::{termcolor, Pretty};
@@ -8,6 +10,7 @@ use crate::chc;
 use super::{Closed, RefinedType};
 
 rustc_index::newtype_index! {
+    /// An index representing a type parameter.
     #[orderable]
     #[debug_format = "T{}"]
     pub struct TypeParamIdx { }
@@ -38,6 +41,7 @@ impl TypeParamIdx {
 
 pub type TypeParams<T> = IndexVec<TypeParamIdx, RefinedType<T>>;
 
+/// A substitution for type parameters that maps type parameters to refinement types.
 #[derive(Debug, Clone)]
 pub struct TypeParamSubst<T> {
     subst: BTreeMap<TypeParamIdx, RefinedType<T>>,
