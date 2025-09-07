@@ -1,8 +1,17 @@
+//! Translation of subtyping relations into CHC constraints.
+
 use crate::chc;
 use crate::pretty::PrettyDisplayExt;
 
 use super::{ClauseBuilderExt as _, Closed, PointerKind, RefKind, RefinedType, Type};
 
+/// A scope for building clauses.
+///
+/// The construction of CHC clauses requires knowledge of the current
+/// environment to determine variable sorts and include necessary premises.
+/// This trait abstracts the preparation of a [`chc::ClauseBuilder`] to allow an
+/// environment defined outside of this module (in Thrust, [`crate::refine::Env`])
+/// to build a [`chc::ClauseBuilder`] equipped with in-scope variables and assumptions.
 pub trait ClauseScope {
     fn build_clause(&self) -> chc::ClauseBuilder;
 }
@@ -22,6 +31,7 @@ impl ClauseScope for chc::ClauseBuilder {
     }
 }
 
+/// Produces CHC constraints for subtyping relations.
 pub trait Subtyping {
     #[must_use]
     fn relate_sub_type<T: chc::Var, U: chc::Var>(
