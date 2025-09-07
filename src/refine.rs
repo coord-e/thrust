@@ -1,3 +1,12 @@
+//! Core logic of refinement typing.
+//!
+//! This module includes the definition of the refinement typing environment and the template
+//! type generation from MIR types.
+//!
+//! This module is used by the [`crate::analyze`] module. There is currently no clear boundary between
+//! the `analyze` and `refine` modules, so it is a TODO to integrate this into the `analyze`
+//! module and remove this one.
+
 mod template;
 pub use template::{TemplateScope, TemplateTypeGenerator, UnrefinedTypeGenerator};
 

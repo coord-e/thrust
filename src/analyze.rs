@@ -1,3 +1,11 @@
+//! Analysis of Rust MIR to generate a CHC system.
+//!
+//! The [`Analyzer`] generates subtyping constraints in the form of CHCs ([`chc::System`]).
+//! The entry point is [`crate_::Analyzer::run`], followed by [`local_def::Analyzer::run`]
+//! and [`basic_block::Analyzer::run`], while accumulating the necessary information in
+//! [`Analyzer`]. Once [`chc::System`] is collected for the entire input, it invokes an external
+//! CHC solver with the [`Analyzer::solve`] and subsequently reports the result.
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
