@@ -202,6 +202,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, t)
                 )
             }
+            chc::Term::FormulaExistentialVar(_, name) => write!(f, "{}", name),
         }
     }
 }
@@ -279,6 +280,14 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
             chc::Formula::Or(fs) => {
                 let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.clause, fo)));
                 write!(f, "(or {})", fs)
+            }
+            chc::Formula::Exists(vars, fo) => {
+                let vars =
+                    List::closed(vars.iter().map(|(v, s)| {
+                        List::closed([v.to_string(), self.ctx.fmt_sort(s).to_string()])
+                    }));
+                let fo = Formula::new(self.ctx, self.clause, fo);
+                write!(f, "(exists {vars} {fo})")
             }
         }
     }
