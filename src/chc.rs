@@ -406,6 +406,8 @@ pub enum Term<V = TermVarIdx> {
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
     DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
+    /// Used in [`Formula`] to represent existentially quantified variables appearing in annotations.
+    FormulaExistentialVar(Sort, String),
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
@@ -475,6 +477,7 @@ where
             Term::DatatypeDiscr(_, t) => allocator
                 .text("discriminant")
                 .append(t.pretty(allocator).parens()),
+            Term::FormulaExistentialVar(_, name) => allocator.text(name.clone()),
         }
     }
 }
@@ -521,6 +524,7 @@ impl<V> Term<V> {
                 args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
             ),
             Term::DatatypeDiscr(d_sym, t) => Term::DatatypeDiscr(d_sym, Box::new(t.subst_var(f))),
+            Term::FormulaExistentialVar(sort, name) => Term::FormulaExistentialVar(sort, name),
         }
     }
 
@@ -562,15 +566,18 @@ impl<V> Term<V> {
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
             Term::DatatypeCtor(sort, _, _) => sort.clone().into(),
             Term::DatatypeDiscr(_, _) => Sort::int(),
+            Term::FormulaExistentialVar(sort, _) => sort.clone(),
         }
     }
 
     fn fv_impl(&self) -> Box<dyn Iterator<Item = &V> + '_> {
         match self {
             Term::Var(v) => Box::new(std::iter::once(v)),
-            Term::Null | Term::Bool(_) | Term::Int(_) | Term::String(_) => {
-                Box::new(std::iter::empty())
-            }
+            Term::Null
+            | Term::Bool(_)
+            | Term::Int(_)
+            | Term::String(_)
+            | Term::FormulaExistentialVar { .. } => Box::new(std::iter::empty()),
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
             Term::BoxCurrent(t) => t.fv_impl(),
@@ -1083,6 +1090,7 @@ pub enum Formula<V = TermVarIdx> {
     Not(Box<Formula<V>>),
     And(Vec<Formula<V>>),
     Or(Vec<Formula<V>>),
+    Exists(Vec<(String, Sort)>, Box<Formula<V>>),
 }
 
 impl<V> Default for Formula<V> {
@@ -1124,6 +1132,25 @@ where
                 );
                 inner.group()
             }
+            Formula::Exists(vars, fo) => {
+                let vars = allocator.intersperse(
+                    vars.iter().map(|(name, sort)| {
+                        allocator
+                            .text(name.clone())
+                            .append(allocator.text(":"))
+                            .append(allocator.text(" "))
+                            .append(sort.pretty(allocator))
+                    }),
+                    allocator.text(", ").append(allocator.line()),
+                );
+                allocator
+                    .text("∃")
+                    .append(vars)
+                    .append(allocator.text("."))
+                    .append(allocator.line())
+                    .append(fo.pretty(allocator).nest(2))
+                    .group()
+            }
         }
     }
 }
@@ -1139,7 +1166,9 @@ impl<V> Formula<V> {
         D::Doc: Clone,
     {
         match self {
-            Formula::And(_) | Formula::Or(_) => self.pretty(allocator).parens(),
+            Formula::And(_) | Formula::Or(_) | Formula::Exists { .. } => {
+                self.pretty(allocator).parens()
+            }
             _ => self.pretty(allocator),
         }
     }
@@ -1158,6 +1187,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => fo.is_bottom(),
             Formula::And(fs) => fs.iter().all(Formula::is_top),
             Formula::Or(fs) => fs.iter().any(Formula::is_top),
+            Formula::Exists(_, fo) => fo.is_top(),
         }
     }
 
@@ -1167,6 +1197,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => fo.is_top(),
             Formula::And(fs) => fs.iter().any(Formula::is_bottom),
             Formula::Or(fs) => fs.iter().all(Formula::is_bottom),
+            Formula::Exists(_, fo) => fo.is_bottom(),
         }
     }
 
@@ -1210,6 +1241,7 @@ impl<V> Formula<V> {
                 Formula::And(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect())
             }
             Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect()),
+            Formula::Exists(vars, fo) => Formula::Exists(vars, Box::new(fo.subst_var(f))),
         }
     }
 
@@ -1224,6 +1256,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Formula::Not(Box::new(fo.map_var(&mut f))),
             Formula::And(fs) => Formula::And(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
             Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
+            Formula::Exists(vars, fo) => Formula::Exists(vars, Box::new(fo.map_var(f))),
         }
     }
 
@@ -1237,6 +1270,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Box::new(fo.fv()),
             Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
+            Formula::Exists(_, fo) => Box::new(fo.fv()),
         }
     }
 
@@ -1250,6 +1284,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Box::new(fo.iter_atoms()),
             Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
+            Formula::Exists(_, fo) => Box::new(fo.iter_atoms()),
         }
     }
 
@@ -1290,6 +1325,9 @@ impl<V> Formula<V> {
                 } else if fs.len() == 1 {
                     *self = fs.pop().unwrap();
                 }
+            }
+            Formula::Exists(_, fo) => {
+                fo.simplify();
             }
         }
     }
