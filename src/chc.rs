@@ -1228,6 +1228,10 @@ impl<V> Formula<V> {
         }
     }
 
+    pub fn exists(vars: Vec<(String, Sort)>, body: Self) -> Self {
+        Formula::Exists(vars, Box::new(body))
+    }
+
     pub fn subst_var<F, W>(self, f: F) -> Formula<W>
     where
         F: FnMut(V) -> Term<W>,
