@@ -412,56 +412,55 @@ where
     }
 
     fn parse_binop_1(&mut self) -> Result<FormulaOrTerm<T::Output>> {
-        let lhs = self.parse_prefix()?;
+        let mut formula_or_term = self.parse_prefix()?;
 
-        let formula_or_term = match self.look_ahead_token(0).map(|t| &t.kind) {
-            Some(TokenKind::BinOp(BinOpToken::Star)) => {
-                self.consume();
-                let (lhs, _) = lhs
-                    .into_term()
-                    .ok_or_else(|| ParseAttrError::unexpected_formula("before * operator"))?;
-                let (rhs, _) = self
-                    .parse_prefix()?
-                    .into_term()
-                    .ok_or_else(|| ParseAttrError::unexpected_formula("after * operator"))?;
-                FormulaOrTerm::Term(lhs.mul(rhs), chc::Sort::int())
-            }
-            _ => return Ok(lhs),
-        };
+        while let Some(TokenKind::BinOp(BinOpToken::Star)) =
+            self.look_ahead_token(0).map(|t| &t.kind)
+        {
+            self.consume();
+            let (lhs, _) = formula_or_term
+                .into_term()
+                .ok_or_else(|| ParseAttrError::unexpected_formula("before * operator"))?;
+            let (rhs, _) = self
+                .parse_prefix()?
+                .into_term()
+                .ok_or_else(|| ParseAttrError::unexpected_formula("after * operator"))?;
+            formula_or_term = FormulaOrTerm::Term(lhs.mul(rhs), chc::Sort::int())
+        }
 
         Ok(formula_or_term)
     }
 
     fn parse_binop_2(&mut self) -> Result<FormulaOrTerm<T::Output>> {
-        let lhs = self.parse_binop_1()?;
+        let mut formula_or_term = self.parse_binop_1()?;
 
-        let formula_or_term = match self.look_ahead_token(0).map(|t| &t.kind) {
-            Some(TokenKind::BinOp(BinOpToken::Plus)) => {
-                self.consume();
-                let (lhs, _) = lhs
-                    .into_term()
-                    .ok_or_else(|| ParseAttrError::unexpected_formula("before + operator"))?;
-                let (rhs, _) = self
-                    .parse_binop_1()?
-                    .into_term()
-                    .ok_or_else(|| ParseAttrError::unexpected_formula("after + operator"))?;
-                FormulaOrTerm::Term(lhs.add(rhs), chc::Sort::int())
+        loop {
+            match self.look_ahead_token(0).map(|t| &t.kind) {
+                Some(TokenKind::BinOp(BinOpToken::Plus)) => {
+                    self.consume();
+                    let (lhs, _) = formula_or_term
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("before + operator"))?;
+                    let (rhs, _) = self
+                        .parse_binop_1()?
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("after + operator"))?;
+                    formula_or_term = FormulaOrTerm::Term(lhs.add(rhs), chc::Sort::int())
+                }
+                Some(TokenKind::BinOp(BinOpToken::Minus)) => {
+                    self.consume();
+                    let (lhs, _) = formula_or_term
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("before - operator"))?;
+                    let (rhs, _) = self
+                        .parse_binop_1()?
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("after - operator"))?;
+                    formula_or_term = FormulaOrTerm::Term(lhs.sub(rhs), chc::Sort::int())
+                }
+                _ => return Ok(formula_or_term),
             }
-            Some(TokenKind::BinOp(BinOpToken::Minus)) => {
-                self.consume();
-                let (lhs, _) = lhs
-                    .into_term()
-                    .ok_or_else(|| ParseAttrError::unexpected_formula("before - operator"))?;
-                let (rhs, _) = self
-                    .parse_binop_1()?
-                    .into_term()
-                    .ok_or_else(|| ParseAttrError::unexpected_formula("after - operator"))?;
-                FormulaOrTerm::Term(lhs.sub(rhs), chc::Sort::int())
-            }
-            _ => return Ok(lhs),
-        };
-
-        Ok(formula_or_term)
+        }
     }
 
     fn parse_binop_3(&mut self) -> Result<FormulaOrTerm<T::Output>> {
@@ -541,43 +540,37 @@ where
     }
 
     fn parse_binop_4(&mut self) -> Result<FormulaOrTerm<T::Output>> {
-        let lhs = self.parse_binop_3()?;
+        let mut formula_or_term = self.parse_binop_3()?;
 
-        let formula_or_term = match self.look_ahead_token(0).map(|t| &t.kind) {
-            Some(TokenKind::AndAnd) => {
-                self.consume();
-                let lhs = lhs
-                    .into_formula()
-                    .ok_or_else(|| ParseAttrError::unexpected_term("before && operator"))?;
-                let rhs = self
-                    .parse_binop_3()?
-                    .into_formula()
-                    .ok_or_else(|| ParseAttrError::unexpected_term("after && operator"))?;
-                FormulaOrTerm::Formula(lhs.and(rhs))
-            }
-            _ => return Ok(lhs),
-        };
+        while let Some(TokenKind::AndAnd) = self.look_ahead_token(0).map(|t| &t.kind) {
+            self.consume();
+            let lhs = formula_or_term
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("before && operator"))?;
+            let rhs = self
+                .parse_binop_3()?
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("after && operator"))?;
+            formula_or_term = FormulaOrTerm::Formula(lhs.and(rhs))
+        }
 
         Ok(formula_or_term)
     }
 
     fn parse_binop_5(&mut self) -> Result<FormulaOrTerm<T::Output>> {
-        let lhs = self.parse_binop_4()?;
+        let mut formula_or_term = self.parse_binop_4()?;
 
-        let formula_or_term = match self.look_ahead_token(0).map(|t| &t.kind) {
-            Some(TokenKind::OrOr) => {
-                self.consume();
-                let lhs = lhs
-                    .into_formula()
-                    .ok_or_else(|| ParseAttrError::unexpected_term("before || operator"))?;
-                let rhs = self
-                    .parse_binop_4()?
-                    .into_formula()
-                    .ok_or_else(|| ParseAttrError::unexpected_term("after || operator"))?;
-                FormulaOrTerm::Formula(lhs.or(rhs))
-            }
-            _ => return Ok(lhs),
-        };
+        while let Some(TokenKind::OrOr) = self.look_ahead_token(0).map(|t| &t.kind) {
+            self.consume();
+            let lhs = formula_or_term
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("before || operator"))?;
+            let rhs = self
+                .parse_binop_4()?
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("after || operator"))?;
+            formula_or_term = FormulaOrTerm::Formula(lhs.or(rhs))
+        }
 
         Ok(formula_or_term)
     }
