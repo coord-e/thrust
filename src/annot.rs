@@ -84,6 +84,10 @@ pub enum ParseAttrError {
     UnknownIdent { ident: Ident },
     #[error("operator {op:?} cannot be applied to a term of sort {}", .sort.display())]
     UnsortedOp { op: &'static str, sort: chc::Sort },
+    #[error("unexpected term {context}")]
+    UnexpectedTerm { context: &'static str },
+    #[error("unexpected formula {context}")]
+    UnexpectedFormula { context: &'static str },
 }
 
 impl ParseAttrError {
@@ -107,9 +111,75 @@ impl ParseAttrError {
     fn unsorted_op(op: &'static str, sort: chc::Sort) -> Self {
         ParseAttrError::UnsortedOp { op, sort }
     }
+
+    fn unexpected_term(context: &'static str) -> Self {
+        ParseAttrError::UnexpectedTerm { context }
+    }
+
+    fn unexpected_formula(context: &'static str) -> Self {
+        ParseAttrError::UnexpectedFormula { context }
+    }
 }
 
 type Result<T> = std::result::Result<T, ParseAttrError>;
+
+#[derive(Debug, Clone, Copy)]
+enum AmbiguousBinOp {
+    Eq,
+    Ne,
+    Ge,
+    Le,
+    Gt,
+    Lt,
+}
+
+#[derive(Debug, Clone)]
+enum FormulaOrTerm<T> {
+    Formula(chc::Formula<T>),
+    Term(chc::Term<T>, chc::Sort),
+    BinOp(chc::Term<T>, AmbiguousBinOp, chc::Term<T>),
+    Not(Box<FormulaOrTerm<T>>),
+}
+
+impl<T> FormulaOrTerm<T> {
+    fn into_formula(self) -> Option<chc::Formula<T>> {
+        let fo = match self {
+            FormulaOrTerm::Formula(fo) => fo,
+            FormulaOrTerm::Term { .. } => return None,
+            FormulaOrTerm::BinOp(lhs, binop, rhs) => {
+                let pred = match binop {
+                    AmbiguousBinOp::Eq => chc::KnownPred::EQUAL,
+                    AmbiguousBinOp::Ne => chc::KnownPred::NOT_EQUAL,
+                    AmbiguousBinOp::Ge => chc::KnownPred::GREATER_THAN_OR_EQUAL,
+                    AmbiguousBinOp::Le => chc::KnownPred::LESS_THAN_OR_EQUAL,
+                    AmbiguousBinOp::Gt => chc::KnownPred::GREATER_THAN,
+                    AmbiguousBinOp::Lt => chc::KnownPred::LESS_THAN,
+                };
+                chc::Formula::Atom(chc::Atom::new(pred.into(), vec![lhs, rhs]))
+            }
+            FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_formula()?.not(),
+        };
+        Some(fo)
+    }
+
+    fn into_term(self) -> Option<(chc::Term<T>, chc::Sort)> {
+        let (t, s) = match self {
+            FormulaOrTerm::Formula { .. } => return None,
+            FormulaOrTerm::Term(t, s) => (t, s),
+            FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Eq, rhs) => (lhs.eq(rhs), chc::Sort::bool()),
+            FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Ne, rhs) => (lhs.ne(rhs), chc::Sort::bool()),
+            FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Ge, rhs) => (lhs.ge(rhs), chc::Sort::bool()),
+            FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Le, rhs) => (lhs.le(rhs), chc::Sort::bool()),
+            FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Gt, rhs) => (lhs.gt(rhs), chc::Sort::bool()),
+            FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Lt, rhs) => (lhs.lt(rhs), chc::Sort::bool()),
+            FormulaOrTerm::Not(formula_or_term) => {
+                let (t, _) = formula_or_term.into_term()?;
+                (t.not(), chc::Sort::bool())
+            }
+        };
+        Some((t, s))
+    }
+}
 
 /// A parser for refinement type annotations and formula annotations.
 struct Parser<'a, T> {
@@ -184,10 +254,10 @@ where
         }
     }
 
-    fn parse_term_or_tuple(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
-        let mut terms_and_sorts = Vec::new();
+    fn parse_formula_or_term_or_tuple(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let mut formula_or_terms = Vec::new();
         loop {
-            terms_and_sorts.push(self.parse_term()?);
+            formula_or_terms.push(self.parse_formula_or_term()?);
             if let Some(Token {
                 kind: TokenKind::Comma,
                 ..
@@ -198,16 +268,27 @@ where
                 break;
             }
         }
-        if terms_and_sorts.len() == 1 {
-            Ok(terms_and_sorts.pop().unwrap())
+        if formula_or_terms.len() == 1 {
+            Ok(formula_or_terms.pop().unwrap())
         } else {
-            let (terms, sorts) = terms_and_sorts.into_iter().unzip();
-            Ok((chc::Term::tuple(terms), chc::Sort::tuple(sorts)))
+            let mut terms = Vec::new();
+            let mut sorts = Vec::new();
+            for ft in formula_or_terms {
+                let (t, s) = ft
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("in tuple"))?;
+                terms.push(t);
+                sorts.push(s);
+            }
+            Ok(FormulaOrTerm::Term(
+                chc::Term::tuple(terms),
+                chc::Sort::tuple(sorts),
+            ))
         }
     }
 
-    fn parse_atom_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
-        let tt = self.next_token_tree("term")?.clone();
+    fn parse_atom(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let tt = self.next_token_tree("term or formula")?.clone();
 
         let t = match &tt {
             TokenTree::Token(t, _) => t,
@@ -216,20 +297,26 @@ where
                     resolver: self.boxed_resolver(),
                     cursor: s.trees(),
                 };
-                let (term, sort) = parser.parse_term_or_tuple()?;
+                let formula_or_term = parser.parse_formula_or_term_or_tuple()?;
                 parser.end_of_input()?;
-                return Ok((term, sort));
+                return Ok(formula_or_term);
             }
             _ => return Err(ParseAttrError::unexpected_token_tree("token", tt)),
         };
 
-        let (term, sort) = if let Some((ident, _)) = t.ident() {
-            let (v, sort) = self.resolve(ident)?;
-            (chc::Term::var(v), sort)
+        let formula_or_term = if let Some((ident, _)) = t.ident() {
+            match ident.as_str() {
+                "true" => FormulaOrTerm::Formula(chc::Formula::top()),
+                "false" => FormulaOrTerm::Formula(chc::Formula::bottom()),
+                _ => {
+                    let (v, sort) = self.resolve(ident)?;
+                    FormulaOrTerm::Term(chc::Term::var(v), sort)
+                }
+            }
         } else {
             match t.kind {
                 TokenKind::Literal(lit) => match lit.kind {
-                    LitKind::Integer => (
+                    LitKind::Integer => FormulaOrTerm::Term(
                         chc::Term::int(lit.symbol.as_str().parse().unwrap()),
                         chc::Sort::int(),
                     ),
@@ -244,11 +331,11 @@ where
             }
         };
 
-        Ok((term, sort))
+        Ok(formula_or_term)
     }
 
-    fn parse_postfix_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
-        let (term, sort) = self.parse_atom_term()?;
+    fn parse_postfix(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let formula_or_term = self.parse_atom()?;
 
         let mut fields = Vec::new();
         while let Some(Token {
@@ -269,201 +356,227 @@ where
             }
         }
 
+        if fields.is_empty() {
+            return Ok(formula_or_term);
+        }
+
+        let (term, sort) = formula_or_term
+            .into_term()
+            .ok_or_else(|| ParseAttrError::unexpected_formula("before projection"))?;
         let term = fields.iter().fold(term, |acc, idx| acc.tuple_proj(*idx));
         let sort = fields.iter().fold(sort, |acc, idx| acc.tuple_elem(*idx));
-        Ok((term, sort))
+        Ok(FormulaOrTerm::Term(term, sort))
     }
 
-    fn parse_prefix_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
-        let (term, sort) = match self.look_ahead_token(0).map(|t| &t.kind) {
-            Some(TokenKind::BinOp(BinOpToken::Minus)) => {
-                self.consume();
-                let (operand, sort) = self.parse_postfix_term()?;
-                (operand.neg(), sort)
-            }
-            Some(TokenKind::BinOp(BinOpToken::Star)) => {
-                self.consume();
-                let (operand, sort) = self.parse_postfix_term()?;
-                match sort {
-                    chc::Sort::Box(inner) => (chc::Term::box_current(operand), *inner),
-                    chc::Sort::Mut(inner) => (chc::Term::mut_current(operand), *inner),
-                    _ => return Err(ParseAttrError::unsorted_op("*", sort)),
+    fn parse_prefix(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let formula_or_term =
+            match self.look_ahead_token(0).map(|t| &t.kind) {
+                Some(TokenKind::BinOp(BinOpToken::Minus)) => {
+                    self.consume();
+                    let (operand, sort) = self.parse_postfix()?.into_term().ok_or_else(|| {
+                        ParseAttrError::unexpected_formula("after unary - operator")
+                    })?;
+                    FormulaOrTerm::Term(operand.neg(), sort)
                 }
-            }
-            Some(TokenKind::BinOp(BinOpToken::Caret)) => {
-                self.consume();
-                let (operand, sort) = self.parse_postfix_term()?;
-                if let chc::Sort::Mut(inner) = sort {
-                    (chc::Term::mut_final(operand), *inner)
-                } else {
-                    return Err(ParseAttrError::unsorted_op("^", sort));
+                Some(TokenKind::BinOp(BinOpToken::Star)) => {
+                    self.consume();
+                    let (operand, sort) = self.parse_postfix()?.into_term().ok_or_else(|| {
+                        ParseAttrError::unexpected_formula("after unary * operator")
+                    })?;
+                    let (t, s) = match sort {
+                        chc::Sort::Box(inner) => (chc::Term::box_current(operand), *inner),
+                        chc::Sort::Mut(inner) => (chc::Term::mut_current(operand), *inner),
+                        _ => return Err(ParseAttrError::unsorted_op("*", sort)),
+                    };
+                    FormulaOrTerm::Term(t, s)
                 }
-            }
-            _ => self.parse_postfix_term()?,
-        };
-        Ok((term, sort))
+                Some(TokenKind::BinOp(BinOpToken::Caret)) => {
+                    self.consume();
+                    let (operand, sort) = self.parse_postfix()?.into_term().ok_or_else(|| {
+                        ParseAttrError::unexpected_formula("after unary ^ operator")
+                    })?;
+                    if let chc::Sort::Mut(inner) = sort {
+                        FormulaOrTerm::Term(chc::Term::mut_final(operand), *inner)
+                    } else {
+                        return Err(ParseAttrError::unsorted_op("^", sort));
+                    }
+                }
+                Some(TokenKind::Not) => {
+                    self.consume();
+                    let formula_or_term = self.parse_postfix()?;
+                    FormulaOrTerm::Not(Box::new(formula_or_term))
+                }
+                _ => self.parse_postfix()?,
+            };
+        Ok(formula_or_term)
     }
 
-    fn parse_term(&mut self) -> Result<(chc::Term<T::Output>, chc::Sort)> {
-        let (lhs, lhs_sort) = self.parse_prefix_term()?;
+    fn parse_binop_1(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let mut formula_or_term = self.parse_prefix()?;
 
-        let (term, sort) = match self.look_ahead_token(0).map(|t| &t.kind) {
-            Some(TokenKind::BinOp(BinOpToken::Plus)) => {
-                self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.add(rhs), chc::Sort::int())
+        while let Some(TokenKind::BinOp(BinOpToken::Star)) =
+            self.look_ahead_token(0).map(|t| &t.kind)
+        {
+            self.consume();
+            let (lhs, _) = formula_or_term
+                .into_term()
+                .ok_or_else(|| ParseAttrError::unexpected_formula("before * operator"))?;
+            let (rhs, _) = self
+                .parse_prefix()?
+                .into_term()
+                .ok_or_else(|| ParseAttrError::unexpected_formula("after * operator"))?;
+            formula_or_term = FormulaOrTerm::Term(lhs.mul(rhs), chc::Sort::int())
+        }
+
+        Ok(formula_or_term)
+    }
+
+    fn parse_binop_2(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let mut formula_or_term = self.parse_binop_1()?;
+
+        loop {
+            match self.look_ahead_token(0).map(|t| &t.kind) {
+                Some(TokenKind::BinOp(BinOpToken::Plus)) => {
+                    self.consume();
+                    let (lhs, _) = formula_or_term
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("before + operator"))?;
+                    let (rhs, _) = self
+                        .parse_binop_1()?
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("after + operator"))?;
+                    formula_or_term = FormulaOrTerm::Term(lhs.add(rhs), chc::Sort::int())
+                }
+                Some(TokenKind::BinOp(BinOpToken::Minus)) => {
+                    self.consume();
+                    let (lhs, _) = formula_or_term
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("before - operator"))?;
+                    let (rhs, _) = self
+                        .parse_binop_1()?
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("after - operator"))?;
+                    formula_or_term = FormulaOrTerm::Term(lhs.sub(rhs), chc::Sort::int())
+                }
+                _ => return Ok(formula_or_term),
             }
-            Some(TokenKind::BinOp(BinOpToken::Minus)) => {
-                self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.sub(rhs), chc::Sort::int())
-            }
-            Some(TokenKind::BinOp(BinOpToken::Star)) => {
-                self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.mul(rhs), chc::Sort::int())
-            }
+        }
+    }
+
+    fn parse_binop_3(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let lhs = self.parse_binop_2()?;
+
+        let formula_or_term = match self.look_ahead_token(0).map(|t| &t.kind) {
             Some(TokenKind::EqEq) => {
                 self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.eq(rhs), chc::Sort::bool())
+                let (lhs, _) = lhs
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("before == operator"))?;
+                let (rhs, _) = self
+                    .parse_binop_2()?
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("after == operator"))?;
+                FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Eq, rhs)
             }
             Some(TokenKind::Ne) => {
                 self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.ne(rhs), chc::Sort::bool())
+                let (lhs, _) = lhs
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("before != operator"))?;
+                let (rhs, _) = self
+                    .parse_binop_2()?
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("after != operator"))?;
+                FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Ne, rhs)
             }
             Some(TokenKind::Ge) => {
                 self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.ge(rhs), chc::Sort::bool())
+                let (lhs, _) = lhs
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("before >= operator"))?;
+                let (rhs, _) = self
+                    .parse_binop_2()?
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("after >= operator"))?;
+                FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Ge, rhs)
             }
             Some(TokenKind::Le) => {
                 self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.le(rhs), chc::Sort::bool())
+                let (lhs, _) = lhs
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("before <= operator"))?;
+                let (rhs, _) = self
+                    .parse_binop_2()?
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("after <= operator"))?;
+                FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Le, rhs)
             }
             Some(TokenKind::Gt) => {
                 self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.gt(rhs), chc::Sort::bool())
+                let (lhs, _) = lhs
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("before > operator"))?;
+                let (rhs, _) = self
+                    .parse_binop_2()?
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("after > operator"))?;
+                FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Gt, rhs)
             }
             Some(TokenKind::Lt) => {
                 self.consume();
-                let (rhs, _) = self.parse_prefix_term()?;
-                (lhs.lt(rhs), chc::Sort::bool())
+                let (lhs, _) = lhs
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("before < operator"))?;
+                let (rhs, _) = self
+                    .parse_binop_2()?
+                    .into_term()
+                    .ok_or_else(|| ParseAttrError::unexpected_formula("after < operator"))?;
+                FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Lt, rhs)
             }
-            _ => return Ok((lhs, lhs_sort)),
+            _ => return Ok(lhs),
         };
 
-        Ok((term, sort))
+        Ok(formula_or_term)
     }
 
-    fn parse_atom(&mut self) -> Result<chc::Atom<T::Output>> {
-        if let Some((ident, _)) = self.look_ahead_token(0).and_then(|t| t.ident()) {
-            if ident.as_str() == "true" {
-                self.consume();
-                return Ok(chc::Atom::top());
-            }
-            if ident.as_str() == "false" {
-                self.consume();
-                return Ok(chc::Atom::bottom());
-            }
-        }
+    fn parse_binop_4(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let mut formula_or_term = self.parse_binop_3()?;
 
-        let (lhs, _) = self.parse_prefix_term()?;
-        let pred = match self.next_token("<=, >=, <, >, == or !=")? {
-            Token {
-                kind: TokenKind::EqEq,
-                ..
-            } => chc::KnownPred::EQUAL,
-            Token {
-                kind: TokenKind::Ne,
-                ..
-            } => chc::KnownPred::NOT_EQUAL,
-            Token {
-                kind: TokenKind::Ge,
-                ..
-            } => chc::KnownPred::GREATER_THAN_OR_EQUAL,
-            Token {
-                kind: TokenKind::Le,
-                ..
-            } => chc::KnownPred::LESS_THAN_OR_EQUAL,
-            Token {
-                kind: TokenKind::Gt,
-                ..
-            } => chc::KnownPred::GREATER_THAN,
-            Token {
-                kind: TokenKind::Lt,
-                ..
-            } => chc::KnownPred::LESS_THAN,
-            t => {
-                return Err(ParseAttrError::unexpected_token(
-                    "<=, >=, <, >, == or !=",
-                    t.clone(),
-                ))
-            }
-        };
-        let (rhs, _) = self.parse_term()?;
-        Ok(chc::Atom::new(pred.into(), vec![lhs, rhs]))
-    }
-
-    fn parse_formula_atom(&mut self) -> Result<chc::Formula<T::Output>> {
-        match self.look_ahead_token_tree(0).cloned() {
-            Some(TokenTree::Token(
-                Token {
-                    kind: TokenKind::Not,
-                    ..
-                },
-                _,
-            )) => {
-                self.consume();
-                let atom = self.parse_atom()?;
-                Ok(chc::Formula::Atom(atom).not())
-            }
-            //Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, s)) => {
-            //    self.consume();
-            //    let mut parser = Parser {
-            //        resolver: self.boxed_resolver(),
-            //        cursor: s.trees(),
-            //    };
-            //    let formula = parser.parse_formula()?;
-            //    parser.end_of_input()?;
-            //    Ok(formula)
-            //}
-            _ => {
-                let atom = self.parse_atom()?;
-                Ok(chc::Formula::Atom(atom))
-            }
-        }
-    }
-
-    fn parse_formula_and(&mut self) -> Result<chc::Formula<T::Output>> {
-        let mut formula = self.parse_formula_atom()?;
-        while let Some(Token {
-            kind: TokenKind::AndAnd,
-            ..
-        }) = self.look_ahead_token(0)
-        {
+        while let Some(TokenKind::AndAnd) = self.look_ahead_token(0).map(|t| &t.kind) {
             self.consume();
-            let next_formula = self.parse_formula_atom()?;
-            formula = formula.and(next_formula);
+            let lhs = formula_or_term
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("before && operator"))?;
+            let rhs = self
+                .parse_binop_3()?
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("after && operator"))?;
+            formula_or_term = FormulaOrTerm::Formula(lhs.and(rhs))
         }
-        Ok(formula)
+
+        Ok(formula_or_term)
     }
 
-    fn parse_formula(&mut self) -> Result<chc::Formula<T::Output>> {
-        let mut formula = self.parse_formula_and()?;
-        while let Some(Token {
-            kind: TokenKind::OrOr,
-            ..
-        }) = self.look_ahead_token(0)
-        {
+    fn parse_binop_5(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        let mut formula_or_term = self.parse_binop_4()?;
+
+        while let Some(TokenKind::OrOr) = self.look_ahead_token(0).map(|t| &t.kind) {
             self.consume();
-            let next_formula = self.parse_formula_and()?;
-            formula = formula.or(next_formula);
+            let lhs = formula_or_term
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("before || operator"))?;
+            let rhs = self
+                .parse_binop_4()?
+                .into_formula()
+                .ok_or_else(|| ParseAttrError::unexpected_term("after || operator"))?;
+            formula_or_term = FormulaOrTerm::Formula(lhs.or(rhs))
         }
-        Ok(formula)
+
+        Ok(formula_or_term)
+    }
+
+    fn parse_formula_or_term(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        self.parse_binop_5()
     }
 
     fn parse_ty(&mut self) -> Result<rty::Type<T::Output>> {
@@ -611,7 +724,10 @@ where
         if let Some(self_ident) = self_ident {
             parser.resolver.set_self(self_ident, ty.to_sort());
         }
-        let formula = parser.parse_formula()?;
+        let formula = parser
+            .parse_formula_or_term()?
+            .into_formula()
+            .ok_or_else(|| ParseAttrError::unexpected_term("in refinement"))?;
         parser.end_of_input()?;
         Ok(rty::RefinedType::new(ty, formula.into()))
     }
@@ -622,7 +738,11 @@ where
                 return Ok(AnnotFormula::Auto);
             }
         }
-        self.parse_formula().map(AnnotFormula::Formula)
+        let formula = self
+            .parse_formula_or_term()?
+            .into_formula()
+            .ok_or_else(|| ParseAttrError::unexpected_term("in annotation"))?;
+        Ok(AnnotFormula::Formula(formula))
     }
 }
 
