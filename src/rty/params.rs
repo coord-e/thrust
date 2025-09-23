@@ -71,6 +71,10 @@ impl<T> std::ops::Index<TypeParamIdx> for TypeParamSubst<T> {
 }
 
 impl<T> TypeParamSubst<T> {
+    pub fn new(subst: BTreeMap<TypeParamIdx, RefinedType<T>>) -> Self {
+        Self { subst }
+    }
+
     pub fn singleton(idx: TypeParamIdx, ty: RefinedType<T>) -> Self {
         let mut subst = BTreeMap::default();
         subst.insert(idx, ty);
