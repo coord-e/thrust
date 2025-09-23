@@ -251,6 +251,29 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 continue;
             };
             let adt = self.tcx.adt_def(local_def_id);
+
+            // The index of TyKind::ParamTy is based on the every generic parameters in
+            // the definition, including lifetimes. Given the following definition:
+            //
+            // struct X<'a, T> { f: &'a T }
+            //
+            // The type of field `f` is &T1 (not T0). However, in Thrust, we ignore lifetime
+            // parameters and the index of rty::ParamType is based on type parameters only.
+            // We're building a mapping from the original index to the new index here.
+            let generics = self.tcx.generics_of(local_def_id);
+            let mut type_param_mapping: std::collections::HashMap<usize, usize> =
+                Default::default();
+            for i in 0..generics.count() {
+                let generic_param = generics.param_at(i, self.tcx);
+                match generic_param.kind {
+                    mir_ty::GenericParamDefKind::Lifetime => {}
+                    mir_ty::GenericParamDefKind::Type { .. } => {
+                        type_param_mapping.insert(i, type_param_mapping.len());
+                    }
+                    mir_ty::GenericParamDefKind::Const { .. } => unimplemented!(),
+                }
+            }
+
             let name = refine::datatype_symbol(self.tcx, local_def_id.to_def_id());
             let variants: IndexVec<_, _> = adt
                 .variants()
@@ -264,7 +287,26 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .iter()
                         .map(|field| {
                             let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                            self.ctx.unrefined_ty(field_ty)
+
+                            // see the comment above about this mapping
+                            let subst = rty::TypeParamSubst::new(
+                                type_param_mapping
+                                    .iter()
+                                    .map(|(old, new)| {
+                                        let old = rty::TypeParamIdx::from(*old);
+                                        let new =
+                                            rty::ParamType::new(rty::TypeParamIdx::from(*new));
+                                        (old, rty::RefinedType::unrefined(new.into()))
+                                    })
+                                    .collect(),
+                            );
+
+                            // the subst doesn't contain refinements, so it's OK to take ty only
+                            // after substitution
+                            let mut field_rty =
+                                rty::RefinedType::unrefined(self.ctx.unrefined_ty(field_ty));
+                            field_rty.subst_ty_params(&subst);
+                            field_rty.ty
                         })
                         .collect();
                     rty::EnumVariantDef {
@@ -275,19 +317,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 })
                 .collect();
 
-            let ty_params = adt
-                .all_fields()
-                .map(|f| self.tcx.type_of(f.did).instantiate_identity())
-                .flat_map(|ty| {
-                    if let mir_ty::TyKind::Param(p) = ty.kind() {
-                        Some(p.index as usize)
-                    } else {
-                        None
-                    }
-                })
-                .max()
-                .map(|max| max + 1)
-                .unwrap_or(0);
+            let ty_params = type_param_mapping.len();
             tracing::debug!(?local_def_id, ?name, ?ty_params, "ty_params count");
 
             let def = rty::EnumDatatypeDef {
