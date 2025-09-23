@@ -39,7 +39,7 @@ impl TypeParamIdx {
     }
 }
 
-pub type TypeParams<T> = IndexVec<TypeParamIdx, RefinedType<T>>;
+pub type TypeArgs<T> = IndexVec<TypeParamIdx, RefinedType<T>>;
 
 /// A substitution for type parameters that maps type parameters to refinement types.
 #[derive(Debug, Clone)]
@@ -55,8 +55,8 @@ impl<T> Default for TypeParamSubst<T> {
     }
 }
 
-impl<T> From<TypeParams<T>> for TypeParamSubst<T> {
-    fn from(params: TypeParams<T>) -> Self {
+impl<T> From<TypeArgs<T>> for TypeParamSubst<T> {
+    fn from(params: TypeArgs<T>) -> Self {
         let subst = params.into_iter_enumerated().collect();
         Self { subst }
     }
@@ -98,20 +98,20 @@ impl<T> TypeParamSubst<T> {
         }
     }
 
-    pub fn into_params<F>(mut self, expected_len: usize, mut default: F) -> TypeParams<T>
+    pub fn into_args<F>(mut self, expected_len: usize, mut default: F) -> TypeArgs<T>
     where
         T: chc::Var,
         F: FnMut(TypeParamIdx) -> RefinedType<T>,
     {
-        let mut params = TypeParams::new();
+        let mut args = TypeArgs::new();
         for idx in 0..expected_len {
             let ty = self
                 .subst
                 .remove(&idx.into())
                 .unwrap_or_else(|| default(idx.into()));
-            params.push(ty);
+            args.push(ty);
         }
-        params
+        args
     }
 
     pub fn strip_refinement(self) -> TypeParamSubst<Closed> {

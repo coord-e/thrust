@@ -219,7 +219,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             .into_iter()
                             .map(|ty| rty::RefinedType::unrefined(ty.vacuous()));
 
-                        let params: IndexVec<_, _> = args
+                        let rty_args: IndexVec<_, _> = args
                             .types()
                             .map(|ty| {
                                 self.ctx
@@ -230,15 +230,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         for (field_pty, mut variant_rty) in
                             field_tys.clone().into_iter().zip(variant_rtys)
                         {
-                            variant_rty.instantiate_ty_params(params.clone());
+                            variant_rty.instantiate_ty_params(rty_args.clone());
                             let cs = self
                                 .env
                                 .relate_sub_refined_type(&field_pty.into(), &variant_rty.boxed());
                             self.ctx.extend_clauses(cs);
                         }
 
-                        let sort_args: Vec<_> = params.iter().map(|rty| rty.ty.to_sort()).collect();
-                        let ty = rty::EnumType::new(ty_sym.clone(), params).into();
+                        let sort_args: Vec<_> = rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
+                        let ty = rty::EnumType::new(ty_sym.clone(), rty_args).into();
 
                         let mut builder = PlaceTypeBuilder::default();
                         let mut field_terms = Vec::new();
