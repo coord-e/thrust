@@ -14,7 +14,7 @@ use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
     self, Assumption, BasicBlockType, Env, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx,
-    TemplateTypeGenerator, UnrefinedTypeGenerator, Var,
+    TypeBuilder, Var,
 };
 use crate::rty::{
     self, ClauseBuilderExt as _, ClauseScope as _, ShiftExistential as _, Subtyping as _,
@@ -222,9 +222,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         let rty_args: IndexVec<_, _> = args
                             .types()
                             .map(|ty| {
-                                self.ctx
-                                    .build_template_ty_with_scope(&self.env)
-                                    .refined_ty(ty)
+                                TypeBuilder::new(self.tcx)
+                                    .for_template(&mut self.ctx)
+                                    .with_scope(&self.env)
+                                    .build_refined(ty)
                             })
                             .collect();
                         for (field_pty, mut variant_rty) in
@@ -237,7 +238,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             self.ctx.extend_clauses(cs);
                         }
 
-                        let sort_args: Vec<_> = rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
+                        let sort_args: Vec<_> =
+                            rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
                         let ty = rty::EnumType::new(ty_sym.clone(), rty_args).into();
 
                         let mut builder = PlaceTypeBuilder::default();
@@ -433,7 +435,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let func_ty = match func.const_fn_def() {
             // TODO: move this to well-known defs?
             Some((def_id, args)) if self.is_box_new(def_id) => {
-                let inner_ty = self.ctx.build_template_ty().ty(args.type_at(0)).vacuous();
+                let inner_ty = TypeBuilder::new(self.tcx)
+                    .for_template(&mut self.ctx)
+                    .build(args.type_at(0))
+                    .vacuous();
                 let param = rty::RefinedType::unrefined(inner_ty.clone());
                 let ret_term =
                     chc::Term::box_(chc::Term::var(rty::FunctionParamIdx::from(0_usize)));
@@ -444,7 +449,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 rty::FunctionType::new([param].into_iter().collect(), ret).into()
             }
             Some((def_id, args)) if self.is_mem_swap(def_id) => {
-                let inner_ty = self.ctx.unrefined_ty(args.type_at(0)).vacuous();
+                let inner_ty = TypeBuilder::new(self.tcx).build(args.type_at(0)).vacuous();
                 let param1 =
                     rty::RefinedType::unrefined(rty::PointerType::mut_to(inner_ty.clone()).into());
                 let param2 =
@@ -531,7 +536,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'tcx>) {
-        let ty = self.ctx.unrefined_ty(ty);
+        let ty = TypeBuilder::new(self.tcx).build(ty);
         let temp_var = self.env.push_temp_var(ty.vacuous());
         self.prophecy_vars.insert(statement_index, temp_var);
         tracing::debug!(stmt_idx = %statement_index, temp_var = ?temp_var, "add_prophecy_var");
@@ -552,7 +557,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         referent: mir::Place<'tcx>,
         prophecy_ty: mir_ty::Ty<'tcx>,
     ) -> rty::RefinedType<Var> {
-        let prophecy_ty = self.ctx.unrefined_ty(prophecy_ty);
+        let prophecy_ty = TypeBuilder::new(self.tcx).build(prophecy_ty);
         let prophecy = self.env.push_temp_var(prophecy_ty.vacuous());
         let place = self.elaborate_place_for_borrow(&referent);
         self.env.borrow_place(place, prophecy).into()
@@ -664,10 +669,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
 
             let decl = self.local_decls[destination].clone();
-            let rty = self
-                .ctx
-                .build_template_ty_with_scope(&self.env)
-                .refined_ty(decl.ty);
+            let rty = TypeBuilder::new(self.tcx)
+                .for_template(&mut self.ctx)
+                .with_scope(&self.env)
+                .build_refined(decl.ty);
             self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
             self.bind_local(destination, rty);
         }
@@ -738,9 +743,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     #[tracing::instrument(skip(self))]
     fn ret_template(&mut self) -> rty::RefinedType<Var> {
         let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
-        self.ctx
-            .build_template_ty_with_scope(&self.env)
-            .refined_ty(ret_ty)
+        TypeBuilder::new(self.tcx)
+            .for_template(&mut self.ctx)
+            .with_scope(&self.env)
+            .build_refined(ret_ty)
     }
 
     // TODO: remove this

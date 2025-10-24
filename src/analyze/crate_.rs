@@ -11,7 +11,7 @@ use rustc_span::symbol::Ident;
 use crate::analyze;
 use crate::annot::{self, AnnotFormula, AnnotParser, ResolverExt as _};
 use crate::chc;
-use crate::refine::{self, TemplateTypeGenerator, UnrefinedTypeGenerator};
+use crate::refine::{self, TypeBuilder};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 /// An implementation of local crate analysis.
@@ -132,13 +132,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
-            let input_ty = self.ctx.unrefined_ty(*input_ty);
+            let input_ty = TypeBuilder::new(self.tcx).build(*input_ty);
             param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
         let mut require_annot = self.extract_require_annot(&param_resolver, def_id);
         let mut ensure_annot = {
-            let output_ty = self.ctx.unrefined_ty(sig.output());
+            let output_ty = TypeBuilder::new(self.tcx).build(sig.output());
             let resolver = annot::StackedResolver::default()
                 .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
                 .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
@@ -175,7 +175,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.trusted.insert(def_id);
         }
 
-        let mut builder = self.ctx.build_function_template_ty(sig);
+        let mut builder = TypeBuilder::new(self.tcx).for_function_template(&mut self.ctx, sig);
         if let Some(AnnotFormula::Formula(require)) = require_annot {
             let formula = require.map_var(|idx| {
                 if idx.index() == sig.inputs().len() - 1 {
@@ -303,8 +303,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
                             // the subst doesn't contain refinements, so it's OK to take ty only
                             // after substitution
-                            let mut field_rty =
-                                rty::RefinedType::unrefined(self.ctx.unrefined_ty(field_ty));
+                            let mut field_rty = rty::RefinedType::unrefined(
+                                TypeBuilder::new(self.tcx).build(field_ty),
+                            );
                             field_rty.subst_ty_params(&subst);
                             field_rty.ty
                         })

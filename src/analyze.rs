@@ -123,19 +123,9 @@ pub struct Analyzer<'tcx> {
     enum_defs: Rc<RefCell<HashMap<DefId, rty::EnumDatatypeDef>>>,
 }
 
-impl<'tcx> crate::refine::TemplateTypeGenerator<'tcx> for Analyzer<'tcx> {
-    fn tcx(&self) -> TyCtxt<'tcx> {
-        self.tcx
-    }
-
+impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
     fn register_template<V>(&mut self, tmpl: rty::Template<V>) -> rty::RefinedType<V> {
         tmpl.into_refined_type(|pred_sig| self.generate_pred_var(pred_sig))
-    }
-}
-
-impl<'tcx> crate::refine::UnrefinedTypeGenerator<'tcx> for Analyzer<'tcx> {
-    fn tcx(&self) -> TyCtxt<'tcx> {
-        self.tcx
     }
 }
 
