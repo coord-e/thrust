@@ -558,7 +558,8 @@ impl rty::ClauseScope for Env {
     }
 }
 
-impl refine::TemplateScope<Var> for Env {
+impl refine::TemplateScope for Env {
+    type Var = Var;
     fn build_template(&self) -> rty::TemplateBuilder<Var> {
         let mut builder = rty::TemplateBuilder::default();
         for (v, sort) in self.dependencies() {
