@@ -59,6 +59,19 @@ where
     }
 }
 
+trait ParamTypeMapper {
+    fn map_param_ty(&self, ty: rty::ParamType) -> rty::Type<rty::Closed>;
+}
+
+impl<F> ParamTypeMapper for F
+where
+    F: Fn(rty::ParamType) -> rty::Type<rty::Closed>,
+{
+    fn map_param_ty(&self, ty: rty::ParamType) -> rty::Type<rty::Closed> {
+        self(ty)
+    }
+}
+
 /// Translates [`mir_ty::Ty`] to [`rty::Type`].
 ///
 /// This struct implements a translation from Rust MIR types to Thrust types.
@@ -73,6 +86,7 @@ pub struct TypeBuilder<'tcx> {
     /// These indices may differ because we skip lifetime parameters.
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
+    param_type_mapper: std::rc::Rc<dyn ParamTypeMapper>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
@@ -92,15 +106,25 @@ impl<'tcx> TypeBuilder<'tcx> {
         Self {
             tcx,
             param_idx_mapping,
+            param_type_mapper: std::rc::Rc::new(|ty: rty::ParamType| ty.into()),
         }
     }
 
-    fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::ParamType {
+    pub fn with_param_mapper<F>(mut self, mapper: F) -> Self
+    where
+        F: Fn(rty::ParamType) -> rty::Type<rty::Closed> + 'static,
+    {
+        self.param_type_mapper = std::rc::Rc::new(mapper);
+        self
+    }
+
+    fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
         let index = *self
             .param_idx_mapping
             .get(&ty.index)
             .expect("unknown type param idx");
-        rty::ParamType::new(index)
+        let param_ty = rty::ParamType::new(index);
+        self.param_type_mapper.map_param_ty(param_ty)
     }
 
     // TODO: consolidate two impls
@@ -125,7 +149,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
-            mir_ty::TyKind::Param(ty) => self.translate_param_type(ty).into(),
+            mir_ty::TyKind::Param(ty) => self.translate_param_type(ty),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
@@ -251,7 +275,7 @@ where
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
-            mir_ty::TyKind::Param(ty) => self.inner.translate_param_type(ty).into(),
+            mir_ty::TyKind::Param(ty) => self.inner.translate_param_type(ty).vacuous(),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();

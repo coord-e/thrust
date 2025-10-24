@@ -26,6 +26,7 @@ pub struct Analyzer<'tcx, 'ctx> {
 
     body: Body<'tcx>,
     drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints>,
+    type_builder: TypeBuilder<'tcx>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -306,7 +307,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
-            let rty = TypeBuilder::new(self.tcx, self.local_def_id.to_def_id())
+            let rty = self
+                .type_builder
                 .for_template(&mut self.ctx)
                 .build_basic_block(live_locals, ret_ty);
             self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
@@ -321,6 +323,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
+                .type_builder(self.type_builder.clone())
                 .run(&rty);
         }
     }
@@ -426,13 +429,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let body = tcx.optimized_mir(local_def_id.to_def_id()).clone();
         let drop_points = Default::default();
+        let type_builder = TypeBuilder::new(tcx, local_def_id.to_def_id());
         Self {
             ctx,
             tcx,
             local_def_id,
             body,
             drop_points,
+            type_builder,
         }
+    }
+
+    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
+        self.type_builder = type_builder;
+        self
     }
 
     pub fn run(&mut self, expected: &rty::RefinedType) {
