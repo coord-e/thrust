@@ -11,13 +11,14 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
+use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{self, BasicBlockType};
+use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
 
 mod annot;
@@ -103,6 +104,17 @@ impl<'tcx> ReplacePlacesVisitor<'tcx> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DeferredDefTy<'tcx> {
+    cache: Rc<RefCell<HashMap<Vec<mir_ty::Ty<'tcx>>, rty::RefinedType>>>,
+}
+
+#[derive(Debug, Clone)]
+enum DefTy<'tcx> {
+    Concrete(rty::RefinedType),
+    Deferred(DeferredDefTy<'tcx>),
+}
+
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -112,7 +124,7 @@ pub struct Analyzer<'tcx> {
     /// currently contains only local-def templates,
     /// but will be extended to contain externally known def's refinement types
     /// (at least for every defs referenced by local def bodies)
-    defs: HashMap<DefId, rty::RefinedType>,
+    defs: HashMap<DefId, DefTy<'tcx>>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -207,11 +219,72 @@ impl<'tcx> Analyzer<'tcx> {
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
         tracing::info!(def_id = ?def_id, rty = %rty.display(), "register_def");
-        self.defs.insert(def_id, rty);
+        self.defs.insert(def_id, DefTy::Concrete(rty));
     }
 
-    pub fn def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
-        self.defs.get(&def_id)
+    pub fn register_deferred_def(&mut self, def_id: DefId) {
+        tracing::info!(def_id = ?def_id, "register_deferred_def");
+        self.defs.insert(
+            def_id,
+            DefTy::Deferred(DeferredDefTy {
+                cache: Rc::new(RefCell::new(HashMap::new())),
+            }),
+        );
+    }
+
+    pub fn concrete_def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
+        self.defs.get(&def_id).and_then(|def_ty| match def_ty {
+            DefTy::Concrete(rty) => Some(rty),
+            DefTy::Deferred(_) => None,
+        })
+    }
+
+    pub fn def_ty_with_args(
+        &mut self,
+        def_id: DefId,
+        args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Option<rty::RefinedType> {
+        let type_builder = TypeBuilder::new(self.tcx, def_id);
+        let rty_args: IndexVec<_, _> = args.types().map(|ty| type_builder.build(ty)).collect();
+
+        let deferred_ty = match self.defs.get(&def_id)? {
+            DefTy::Concrete(rty) => {
+                let mut def_ty = rty.clone();
+                def_ty.instantiate_ty_params(
+                    rty_args
+                        .clone()
+                        .into_iter()
+                        .map(rty::RefinedType::unrefined)
+                        .collect(),
+                );
+                return Some(def_ty);
+            }
+            DefTy::Deferred(deferred) => deferred,
+        };
+
+        let ty_args: Vec<_> = args.types().collect();
+        let deferred_ty_cache = Rc::clone(&deferred_ty.cache); // to cut reference to allow &mut self
+        if let Some(rty) = deferred_ty_cache.borrow().get(&ty_args) {
+            return Some(rty.clone());
+        }
+        let local_def_id = def_id.as_local()?;
+
+        let sig = self
+            .tcx
+            .fn_sig(def_id)
+            .instantiate(self.tcx, args)
+            .skip_binder();
+        let expected = self
+            .crate_analyzer()
+            .fn_def_ty_with_sig(local_def_id.to_def_id(), sig)
+            .unwrap();
+        self.local_def_analyzer(local_def_id)
+            .type_builder(type_builder.with_param_mapper(move |ty| rty_args[ty.idx].clone()))
+            .run(&expected);
+        deferred_ty_cache
+            .borrow_mut()
+            .insert(ty_args, expected.clone());
+        Some(expected)
     }
 
     pub fn register_basic_block_ty(
