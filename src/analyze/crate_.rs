@@ -211,8 +211,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::info!(?local_def_id, "trusted");
                 continue;
             }
-            let expected = self.ctx.def_ty(local_def_id.to_def_id()).unwrap().clone();
-            self.ctx.local_def_analyzer(*local_def_id).run(&expected);
+            // check polymorphic function def by replacing type params with some opaque type
+            let type_builder = TypeBuilder::new(self.tcx, local_def_id.to_def_id())
+                .with_param_mapper(|_| rty::Type::int());
+            let mut expected = self.ctx.def_ty(local_def_id.to_def_id()).unwrap().clone();
+            let subst = rty::TypeParamSubst::new(
+                expected
+                    .free_ty_params()
+                    .into_iter()
+                    .map(|ty_param| (ty_param, rty::RefinedType::unrefined(rty::Type::int())))
+                    .collect(),
+            );
+            expected.subst_ty_params(&subst);
+            self.ctx
+                .local_def_analyzer(*local_def_id)
+                .type_builder(type_builder)
+                .run(&expected);
         }
     }
 
