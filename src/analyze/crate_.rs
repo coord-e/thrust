@@ -132,13 +132,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
-            let input_ty = TypeBuilder::new(self.tcx).build(*input_ty);
+            let input_ty = TypeBuilder::new(self.tcx, def_id).build(*input_ty);
             param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
         let mut require_annot = self.extract_require_annot(&param_resolver, def_id);
         let mut ensure_annot = {
-            let output_ty = TypeBuilder::new(self.tcx).build(sig.output());
+            let output_ty = TypeBuilder::new(self.tcx, def_id).build(sig.output());
             let resolver = annot::StackedResolver::default()
                 .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
                 .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
@@ -175,7 +175,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.trusted.insert(def_id);
         }
 
-        let mut builder = TypeBuilder::new(self.tcx).for_function_template(&mut self.ctx, sig);
+        let mut builder =
+            TypeBuilder::new(self.tcx, def_id).for_function_template(&mut self.ctx, sig);
         if let Some(AnnotFormula::Formula(require)) = require_annot {
             let formula = require.map_var(|idx| {
                 if idx.index() == sig.inputs().len() - 1 {
@@ -252,28 +253,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             };
             let adt = self.tcx.adt_def(local_def_id);
 
-            // The index of TyKind::ParamTy is based on the every generic parameters in
-            // the definition, including lifetimes. Given the following definition:
-            //
-            // struct X<'a, T> { f: &'a T }
-            //
-            // The type of field `f` is &T1 (not T0). However, in Thrust, we ignore lifetime
-            // parameters and the index of rty::ParamType is based on type parameters only.
-            // We're building a mapping from the original index to the new index here.
-            let generics = self.tcx.generics_of(local_def_id);
-            let mut type_param_mapping: std::collections::HashMap<usize, usize> =
-                Default::default();
-            for i in 0..generics.count() {
-                let generic_param = generics.param_at(i, self.tcx);
-                match generic_param.kind {
-                    mir_ty::GenericParamDefKind::Lifetime => {}
-                    mir_ty::GenericParamDefKind::Type { .. } => {
-                        type_param_mapping.insert(i, type_param_mapping.len());
-                    }
-                    mir_ty::GenericParamDefKind::Const { .. } => unimplemented!(),
-                }
-            }
-
             let name = refine::datatype_symbol(self.tcx, local_def_id.to_def_id());
             let variants: IndexVec<_, _> = adt
                 .variants()
@@ -287,27 +266,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .iter()
                         .map(|field| {
                             let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-
-                            // see the comment above about this mapping
-                            let subst = rty::TypeParamSubst::new(
-                                type_param_mapping
-                                    .iter()
-                                    .map(|(old, new)| {
-                                        let old = rty::TypeParamIdx::from(*old);
-                                        let new =
-                                            rty::ParamType::new(rty::TypeParamIdx::from(*new));
-                                        (old, rty::RefinedType::unrefined(new.into()))
-                                    })
-                                    .collect(),
-                            );
-
-                            // the subst doesn't contain refinements, so it's OK to take ty only
-                            // after substitution
-                            let mut field_rty = rty::RefinedType::unrefined(
-                                TypeBuilder::new(self.tcx).build(field_ty),
-                            );
-                            field_rty.subst_ty_params(&subst);
-                            field_rty.ty
+                            TypeBuilder::new(self.tcx, local_def_id.to_def_id()).build(field_ty)
                         })
                         .collect();
                     rty::EnumVariantDef {
@@ -318,7 +277,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 })
                 .collect();
 
-            let ty_params = type_param_mapping.len();
+            let generics = self.tcx.generics_of(local_def_id);
+            let ty_params = (0..generics.count())
+                .filter(|idx| {
+                    matches!(
+                        generics.param_at(*idx, self.tcx).kind,
+                        mir_ty::GenericParamDefKind::Type { .. }
+                    )
+                })
+                .count();
             tracing::debug!(?local_def_id, ?name, ?ty_params, "ty_params count");
 
             let def = rty::EnumDatatypeDef {

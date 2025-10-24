@@ -306,7 +306,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
-            let rty = TypeBuilder::new(self.tcx)
+            let rty = TypeBuilder::new(self.tcx, self.local_def_id.to_def_id())
                 .for_template(&mut self.ctx)
                 .build_basic_block(live_locals, ret_ty);
             self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
