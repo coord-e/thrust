@@ -83,9 +83,12 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
-    /// These indices may differ because we skip lifetime parameters.
+    /// These indices may differ because we skip lifetime parameters and they always need to be
+    /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
+    /// Optionally also want to further map rty::ParamType to other rty::Type before generating
+    /// templates. This is no-op by default.
     param_type_mapper: std::rc::Rc<dyn ParamTypeMapper>,
 }
 
@@ -100,7 +103,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                 mir_ty::GenericParamDefKind::Type { .. } => {
                     param_idx_mapping.insert(i as u32, param_idx_mapping.len().into());
                 }
-                mir_ty::GenericParamDefKind::Const { .. } => unimplemented!(),
+                mir_ty::GenericParamDefKind::Const { .. } => {}
             }
         }
         Self {
@@ -396,6 +399,17 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     pub fn ret_rty(&mut self, rty: rty::RefinedType<rty::FunctionParamIdx>) -> &mut Self {
         self.ret_rty = Some(rty);
         self
+    }
+
+    pub fn would_contain_template(&self) -> bool {
+        if self.param_tys.is_empty() {
+            return self.ret_rty.is_none();
+        }
+
+        let last_param_idx = rty::FunctionParamIdx::from(self.param_tys.len() - 1);
+        let param_annotated =
+            self.param_refinement.is_some() || self.param_rtys.contains_key(&last_param_idx);
+        self.ret_rty.is_none() || !param_annotated
     }
 }
 

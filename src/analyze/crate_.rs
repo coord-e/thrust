@@ -128,8 +128,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(def_id)))]
     fn refine_fn_def(&mut self, def_id: DefId) {
         let sig = self.tcx.fn_sig(def_id);
-        let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
+        let sig = sig.instantiate_identity().skip_binder();
+        if let Some(rty) = self.fn_def_ty_with_sig(def_id, sig) {
+            self.ctx.register_def(def_id, rty);
+        } else {
+            self.ctx.register_deferred_def(def_id);
+        }
+    }
 
+    pub fn fn_def_ty_with_sig(
+        &mut self,
+        def_id: DefId,
+        sig: mir_ty::FnSig<'tcx>,
+    ) -> Option<rty::RefinedType> {
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
             let input_ty = TypeBuilder::new(self.tcx, def_id).build(*input_ty);
@@ -198,8 +209,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if let Some(ret_rty) = ret_annot {
             builder.ret_rty(ret_rty);
         }
-        let rty = rty::RefinedType::unrefined(builder.build().into());
-        self.ctx.register_def(def_id, rty);
+
+        // can't generate template with type parameter...
+        use mir_ty::TypeVisitableExt as _;
+        if builder.would_contain_template() && sig.has_param() {
+            None
+        } else {
+            Some(rty::RefinedType::unrefined(builder.build().into()))
+        }
     }
 
     fn analyze_local_defs(&mut self) {
@@ -211,10 +228,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::info!(?local_def_id, "trusted");
                 continue;
             }
+            let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
+                // when the local_def_id is deferred it would be skipped
+                continue;
+            };
+
             // check polymorphic function def by replacing type params with some opaque type
+            // (and this is no-op if the function is mono)
             let type_builder = TypeBuilder::new(self.tcx, local_def_id.to_def_id())
                 .with_param_mapper(|_| rty::Type::int());
-            let mut expected = self.ctx.def_ty(local_def_id.to_def_id()).unwrap().clone();
+            let mut expected = expected.clone();
             let subst = rty::TypeParamSubst::new(
                 expected
                     .free_ty_params()
@@ -236,7 +259,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             // TODO: replace code here with relate_* in Env + Refine context (created with empty env)
             let entry_ty = self
                 .ctx
-                .def_ty(def_id)
+                .concrete_def_ty(def_id)
                 .unwrap()
                 .ty
                 .as_function()
