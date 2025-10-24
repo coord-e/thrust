@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Mutability};
 use rustc_middle::ty as mir_ty;
+use rustc_span::def_id::DefId;
 
 use super::basic_block::BasicBlockType;
 use crate::chc;
@@ -60,11 +61,43 @@ where
 #[derive(Clone)]
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
+    type_param_mapping: HashMap<u32, rty::TypeParamIdx>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
-    pub fn new(tcx: mir_ty::TyCtxt<'tcx>) -> Self {
-        Self { tcx }
+    pub fn new(tcx: mir_ty::TyCtxt<'tcx>, def_id: DefId) -> Self {
+        // The index of TyKind::ParamTy is based on the every generic parameters in
+        // the definition, including lifetimes. Given the following definition:
+        //
+        // struct X<'a, T> { f: &'a T }
+        //
+        // The type of field `f` is &T1 (not T0). However, in Thrust, we ignore lifetime
+        // parameters and the index of rty::ParamType is based on type parameters only.
+        // We're building a mapping from the original index to the new index here.
+        let generics = tcx.generics_of(def_id);
+        let mut type_param_mapping: HashMap<u32, rty::TypeParamIdx> = Default::default();
+        for i in 0..generics.count() {
+            let generic_param = generics.param_at(i, tcx);
+            match generic_param.kind {
+                mir_ty::GenericParamDefKind::Lifetime => {}
+                mir_ty::GenericParamDefKind::Type { .. } => {
+                    type_param_mapping.insert(i as u32, type_param_mapping.len().into());
+                }
+                mir_ty::GenericParamDefKind::Const { .. } => unimplemented!(),
+            }
+        }
+        Self {
+            tcx,
+            type_param_mapping,
+        }
+    }
+
+    fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::ParamType {
+        let index = *self
+            .type_param_mapping
+            .get(&ty.index)
+            .expect("unknown type param idx");
+        rty::ParamType::new(index)
     }
 
     // TODO: consolidate two impls
@@ -89,7 +122,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
-            mir_ty::TyKind::Param(ty) => rty::ParamType::new(ty.index.into()).into(),
+            mir_ty::TyKind::Param(ty) => self.translate_param_type(ty).into(),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
@@ -135,7 +168,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         registry: &'a mut R,
     ) -> TemplateTypeBuilder<'tcx, 'a, R, EmptyTemplateScope> {
         TemplateTypeBuilder {
-            tcx: self.tcx,
+            inner: self.clone(),
             registry,
             scope: Default::default(),
         }
@@ -147,7 +180,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         sig: mir_ty::FnSig<'tcx>,
     ) -> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         FunctionTemplateTypeBuilder {
-            tcx: self.tcx,
+            inner: self.clone(),
             registry,
             param_tys: sig
                 .inputs()
@@ -166,7 +199,7 @@ impl<'tcx> TypeBuilder<'tcx> {
 }
 
 pub struct TemplateTypeBuilder<'tcx, 'a, R, S> {
-    tcx: mir_ty::TyCtxt<'tcx>,
+    inner: TypeBuilder<'tcx>,
     registry: &'a mut R,
     scope: S,
 }
@@ -174,7 +207,7 @@ pub struct TemplateTypeBuilder<'tcx, 'a, R, S> {
 impl<'tcx, 'a, R, S> TemplateTypeBuilder<'tcx, 'a, R, S> {
     pub fn with_scope<T>(self, scope: T) -> TemplateTypeBuilder<'tcx, 'a, R, T> {
         TemplateTypeBuilder {
-            tcx: self.tcx,
+            inner: self.inner,
             registry: self.registry,
             scope,
         }
@@ -207,13 +240,11 @@ where
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
-            mir_ty::TyKind::Param(ty) => rty::ParamType::new(ty.index.into()).into(),
+            mir_ty::TyKind::Param(ty) => self.inner.translate_param_type(ty).into(),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
-                let ty = TypeBuilder::new(self.tcx)
-                    .for_function_template(self.registry, sig)
-                    .build();
+                let ty = self.inner.for_function_template(self.registry, sig).build();
                 rty::Type::function(ty)
             }
             mir_ty::TyKind::Adt(def, params) if def.is_box() => {
@@ -221,7 +252,7 @@ where
             }
             mir_ty::TyKind::Adt(def, params) => {
                 if def.is_enum() {
-                    let sym = refine::datatype_symbol(self.tcx, def.did());
+                    let sym = refine::datatype_symbol(self.inner.tcx, def.did());
                     let args: IndexVec<_, _> =
                         params.types().map(|ty| self.build_refined(ty)).collect();
                     rty::EnumType::new(sym, args).into()
@@ -229,7 +260,7 @@ where
                     let elem_tys = def
                         .all_fields()
                         .map(|field| {
-                            let ty = field.ty(self.tcx, params);
+                            let ty = field.ty(self.inner.tcx, params);
                             // elaboration: all fields are boxed
                             rty::PointerType::own(self.build(ty)).into()
                         })
@@ -245,10 +276,7 @@ where
 
     pub fn build_refined(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<S::Var> {
         // TODO: consider building ty with scope
-        let ty = TypeBuilder::new(self.tcx)
-            .for_template(self.registry)
-            .build(ty)
-            .vacuous();
+        let ty = self.inner.for_template(self.registry).build(ty).vacuous();
         let tmpl = self.scope.build_template().build(ty);
         self.registry.register_template(tmpl)
     }
@@ -269,7 +297,7 @@ where
             tys.push(ty);
         }
         let ty = FunctionTemplateTypeBuilder {
-            tcx: self.tcx,
+            inner: self.inner.clone(),
             registry: self.registry,
             param_tys: tys,
             ret_ty,
@@ -283,7 +311,7 @@ where
 }
 
 pub struct FunctionTemplateTypeBuilder<'tcx, 'a, R> {
-    tcx: mir_ty::TyCtxt<'tcx>,
+    inner: TypeBuilder<'tcx>,
     registry: &'a mut R,
     param_tys: Vec<mir_ty::TypeAndMut<'tcx>>,
     ret_ty: mir_ty::Ty<'tcx>,
@@ -324,7 +352,7 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         &mut self,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
     ) -> &mut Self {
-        let ty = TypeBuilder::new(self.tcx).build(self.ret_ty);
+        let ty = self.inner.build(self.ret_ty);
         self.ret_rty = Some(rty::RefinedType::new(ty.vacuous(), refinement));
         self
     }
@@ -350,17 +378,17 @@ where
                 .unwrap_or_else(|| {
                     if idx == self.param_tys.len() - 1 {
                         if let Some(param_refinement) = &self.param_refinement {
-                            let ty = TypeBuilder::new(self.tcx).build(param_ty.ty);
+                            let ty = self.inner.build(param_ty.ty);
                             rty::RefinedType::new(ty.vacuous(), param_refinement.clone())
                         } else {
-                            TypeBuilder::new(self.tcx)
+                            self.inner
                                 .for_template(self.registry)
                                 .with_scope(&builder)
                                 .build_refined(param_ty.ty)
                         }
                     } else {
                         rty::RefinedType::unrefined(
-                            TypeBuilder::new(self.tcx)
+                            self.inner
                                 .for_template(self.registry)
                                 .with_scope(&builder)
                                 .build(param_ty.ty),
@@ -383,8 +411,8 @@ where
             let param_rty = if let Some(param_refinement) = &self.param_refinement {
                 rty::RefinedType::new(rty::Type::unit(), param_refinement.clone())
             } else {
-                let unit_ty = mir_ty::Ty::new_unit(self.tcx);
-                TypeBuilder::new(self.tcx)
+                let unit_ty = mir_ty::Ty::new_unit(self.inner.tcx);
+                self.inner
                     .for_template(self.registry)
                     .with_scope(&builder)
                     .build_refined(unit_ty)
@@ -393,7 +421,7 @@ where
         }
 
         let ret_rty = self.ret_rty.clone().unwrap_or_else(|| {
-            TypeBuilder::new(self.tcx)
+            self.inner
                 .for_template(self.registry)
                 .with_scope(&builder)
                 .build_refined(self.ret_ty)
