@@ -11,6 +11,20 @@ use super::{Closed, RefinedType};
 
 rustc_index::newtype_index! {
     /// An index representing a type parameter.
+    ///
+    /// ## Note on indexing of type parameters
+    ///
+    /// The index of [`rustc_middle::ty::ParamTy`] is based on all generic parameters in
+    /// the definition, including lifetimes. Given the following definition:
+    ///
+    /// ```rust
+    /// struct X<'a, T> { f: &'a T }
+    /// ```
+    ///
+    /// The type of field `f` is `&T1` (not `&T0`) in MIR. However, in Thrust, we ignore lifetime
+    /// parameters and the index of [`rty::ParamType`](super::ParamType) is based on type parameters only, giving `f`
+    /// the type `&T0`. [`TypeBuilder`](crate::refine::TypeBuilder) takes care of this difference when translating MIR
+    /// types to Thrust types.
     #[orderable]
     #[debug_format = "T{}"]
     pub struct TypeParamIdx { }

@@ -23,6 +23,7 @@ where
     }
 }
 
+/// [`TemplateScope`] with no variables in scope.
 #[derive(Clone, Default)]
 pub struct EmptyTemplateScope;
 
@@ -58,43 +59,45 @@ where
     }
 }
 
+/// Translates [`mir_ty::Ty`] to [`rty::Type`].
+///
+/// This struct implements a translation from Rust MIR types to Thrust types.
+/// Thrust types may contain refinement predicates which do not exist in MIR types,
+/// and [`TypeBuilder`] solely builds types with null refinement (true) in
+/// [`TypeBuilder::build`]. This also provides [`TypeBuilder::for_template`] to build
+/// refinement types by filling unknown predicates with templates with predicate variables.
 #[derive(Clone)]
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
-    type_param_mapping: HashMap<u32, rty::TypeParamIdx>,
+    /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
+    /// These indices may differ because we skip lifetime parameters.
+    /// See [`rty::TypeParamIdx`] for more details.
+    param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
     pub fn new(tcx: mir_ty::TyCtxt<'tcx>, def_id: DefId) -> Self {
-        // The index of TyKind::ParamTy is based on the every generic parameters in
-        // the definition, including lifetimes. Given the following definition:
-        //
-        // struct X<'a, T> { f: &'a T }
-        //
-        // The type of field `f` is &T1 (not T0). However, in Thrust, we ignore lifetime
-        // parameters and the index of rty::ParamType is based on type parameters only.
-        // We're building a mapping from the original index to the new index here.
         let generics = tcx.generics_of(def_id);
-        let mut type_param_mapping: HashMap<u32, rty::TypeParamIdx> = Default::default();
+        let mut param_idx_mapping: HashMap<u32, rty::TypeParamIdx> = Default::default();
         for i in 0..generics.count() {
             let generic_param = generics.param_at(i, tcx);
             match generic_param.kind {
                 mir_ty::GenericParamDefKind::Lifetime => {}
                 mir_ty::GenericParamDefKind::Type { .. } => {
-                    type_param_mapping.insert(i as u32, type_param_mapping.len().into());
+                    param_idx_mapping.insert(i as u32, param_idx_mapping.len().into());
                 }
                 mir_ty::GenericParamDefKind::Const { .. } => unimplemented!(),
             }
         }
         Self {
             tcx,
-            type_param_mapping,
+            param_idx_mapping,
         }
     }
 
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::ParamType {
         let index = *self
-            .type_param_mapping
+            .param_idx_mapping
             .get(&ty.index)
             .expect("unknown type param idx");
         rty::ParamType::new(index)
@@ -198,8 +201,16 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 }
 
+/// Translates [`mir_ty::Ty`] to [`rty::Type`] using templates for refinements.
+///
+/// [`rty::Template`] is a refinement type in the form of `{ T | P(x1, ..., xn) }` where `P` is a
+/// predicate variable. When constructing a template, we need to know which variables can affect the
+/// predicate of the template (dependencies, `x1, ..., xn`), and they are provided by the
+/// [`TemplateScope`]. No variables are in scope by default and you can provide a scope using
+/// [`TemplateTypeBuilder::with_scope`].
 pub struct TemplateTypeBuilder<'tcx, 'a, R, S> {
     inner: TypeBuilder<'tcx>,
+    // XXX: this can't be simply `R` because monomorphization instantiates types recursively
     registry: &'a mut R,
     scope: S,
 }
@@ -310,6 +321,7 @@ where
     }
 }
 
+/// A builder for function template types.
 pub struct FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     inner: TypeBuilder<'tcx>,
     registry: &'a mut R,
