@@ -8,7 +8,7 @@
 //! module and remove this one.
 
 mod template;
-pub use template::{TemplateScope, TemplateTypeGenerator, UnrefinedTypeGenerator};
+pub use template::{TemplateRegistry, TemplateScope, TypeBuilder};
 
 mod basic_block;
 pub use basic_block::BasicBlockType;

@@ -11,7 +11,7 @@ use rustc_span::symbol::Ident;
 use crate::analyze;
 use crate::annot::{self, AnnotFormula, AnnotParser, ResolverExt as _};
 use crate::chc;
-use crate::refine::{self, TemplateTypeGenerator, UnrefinedTypeGenerator};
+use crate::refine::{self, TypeBuilder};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 /// An implementation of local crate analysis.
@@ -132,13 +132,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
-            let input_ty = self.ctx.unrefined_ty(*input_ty);
+            let input_ty = TypeBuilder::new(self.tcx, def_id).build(*input_ty);
             param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
         let mut require_annot = self.extract_require_annot(&param_resolver, def_id);
         let mut ensure_annot = {
-            let output_ty = self.ctx.unrefined_ty(sig.output());
+            let output_ty = TypeBuilder::new(self.tcx, def_id).build(sig.output());
             let resolver = annot::StackedResolver::default()
                 .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
                 .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
@@ -175,7 +175,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.trusted.insert(def_id);
         }
 
-        let mut builder = self.ctx.build_function_template_ty(sig);
+        let mut builder =
+            TypeBuilder::new(self.tcx, def_id).for_function_template(&mut self.ctx, sig);
         if let Some(AnnotFormula::Formula(require)) = require_annot {
             let formula = require.map_var(|idx| {
                 if idx.index() == sig.inputs().len() - 1 {
@@ -251,6 +252,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 continue;
             };
             let adt = self.tcx.adt_def(local_def_id);
+
             let name = refine::datatype_symbol(self.tcx, local_def_id.to_def_id());
             let variants: IndexVec<_, _> = adt
                 .variants()
@@ -264,7 +266,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .iter()
                         .map(|field| {
                             let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                            self.ctx.unrefined_ty(field_ty)
+                            TypeBuilder::new(self.tcx, local_def_id.to_def_id()).build(field_ty)
                         })
                         .collect();
                     rty::EnumVariantDef {
@@ -275,19 +277,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 })
                 .collect();
 
-            let ty_params = adt
-                .all_fields()
-                .map(|f| self.tcx.type_of(f.did).instantiate_identity())
-                .flat_map(|ty| {
-                    if let mir_ty::TyKind::Param(p) = ty.kind() {
-                        Some(p.index as usize)
-                    } else {
-                        None
-                    }
+            let generics = self.tcx.generics_of(local_def_id);
+            let ty_params = (0..generics.count())
+                .filter(|idx| {
+                    matches!(
+                        generics.param_at(*idx, self.tcx).kind,
+                        mir_ty::GenericParamDefKind::Type { .. }
+                    )
                 })
-                .max()
-                .map(|max| max + 1)
-                .unwrap_or(0);
+                .count();
             tracing::debug!(?local_def_id, ?name, ?ty_params, "ty_params count");
 
             let def = rty::EnumDatatypeDef {
