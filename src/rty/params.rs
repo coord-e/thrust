@@ -11,6 +11,20 @@ use super::{Closed, RefinedType};
 
 rustc_index::newtype_index! {
     /// An index representing a type parameter.
+    ///
+    /// ## Note on indexing of type parameters
+    ///
+    /// The index of [`rustc_middle::ty::ParamTy`] is based on all generic parameters in
+    /// the definition, including lifetimes. Given the following definition:
+    ///
+    /// ```rust
+    /// struct X<'a, T> { f: &'a T }
+    /// ```
+    ///
+    /// The type of field `f` is `&T1` (not `&T0`) in MIR. However, in Thrust, we ignore lifetime
+    /// parameters and the index of [`rty::ParamType`](super::ParamType) is based on type parameters only, giving `f`
+    /// the type `&T0`. [`TypeBuilder`](crate::refine::TypeBuilder) takes care of this difference when translating MIR
+    /// types to Thrust types.
     #[orderable]
     #[debug_format = "T{}"]
     pub struct TypeParamIdx { }
@@ -39,7 +53,7 @@ impl TypeParamIdx {
     }
 }
 
-pub type TypeParams<T> = IndexVec<TypeParamIdx, RefinedType<T>>;
+pub type TypeArgs<T> = IndexVec<TypeParamIdx, RefinedType<T>>;
 
 /// A substitution for type parameters that maps type parameters to refinement types.
 #[derive(Debug, Clone)]
@@ -55,8 +69,8 @@ impl<T> Default for TypeParamSubst<T> {
     }
 }
 
-impl<T> From<TypeParams<T>> for TypeParamSubst<T> {
-    fn from(params: TypeParams<T>) -> Self {
+impl<T> From<TypeArgs<T>> for TypeParamSubst<T> {
+    fn from(params: TypeArgs<T>) -> Self {
         let subst = params.into_iter_enumerated().collect();
         Self { subst }
     }
@@ -71,6 +85,10 @@ impl<T> std::ops::Index<TypeParamIdx> for TypeParamSubst<T> {
 }
 
 impl<T> TypeParamSubst<T> {
+    pub fn new(subst: BTreeMap<TypeParamIdx, RefinedType<T>>) -> Self {
+        Self { subst }
+    }
+
     pub fn singleton(idx: TypeParamIdx, ty: RefinedType<T>) -> Self {
         let mut subst = BTreeMap::default();
         subst.insert(idx, ty);
@@ -94,20 +112,20 @@ impl<T> TypeParamSubst<T> {
         }
     }
 
-    pub fn into_params<F>(mut self, expected_len: usize, mut default: F) -> TypeParams<T>
+    pub fn into_args<F>(mut self, expected_len: usize, mut default: F) -> TypeArgs<T>
     where
         T: chc::Var,
         F: FnMut(TypeParamIdx) -> RefinedType<T>,
     {
-        let mut params = TypeParams::new();
+        let mut args = TypeArgs::new();
         for idx in 0..expected_len {
             let ty = self
                 .subst
                 .remove(&idx.into())
                 .unwrap_or_else(|| default(idx.into()));
-            params.push(ty);
+            args.push(ty);
         }
-        params
+        args
     }
 
     pub fn strip_refinement(self) -> TypeParamSubst<Closed> {

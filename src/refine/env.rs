@@ -558,7 +558,8 @@ impl rty::ClauseScope for Env {
     }
 }
 
-impl refine::TemplateScope<Var> for Env {
+impl refine::TemplateScope for Env {
+    type Var = Var;
     fn build_template(&self) -> rty::TemplateBuilder<Var> {
         let mut builder = rty::TemplateBuilder::default();
         for (v, sort) in self.dependencies() {
@@ -930,7 +931,7 @@ impl Env {
                         .field_tys()
                         .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()).boxed());
                     let got_tys = field_tys.iter().map(|ty| ty.clone().into());
-                    rty::unify_tys_params(expected_tys, got_tys).into_params(def.ty_params, |_| {
+                    rty::unify_tys_params(expected_tys, got_tys).into_args(def.ty_params, |_| {
                         panic!("var_type: should unify all params")
                     })
                 };
