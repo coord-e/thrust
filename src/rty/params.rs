@@ -7,7 +7,7 @@ use rustc_index::IndexVec;
 
 use crate::chc;
 
-use super::{Closed, RefinedType};
+use super::{Closed, RefinedType, Type};
 
 rustc_index::newtype_index! {
     /// An index representing a type parameter.
@@ -53,7 +53,8 @@ impl TypeParamIdx {
     }
 }
 
-pub type TypeArgs<T> = IndexVec<TypeParamIdx, RefinedType<T>>;
+pub type RefinedTypeArgs<T = Closed> = IndexVec<TypeParamIdx, RefinedType<T>>;
+pub type TypeArgs<T = Closed> = IndexVec<TypeParamIdx, Type<T>>;
 
 /// A substitution for type parameters that maps type parameters to refinement types.
 #[derive(Debug, Clone)]
@@ -71,6 +72,16 @@ impl<T> Default for TypeParamSubst<T> {
 
 impl<T> From<TypeArgs<T>> for TypeParamSubst<T> {
     fn from(params: TypeArgs<T>) -> Self {
+        let subst = params
+            .into_iter_enumerated()
+            .map(|(idx, ty)| (idx, RefinedType::unrefined(ty)))
+            .collect();
+        Self { subst }
+    }
+}
+
+impl<T> From<RefinedTypeArgs<T>> for TypeParamSubst<T> {
+    fn from(params: RefinedTypeArgs<T>) -> Self {
         let subst = params.into_iter_enumerated().collect();
         Self { subst }
     }
@@ -112,12 +123,12 @@ impl<T> TypeParamSubst<T> {
         }
     }
 
-    pub fn into_args<F>(mut self, expected_len: usize, mut default: F) -> TypeArgs<T>
+    pub fn into_args<F>(mut self, expected_len: usize, mut default: F) -> RefinedTypeArgs<T>
     where
         T: chc::Var,
         F: FnMut(TypeParamIdx) -> RefinedType<T>,
     {
-        let mut args = TypeArgs::new();
+        let mut args = RefinedTypeArgs::new();
         for idx in 0..expected_len {
             let ty = self
                 .subst

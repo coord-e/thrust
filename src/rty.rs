@@ -55,7 +55,7 @@ mod subtyping;
 pub use subtyping::{relate_sub_closed_type, ClauseScope, Subtyping};
 
 mod params;
-pub use params::{TypeArgs, TypeParamIdx, TypeParamSubst};
+pub use params::{RefinedTypeArgs, TypeArgs, TypeParamIdx, TypeParamSubst};
 
 rustc_index::newtype_index! {
     /// An index representing function parameter.
@@ -487,7 +487,7 @@ where
 }
 
 impl<T> EnumType<T> {
-    pub fn new(symbol: chc::DatatypeSymbol, args: TypeArgs<T>) -> Self {
+    pub fn new(symbol: chc::DatatypeSymbol, args: RefinedTypeArgs<T>) -> Self {
         EnumType { symbol, args }
     }
 
@@ -1372,7 +1372,7 @@ impl<FV> RefinedType<FV> {
         }
     }
 
-    pub fn instantiate_ty_params(&mut self, params: TypeArgs<FV>)
+    pub fn instantiate_ty_params(&mut self, params: RefinedTypeArgs<FV>)
     where
         FV: chc::Var,
     {
