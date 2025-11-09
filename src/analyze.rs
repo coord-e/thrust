@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
-use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
@@ -105,14 +104,14 @@ impl<'tcx> ReplacePlacesVisitor<'tcx> {
 }
 
 #[derive(Debug, Clone)]
-struct DeferredDefTy<'tcx> {
-    cache: Rc<RefCell<HashMap<Vec<mir_ty::Ty<'tcx>>, rty::RefinedType>>>,
+struct DeferredDefTy {
+    cache: Rc<RefCell<HashMap<rty::TypeArgs, rty::RefinedType>>>,
 }
 
 #[derive(Debug, Clone)]
-enum DefTy<'tcx> {
+enum DefTy {
     Concrete(rty::RefinedType),
-    Deferred(DeferredDefTy<'tcx>),
+    Deferred(DeferredDefTy),
 }
 
 #[derive(Clone)]
@@ -124,7 +123,7 @@ pub struct Analyzer<'tcx> {
     /// currently contains only local-def templates,
     /// but will be extended to contain externally known def's refinement types
     /// (at least for every defs referenced by local def bodies)
-    defs: HashMap<DefId, DefTy<'tcx>>,
+    defs: HashMap<DefId, DefTy>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -242,11 +241,8 @@ impl<'tcx> Analyzer<'tcx> {
     pub fn def_ty_with_args(
         &mut self,
         def_id: DefId,
-        args: mir_ty::GenericArgsRef<'tcx>,
+        rty_args: rty::TypeArgs,
     ) -> Option<rty::RefinedType> {
-        let type_builder = TypeBuilder::new(self.tcx, def_id);
-        let rty_args: IndexVec<_, _> = args.types().map(|ty| type_builder.build(ty)).collect();
-
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
                 let mut def_ty = rty.clone();
@@ -262,28 +258,24 @@ impl<'tcx> Analyzer<'tcx> {
             DefTy::Deferred(deferred) => deferred,
         };
 
-        let ty_args: Vec<_> = args.types().collect();
         let deferred_ty_cache = Rc::clone(&deferred_ty.cache); // to cut reference to allow &mut self
-        if let Some(rty) = deferred_ty_cache.borrow().get(&ty_args) {
+        if let Some(rty) = deferred_ty_cache.borrow().get(&rty_args) {
             return Some(rty.clone());
         }
-        let local_def_id = def_id.as_local()?;
 
-        let sig = self
-            .tcx
-            .fn_sig(def_id)
-            .instantiate(self.tcx, args)
-            .skip_binder();
-        let expected = self
-            .crate_analyzer()
-            .fn_def_ty_with_sig(local_def_id.to_def_id(), sig)
-            .unwrap();
-        self.local_def_analyzer(local_def_id)
-            .type_builder(type_builder.with_param_mapper(move |ty| rty_args[ty.idx].clone()))
-            .run(&expected);
+        let type_builder = TypeBuilder::new(self.tcx, def_id).with_param_mapper({
+            let rty_args = rty_args.clone();
+            move |ty: rty::ParamType| rty_args[ty.idx].clone()
+        });
+        let mut analyzer = self.local_def_analyzer(def_id.as_local()?);
+        analyzer.type_builder(type_builder);
+
+        let expected = analyzer.expected_ty();
         deferred_ty_cache
             .borrow_mut()
-            .insert(ty_args, expected.clone());
+            .insert(rty_args, expected.clone());
+
+        analyzer.run(&expected);
         Some(expected)
     }
 
