@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
-use rustc_middle::mir::{self, Local, Operand, Place, PlaceElem};
-use rustc_middle::ty as mir_ty;
+use rustc_middle::mir::{Local, Place, PlaceElem};
 use rustc_target::abi::{FieldIdx, VariantIdx};
 
 use crate::chc;
@@ -451,6 +450,14 @@ impl PlaceType {
         // TODO: check ty1 = ty2
         let ty = rty::PointerType::mut_to(ty1).into();
         let term = chc::Term::mut_(term1, term2);
+        builder.build(ty, term)
+    }
+
+    pub fn immut(self) -> PlaceType {
+        let mut builder = PlaceTypeBuilder::default();
+        let (inner_ty, inner_term) = builder.subsume(self);
+        let ty = rty::PointerType::immut_to(inner_ty).into();
+        let term = chc::Term::box_(inner_term);
         builder.build(ty, term)
     }
 
@@ -949,48 +956,6 @@ impl Env {
 
     pub fn local_type(&self, local: Local) -> PlaceType {
         self.var_type(local.into())
-    }
-
-    pub fn operand_type(&self, operand: Operand<'_>) -> PlaceType {
-        use mir::{interpret::Scalar, Const, ConstValue, Mutability};
-        match operand {
-            Operand::Copy(place) | Operand::Move(place) => self.place_type(place),
-            Operand::Constant(operand) => {
-                let Const::Val(val, ty) = operand.const_ else {
-                    unimplemented!("const: {:?}", operand.const_);
-                };
-                match (ty.kind(), val) {
-                    (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                        let val = val.try_to_int(val.size()).unwrap();
-                        PlaceType::with_ty_and_term(
-                            rty::Type::int(),
-                            chc::Term::int(val.try_into().unwrap()),
-                        )
-                    }
-                    (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
-                        PlaceType::with_ty_and_term(
-                            rty::Type::bool(),
-                            chc::Term::bool(val.try_to_bool().unwrap()),
-                        )
-                    }
-                    (
-                        mir_ty::TyKind::Ref(_, elem, Mutability::Not),
-                        ConstValue::Slice { data, meta },
-                    ) if matches!(elem.kind(), mir_ty::TyKind::Str) => {
-                        let end = meta.try_into().unwrap();
-                        let content = data
-                            .inner()
-                            .inspect_with_uninit_and_ptr_outside_interpreter(0..end);
-                        let content = std::str::from_utf8(content).unwrap();
-                        PlaceType::with_ty_and_term(
-                            rty::PointerType::immut_to(rty::Type::string()).into(),
-                            chc::Term::box_(chc::Term::string(content.to_owned())),
-                        )
-                    }
-                    _ => unimplemented!("const: {:?}, ty: {:?}", val, ty),
-                }
-            }
-        }
     }
 
     fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> PlaceType {
