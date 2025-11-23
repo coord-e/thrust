@@ -1351,6 +1351,32 @@ impl<FV> RefinedType<FV> {
         RefinedType { ty, refinement }
     }
 
+    /// Returns a dereferenced type of the immutable reference or owned pointer.
+    ///
+    /// e.g. `{ v: Box<T> | φ }  -->  { v: T | φ[box v/v] }`
+    pub fn deref(self) -> Self {
+        let RefinedType {
+            ty,
+            refinement: outer_refinement,
+        } = self;
+        let inner_ty = ty.into_pointer().expect("invalid deref");
+        if inner_ty.is_mut() {
+            // losing info about proph
+            panic!("invalid deref");
+        }
+        let RefinedType {
+            ty: inner_ty,
+            refinement: mut inner_refinement,
+        } = *inner_ty.elem;
+        inner_refinement.push_conj(
+            outer_refinement.subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).boxed()),
+        );
+        RefinedType {
+            ty: inner_ty,
+            refinement: inner_refinement,
+        }
+    }
+
     pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> chc::Term<W>,
