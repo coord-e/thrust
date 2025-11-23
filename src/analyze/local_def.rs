@@ -7,8 +7,10 @@ use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeAndMut};
 use rustc_span::def_id::LocalDefId;
+use rustc_span::symbol::Ident;
 
 use crate::analyze;
+use crate::annot::{self, AnnotFormula, AnnotParser, ResolverExt as _};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{BasicBlockType, TypeBuilder};
@@ -26,9 +28,217 @@ pub struct Analyzer<'tcx, 'ctx> {
 
     body: Body<'tcx>,
     drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints>,
+    type_builder: TypeBuilder<'tcx>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    fn extract_require_annot<T>(&self, resolver: T) -> Option<AnnotFormula<T::Output>>
+    where
+        T: annot::Resolver,
+    {
+        let mut require_annot = None;
+        for attrs in self.tcx.get_attrs_by_path(
+            self.local_def_id.to_def_id(),
+            &analyze::annot::requires_path(),
+        ) {
+            if require_annot.is_some() {
+                unimplemented!();
+            }
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let require = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
+            require_annot = Some(require);
+        }
+        require_annot
+    }
+
+    fn extract_ensure_annot<T>(&self, resolver: T) -> Option<AnnotFormula<T::Output>>
+    where
+        T: annot::Resolver,
+    {
+        let mut ensure_annot = None;
+        for attrs in self.tcx.get_attrs_by_path(
+            self.local_def_id.to_def_id(),
+            &analyze::annot::ensures_path(),
+        ) {
+            if ensure_annot.is_some() {
+                unimplemented!();
+            }
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let ensure = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
+            ensure_annot = Some(ensure);
+        }
+        ensure_annot
+    }
+
+    fn extract_param_annots<T>(&self, resolver: T) -> Vec<(Ident, rty::RefinedType<T::Output>)>
+    where
+        T: annot::Resolver,
+    {
+        let mut param_annots = Vec::new();
+        for attrs in self
+            .tcx
+            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::param_path())
+        {
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let (ident, ts) = analyze::annot::split_param(&ts);
+            let param = AnnotParser::new(&resolver).parse_rty(ts).unwrap();
+            param_annots.push((ident, param));
+        }
+        param_annots
+    }
+
+    fn extract_ret_annot<T>(&self, resolver: T) -> Option<rty::RefinedType<T::Output>>
+    where
+        T: annot::Resolver,
+    {
+        let mut ret_annot = None;
+        for attrs in self
+            .tcx
+            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::ret_path())
+        {
+            if ret_annot.is_some() {
+                unimplemented!();
+            }
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let ret = AnnotParser::new(&resolver).parse_rty(ts).unwrap();
+            ret_annot = Some(ret);
+        }
+        ret_annot
+    }
+
+    pub fn is_annotated_as_trusted(&self) -> bool {
+        self.tcx
+            .get_attrs_by_path(
+                self.local_def_id.to_def_id(),
+                &analyze::annot::trusted_path(),
+            )
+            .next()
+            .is_some()
+    }
+
+    pub fn is_annotated_as_callable(&self) -> bool {
+        self.tcx
+            .get_attrs_by_path(
+                self.local_def_id.to_def_id(),
+                &analyze::annot::callable_path(),
+            )
+            .next()
+            .is_some()
+    }
+
+    // TODO: unify this logic with extraction functions above
+    pub fn is_fully_annotated(&self) -> bool {
+        let has_require = self
+            .tcx
+            .get_attrs_by_path(
+                self.local_def_id.to_def_id(),
+                &analyze::annot::requires_path(),
+            )
+            .next()
+            .is_some();
+        let has_ensure = self
+            .tcx
+            .get_attrs_by_path(
+                self.local_def_id.to_def_id(),
+                &analyze::annot::ensures_path(),
+            )
+            .next()
+            .is_some();
+        let annotated_params: Vec<_> = self
+            .tcx
+            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::param_path())
+            .map(|attrs| {
+                let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+                let (ident, _) = analyze::annot::split_param(&ts);
+                ident
+            })
+            .collect();
+        let has_ret = self
+            .tcx
+            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::ret_path())
+            .next()
+            .is_some();
+
+        let arg_names = self.tcx.fn_arg_names(self.local_def_id.to_def_id());
+        let all_params_annotated = arg_names
+            .iter()
+            .all(|ident| annotated_params.contains(ident));
+        self.is_annotated_as_callable()
+            || (has_require && has_ensure)
+            || (all_params_annotated && has_ret)
+    }
+
+    pub fn expected_ty(&mut self) -> rty::RefinedType {
+        let sig = self.tcx.fn_sig(self.local_def_id);
+        let sig = sig.instantiate_identity().skip_binder();
+
+        let mut param_resolver = analyze::annot::ParamResolver::default();
+        for (input_ident, input_ty) in self
+            .tcx
+            .fn_arg_names(self.local_def_id.to_def_id())
+            .iter()
+            .zip(sig.inputs())
+        {
+            let input_ty = self.type_builder.build(*input_ty);
+            param_resolver.push_param(input_ident.name, input_ty.to_sort());
+        }
+
+        let mut require_annot = self.extract_require_annot(&param_resolver);
+        let mut ensure_annot = {
+            let output_ty = self.type_builder.build(sig.output());
+            let resolver = annot::StackedResolver::default()
+                .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
+                .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
+            self.extract_ensure_annot(resolver)
+        };
+        let param_annots = self.extract_param_annots(&param_resolver);
+        let ret_annot = self.extract_ret_annot(&param_resolver);
+
+        if self.is_annotated_as_callable() {
+            if require_annot.is_some() || ensure_annot.is_some() {
+                unimplemented!();
+            }
+            if !param_annots.is_empty() || ret_annot.is_some() {
+                unimplemented!();
+            }
+
+            require_annot = Some(AnnotFormula::top());
+            ensure_annot = Some(AnnotFormula::top());
+        }
+
+        assert!(require_annot.is_none() || param_annots.is_empty());
+        assert!(ensure_annot.is_none() || ret_annot.is_none());
+
+        let mut builder = self.type_builder.for_function_template(&mut self.ctx, sig);
+        if let Some(AnnotFormula::Formula(require)) = require_annot {
+            let formula = require.map_var(|idx| {
+                if idx.index() == sig.inputs().len() - 1 {
+                    rty::RefinedTypeVar::Value
+                } else {
+                    rty::RefinedTypeVar::Free(idx)
+                }
+            });
+            builder.param_refinement(formula.into());
+        }
+        if let Some(AnnotFormula::Formula(ensure)) = ensure_annot {
+            builder.ret_refinement(ensure.into());
+        }
+        for (ident, annot_rty) in param_annots {
+            use annot::Resolver as _;
+            let (idx, _) = param_resolver.resolve(ident).expect("unknown param");
+            builder.param_rty(idx, annot_rty);
+        }
+        if let Some(ret_rty) = ret_annot {
+            builder.ret_rty(ret_rty);
+        }
+
+        // Note that we do not expect predicate variables to be generated here
+        // when type params are still present in the type. Callers should ensure either
+        // - type params are fully instantiated, or
+        // - the function is fully annotated
+        rty::RefinedType::unrefined(builder.build().into())
+    }
+
     fn is_mut_param(&self, param_idx: rty::FunctionParamIdx) -> bool {
         let param_local = analyze::local_of_function_param(param_idx);
         self.body.local_decls[param_local].mutability.is_mut()
@@ -306,7 +516,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
-            let rty = TypeBuilder::new(self.tcx, self.local_def_id.to_def_id())
+            let rty = self
+                .type_builder
                 .for_template(&mut self.ctx)
                 .build_basic_block(live_locals, ret_ty);
             self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
@@ -321,6 +532,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
+                .type_builder(self.type_builder.clone())
                 .run(&rty);
         }
     }
@@ -426,13 +638,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let body = tcx.optimized_mir(local_def_id.to_def_id()).clone();
         let drop_points = Default::default();
+        let type_builder = TypeBuilder::new(tcx, local_def_id.to_def_id());
         Self {
             ctx,
             tcx,
             local_def_id,
             body,
             drop_points,
+            type_builder,
         }
+    }
+
+    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
+        self.type_builder = type_builder;
+        self
     }
 
     pub fn run(&mut self, expected: &rty::RefinedType) {

@@ -59,6 +59,19 @@ where
     }
 }
 
+trait ParamTypeMapper {
+    fn map_param_ty(&self, ty: rty::ParamType) -> rty::Type<rty::Closed>;
+}
+
+impl<F> ParamTypeMapper for F
+where
+    F: Fn(rty::ParamType) -> rty::Type<rty::Closed>,
+{
+    fn map_param_ty(&self, ty: rty::ParamType) -> rty::Type<rty::Closed> {
+        self(ty)
+    }
+}
+
 /// Translates [`mir_ty::Ty`] to [`rty::Type`].
 ///
 /// This struct implements a translation from Rust MIR types to Thrust types.
@@ -70,9 +83,13 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
-    /// These indices may differ because we skip lifetime parameters.
+    /// These indices may differ because we skip lifetime parameters and they always need to be
+    /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
+    /// Optionally also want to further map rty::ParamType to other rty::Type before generating
+    /// templates. This is no-op by default.
+    param_type_mapper: std::rc::Rc<dyn ParamTypeMapper>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
@@ -86,21 +103,31 @@ impl<'tcx> TypeBuilder<'tcx> {
                 mir_ty::GenericParamDefKind::Type { .. } => {
                     param_idx_mapping.insert(i as u32, param_idx_mapping.len().into());
                 }
-                mir_ty::GenericParamDefKind::Const { .. } => unimplemented!(),
+                mir_ty::GenericParamDefKind::Const { .. } => {}
             }
         }
         Self {
             tcx,
             param_idx_mapping,
+            param_type_mapper: std::rc::Rc::new(|ty: rty::ParamType| ty.into()),
         }
     }
 
-    fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::ParamType {
+    pub fn with_param_mapper<F>(mut self, mapper: F) -> Self
+    where
+        F: Fn(rty::ParamType) -> rty::Type<rty::Closed> + 'static,
+    {
+        self.param_type_mapper = std::rc::Rc::new(mapper);
+        self
+    }
+
+    fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
         let index = *self
             .param_idx_mapping
             .get(&ty.index)
             .expect("unknown type param idx");
-        rty::ParamType::new(index)
+        let param_ty = rty::ParamType::new(index);
+        self.param_type_mapper.map_param_ty(param_ty)
     }
 
     // TODO: consolidate two impls
@@ -125,7 +152,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
-            mir_ty::TyKind::Param(ty) => self.translate_param_type(ty).into(),
+            mir_ty::TyKind::Param(ty) => self.translate_param_type(ty),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
@@ -251,7 +278,7 @@ where
                 rty::TupleType::new(elems).into()
             }
             mir_ty::TyKind::Never => rty::Type::never(),
-            mir_ty::TyKind::Param(ty) => self.inner.translate_param_type(ty).into(),
+            mir_ty::TyKind::Param(ty) => self.inner.translate_param_type(ty).vacuous(),
             mir_ty::TyKind::FnPtr(sig) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
@@ -372,6 +399,17 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     pub fn ret_rty(&mut self, rty: rty::RefinedType<rty::FunctionParamIdx>) -> &mut Self {
         self.ret_rty = Some(rty);
         self
+    }
+
+    pub fn would_contain_template(&self) -> bool {
+        if self.param_tys.is_empty() {
+            return self.ret_rty.is_none();
+        }
+
+        let last_param_idx = rty::FunctionParamIdx::from(self.param_tys.len() - 1);
+        let param_annotated =
+            self.param_refinement.is_some() || self.param_rtys.contains_key(&last_param_idx);
+        self.ret_rty.is_none() || !param_annotated
     }
 }
 

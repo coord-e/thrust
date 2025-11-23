@@ -17,7 +17,7 @@ use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{self, BasicBlockType};
+use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
 
 mod annot;
@@ -103,6 +103,17 @@ impl<'tcx> ReplacePlacesVisitor<'tcx> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DeferredDefTy {
+    cache: Rc<RefCell<HashMap<rty::TypeArgs, rty::RefinedType>>>,
+}
+
+#[derive(Debug, Clone)]
+enum DefTy {
+    Concrete(rty::RefinedType),
+    Deferred(DeferredDefTy),
+}
+
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -112,7 +123,7 @@ pub struct Analyzer<'tcx> {
     /// currently contains only local-def templates,
     /// but will be extended to contain externally known def's refinement types
     /// (at least for every defs referenced by local def bodies)
-    defs: HashMap<DefId, rty::RefinedType>,
+    defs: HashMap<DefId, DefTy>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -207,11 +218,65 @@ impl<'tcx> Analyzer<'tcx> {
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
         tracing::info!(def_id = ?def_id, rty = %rty.display(), "register_def");
-        self.defs.insert(def_id, rty);
+        self.defs.insert(def_id, DefTy::Concrete(rty));
     }
 
-    pub fn def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
-        self.defs.get(&def_id)
+    pub fn register_deferred_def(&mut self, def_id: DefId) {
+        tracing::info!(def_id = ?def_id, "register_deferred_def");
+        self.defs.insert(
+            def_id,
+            DefTy::Deferred(DeferredDefTy {
+                cache: Rc::new(RefCell::new(HashMap::new())),
+            }),
+        );
+    }
+
+    pub fn concrete_def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
+        self.defs.get(&def_id).and_then(|def_ty| match def_ty {
+            DefTy::Concrete(rty) => Some(rty),
+            DefTy::Deferred(_) => None,
+        })
+    }
+
+    pub fn def_ty_with_args(
+        &mut self,
+        def_id: DefId,
+        rty_args: rty::TypeArgs,
+    ) -> Option<rty::RefinedType> {
+        let deferred_ty = match self.defs.get(&def_id)? {
+            DefTy::Concrete(rty) => {
+                let mut def_ty = rty.clone();
+                def_ty.instantiate_ty_params(
+                    rty_args
+                        .clone()
+                        .into_iter()
+                        .map(rty::RefinedType::unrefined)
+                        .collect(),
+                );
+                return Some(def_ty);
+            }
+            DefTy::Deferred(deferred) => deferred,
+        };
+
+        let deferred_ty_cache = Rc::clone(&deferred_ty.cache); // to cut reference to allow &mut self
+        if let Some(rty) = deferred_ty_cache.borrow().get(&rty_args) {
+            return Some(rty.clone());
+        }
+
+        let type_builder = TypeBuilder::new(self.tcx, def_id).with_param_mapper({
+            let rty_args = rty_args.clone();
+            move |ty: rty::ParamType| rty_args[ty.idx].clone()
+        });
+        let mut analyzer = self.local_def_analyzer(def_id.as_local()?);
+        analyzer.type_builder(type_builder);
+
+        let expected = analyzer.expected_ty();
+        deferred_ty_cache
+            .borrow_mut()
+            .insert(rty_args, expected.clone());
+
+        analyzer.run(&expected);
+        Some(expected)
     }
 
     pub fn register_basic_block_ty(
