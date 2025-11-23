@@ -163,6 +163,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
+            mir_ty::TyKind::Closure(_, args) => self.build(args.as_closure().tupled_upvars_ty()),
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
     }
@@ -282,6 +283,7 @@ where
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
+            mir_ty::TyKind::Closure(_, args) => self.build(args.as_closure().tupled_upvars_ty()),
             kind => unimplemented!("ty: {:?}", kind),
         }
     }
