@@ -5,11 +5,9 @@ use std::collections::HashSet;
 use rustc_hir::def::DefKind;
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
-use rustc_span::def_id::DefId;
-use rustc_span::symbol::Ident;
+use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
-use crate::annot::{self, AnnotFormula, AnnotParser, ResolverExt as _};
 use crate::chc;
 use crate::refine::{self, TypeBuilder};
 use crate::rty::{self, ClauseBuilderExt as _};
@@ -34,172 +32,32 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn refine_local_defs(&mut self) {
         for local_def_id in self.tcx.mir_keys(()) {
             if self.tcx.def_kind(*local_def_id).is_fn_like() {
-                self.refine_fn_def(local_def_id.to_def_id());
+                self.refine_fn_def(*local_def_id);
             }
         }
     }
 
-    fn extract_require_annot<T>(
-        &self,
-        resolver: T,
-        def_id: DefId,
-    ) -> Option<AnnotFormula<T::Output>>
-    where
-        T: annot::Resolver,
-    {
-        let mut require_annot = None;
-        for attrs in self
+    #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(local_def_id)))]
+    fn refine_fn_def(&mut self, local_def_id: LocalDefId) {
+        let mut analyzer = self.ctx.local_def_analyzer(local_def_id);
+
+        if analyzer.is_annotated_as_trusted() {
+            assert!(analyzer.is_fully_annotated());
+            self.trusted.insert(local_def_id.to_def_id());
+        }
+
+        let sig = self
             .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::requires_path())
-        {
-            if require_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let require = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
-            require_annot = Some(require);
+            .fn_sig(local_def_id)
+            .instantiate_identity()
+            .skip_binder();
+        use mir_ty::TypeVisitableExt as _;
+        if sig.has_param() && !analyzer.is_fully_annotated() {
+            self.ctx.register_deferred_def(local_def_id.to_def_id());
+        } else {
+            let expected = analyzer.expected_ty();
+            self.ctx.register_def(local_def_id.to_def_id(), expected);
         }
-        require_annot
-    }
-
-    fn extract_ensure_annot<T>(&self, resolver: T, def_id: DefId) -> Option<AnnotFormula<T::Output>>
-    where
-        T: annot::Resolver,
-    {
-        let mut ensure_annot = None;
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::ensures_path())
-        {
-            if ensure_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ensure = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
-            ensure_annot = Some(ensure);
-        }
-        ensure_annot
-    }
-
-    fn extract_param_annots<T>(
-        &self,
-        resolver: T,
-        def_id: DefId,
-    ) -> Vec<(Ident, rty::RefinedType<T::Output>)>
-    where
-        T: annot::Resolver,
-    {
-        let mut param_annots = Vec::new();
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::param_path())
-        {
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let (ident, ts) = analyze::annot::split_param(&ts);
-            let param = AnnotParser::new(&resolver).parse_rty(ts).unwrap();
-            param_annots.push((ident, param));
-        }
-        param_annots
-    }
-
-    fn extract_ret_annot<T>(
-        &self,
-        resolver: T,
-        def_id: DefId,
-    ) -> Option<rty::RefinedType<T::Output>>
-    where
-        T: annot::Resolver,
-    {
-        let mut ret_annot = None;
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::ret_path())
-        {
-            if ret_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ret = AnnotParser::new(&resolver).parse_rty(ts).unwrap();
-            ret_annot = Some(ret);
-        }
-        ret_annot
-    }
-
-    #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(def_id)))]
-    fn refine_fn_def(&mut self, def_id: DefId) {
-        let sig = self.tcx.fn_sig(def_id);
-        let sig = sig.instantiate_identity().skip_binder(); // TODO: is it OK?
-
-        let mut param_resolver = analyze::annot::ParamResolver::default();
-        for (input_ident, input_ty) in self.tcx.fn_arg_names(def_id).iter().zip(sig.inputs()) {
-            let input_ty = TypeBuilder::new(self.tcx, def_id).build(*input_ty);
-            param_resolver.push_param(input_ident.name, input_ty.to_sort());
-        }
-
-        let mut require_annot = self.extract_require_annot(&param_resolver, def_id);
-        let mut ensure_annot = {
-            let output_ty = TypeBuilder::new(self.tcx, def_id).build(sig.output());
-            let resolver = annot::StackedResolver::default()
-                .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
-                .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
-            self.extract_ensure_annot(resolver, def_id)
-        };
-        let param_annots = self.extract_param_annots(&param_resolver, def_id);
-        let ret_annot = self.extract_ret_annot(&param_resolver, def_id);
-
-        if self
-            .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::callable_path())
-            .next()
-            .is_some()
-        {
-            if require_annot.is_some() || ensure_annot.is_some() {
-                unimplemented!();
-            }
-
-            require_annot = Some(AnnotFormula::top());
-            ensure_annot = Some(AnnotFormula::top());
-        }
-
-        assert!(require_annot.is_none() || param_annots.is_empty());
-        assert!(ensure_annot.is_none() || ret_annot.is_none());
-
-        if self
-            .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::trusted_path())
-            .next()
-            .is_some()
-        {
-            assert!(require_annot.is_some() || !param_annots.is_empty());
-            assert!(ensure_annot.is_some() || ret_annot.is_some());
-            self.trusted.insert(def_id);
-        }
-
-        let mut builder =
-            TypeBuilder::new(self.tcx, def_id).for_function_template(&mut self.ctx, sig);
-        if let Some(AnnotFormula::Formula(require)) = require_annot {
-            let formula = require.map_var(|idx| {
-                if idx.index() == sig.inputs().len() - 1 {
-                    rty::RefinedTypeVar::Value
-                } else {
-                    rty::RefinedTypeVar::Free(idx)
-                }
-            });
-            builder.param_refinement(formula.into());
-        }
-        if let Some(AnnotFormula::Formula(ensure)) = ensure_annot {
-            builder.ret_refinement(ensure.into());
-        }
-        for (ident, annot_rty) in param_annots {
-            use annot::Resolver as _;
-            let (idx, _) = param_resolver.resolve(ident).expect("unknown param");
-            builder.param_rty(idx, annot_rty);
-        }
-        if let Some(ret_rty) = ret_annot {
-            builder.ret_rty(ret_rty);
-        }
-        let rty = rty::RefinedType::unrefined(builder.build().into());
-        self.ctx.register_def(def_id, rty);
     }
 
     fn analyze_local_defs(&mut self) {
@@ -211,8 +69,28 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::info!(?local_def_id, "trusted");
                 continue;
             }
-            let expected = self.ctx.def_ty(local_def_id.to_def_id()).unwrap().clone();
-            self.ctx.local_def_analyzer(*local_def_id).run(&expected);
+            let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
+                // when the local_def_id is deferred it would be skipped
+                continue;
+            };
+
+            // check polymorphic function def by replacing type params with some opaque type
+            // (and this is no-op if the function is mono)
+            let type_builder = TypeBuilder::new(self.tcx, local_def_id.to_def_id())
+                .with_param_mapper(|_| rty::Type::int());
+            let mut expected = expected.clone();
+            let subst = rty::TypeParamSubst::new(
+                expected
+                    .free_ty_params()
+                    .into_iter()
+                    .map(|ty_param| (ty_param, rty::RefinedType::unrefined(rty::Type::int())))
+                    .collect(),
+            );
+            expected.subst_ty_params(&subst);
+            self.ctx
+                .local_def_analyzer(*local_def_id)
+                .type_builder(type_builder)
+                .run(&expected);
         }
     }
 
@@ -222,7 +100,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             // TODO: replace code here with relate_* in Env + Refine context (created with empty env)
             let entry_ty = self
                 .ctx
-                .def_ty(def_id)
+                .concrete_def_ty(def_id)
                 .unwrap()
                 .ty
                 .as_function()
