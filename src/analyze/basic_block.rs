@@ -214,6 +214,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     chc::Term::bool(val.try_to_bool().unwrap()),
                 )
             }
+            (mir_ty::TyKind::Tuple(tys), _) if tys.is_empty() => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            }
+            (mir_ty::TyKind::Closure(_, args), _) if args.as_closure().upvar_tys().is_empty() => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                 ConstValue::Scalar(Scalar::Ptr(ptr, _)),
