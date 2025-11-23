@@ -83,6 +83,36 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FunctionAbi {
+    #[default]
+    Rust,
+    RustCall,
+}
+
+impl std::fmt::Display for FunctionAbi {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl FunctionAbi {
+    pub fn name(&self) -> &'static str {
+        match self {
+            FunctionAbi::Rust => "rust",
+            FunctionAbi::RustCall => "rust-call",
+        }
+    }
+
+    pub fn is_rust(&self) -> bool {
+        matches!(self, FunctionAbi::Rust)
+    }
+
+    pub fn is_rust_call(&self) -> bool {
+        matches!(self, FunctionAbi::RustCall)
+    }
+}
+
 /// A function type.
 ///
 /// In Thrust, function types are closed. Because of that, function types, thus its parameters and
@@ -92,6 +122,7 @@ where
 pub struct FunctionType {
     pub params: IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
     pub ret: Box<RefinedType<FunctionParamIdx>>,
+    pub abi: FunctionAbi,
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b FunctionType
@@ -100,15 +131,25 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let abi = match self.abi {
+            FunctionAbi::Rust => allocator.nil(),
+            abi => allocator
+                .text("extern")
+                .append(allocator.space())
+                .append(allocator.as_string(abi))
+                .append(allocator.space()),
+        };
         let separator = allocator.text(",").append(allocator.line());
-        allocator
-            .intersperse(self.params.iter().map(|ty| ty.pretty(allocator)), separator)
-            .parens()
-            .append(allocator.space())
-            .append(allocator.text("→"))
-            .append(allocator.line())
-            .append(self.ret.pretty(allocator))
-            .group()
+        abi.append(
+            allocator
+                .intersperse(self.params.iter().map(|ty| ty.pretty(allocator)), separator)
+                .parens(),
+        )
+        .append(allocator.space())
+        .append(allocator.text("→"))
+        .append(allocator.line())
+        .append(self.ret.pretty(allocator))
+        .group()
     }
 }
 
@@ -120,7 +161,13 @@ impl FunctionType {
         FunctionType {
             params,
             ret: Box::new(ret),
+            abi: FunctionAbi::Rust,
         }
+    }
+
+    pub fn with_abi(mut self, abi: FunctionAbi) -> Self {
+        self.abi = abi;
+        self
     }
 
     /// Because function types are always closed in Thrust, we can convert this into

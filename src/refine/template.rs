@@ -184,6 +184,11 @@ impl<'tcx> TypeBuilder<'tcx> {
         registry: &'a mut R,
         sig: mir_ty::FnSig<'tcx>,
     ) -> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
+        let abi = match sig.abi {
+            rustc_target::spec::abi::Abi::Rust => rty::FunctionAbi::Rust,
+            rustc_target::spec::abi::Abi::RustCall => rty::FunctionAbi::RustCall,
+            _ => unimplemented!("unsupported function ABI: {:?}", sig.abi),
+        };
         FunctionTemplateTypeBuilder {
             inner: self.clone(),
             registry,
@@ -199,6 +204,7 @@ impl<'tcx> TypeBuilder<'tcx> {
             param_rtys: Default::default(),
             param_refinement: None,
             ret_rty: None,
+            abi,
         }
     }
 }
@@ -318,6 +324,7 @@ where
             param_rtys: Default::default(),
             param_refinement: None,
             ret_rty: None,
+            abi: Default::default(),
         }
         .build();
         BasicBlockType { ty, locals }
@@ -333,6 +340,7 @@ pub struct FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     param_refinement: Option<rty::Refinement<rty::FunctionParamIdx>>,
     param_rtys: HashMap<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
     ret_rty: Option<rty::RefinedType<rty::FunctionParamIdx>>,
+    abi: rty::FunctionAbi,
 }
 
 impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
@@ -441,6 +449,6 @@ where
                 .with_scope(&builder)
                 .build_refined(self.ret_ty)
         });
-        rty::FunctionType::new(param_rtys, ret_rty)
+        rty::FunctionType::new(param_rtys, ret_rty).with_abi(self.abi)
     }
 }
