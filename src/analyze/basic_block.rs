@@ -568,12 +568,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let ret = rty::RefinedType::new(rty::Type::unit(), ret_formula.into());
                 rty::FunctionType::new([param1, param2].into_iter().collect(), ret).into()
             }
-            Some((def_id, args)) => self
-                .ctx
-                .def_ty_with_args(def_id, args)
-                .expect("unknown def")
-                .ty
-                .vacuous(),
+            Some((def_id, args)) => {
+                let param_env = self.tcx.param_env(self.local_def_id);
+                let instance =
+                    mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+                let resolved_def_id = if let Some(instance) = instance {
+                    instance.def_id()
+                } else {
+                    def_id
+                };
+                if def_id != resolved_def_id {
+                    tracing::info!(?def_id, ?resolved_def_id, "resolve",);
+                }
+
+                self.ctx
+                    .def_ty_with_args(resolved_def_id, args)
+                    .expect("unknown def")
+                    .ty
+                    .vacuous()
+            }
             _ => self.operand_type(func.clone()).ty,
         };
         let expected_args: IndexVec<_, _> = args
