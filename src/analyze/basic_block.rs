@@ -84,15 +84,54 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) -> Vec<chc::Clause> {
         let mut clauses = Vec::new();
 
-        if expected_args.is_empty() {
-            // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
-            expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
-        }
         tracing::debug!(
             got = %got.display(),
             expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
             "fn_sub_type"
         );
+
+        match got.abi {
+            rty::FunctionAbi::Rust => {
+                if expected_args.is_empty() {
+                    // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
+                    expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
+                }
+            }
+            rty::FunctionAbi::RustCall => {
+                // &Closure, { v: (own i32, own bool) | v = (<0>, <false>) }
+                // =>
+                // &Closure, { v: i32 | (<v>, _) = (<0>, <false>) }, { v: bool | (_, <v>) = (<0>, <false>) }
+
+                let rty::RefinedType { ty, mut refinement } =
+                    expected_args.pop().expect("rust-call last arg");
+                let ty = ty.into_tuple().expect("rust-call last arg is tuple");
+                let mut replacement_tuple = Vec::new(); // will be (<v>, _) or (_, <v>)
+                for elem in &ty.elems {
+                    let existential = refinement.existentials.push(elem.ty.to_sort());
+                    replacement_tuple.push(chc::Term::var(rty::RefinedTypeVar::Existential(
+                        existential,
+                    )));
+                }
+
+                for (i, elem) in ty.elems.into_iter().enumerate() {
+                    // all tuple elements are boxed during the translation to rty::Type
+                    let mut param_ty = elem.deref();
+                    param_ty
+                        .refinement
+                        .push_conj(refinement.clone().subst_value_var(|| {
+                            let mut value_elems = replacement_tuple.clone();
+                            value_elems[i] = chc::Term::var(rty::RefinedTypeVar::Value).boxed();
+                            chc::Term::tuple(value_elems)
+                        }));
+                    expected_args.push(param_ty);
+                }
+
+                tracing::info!(
+                    expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
+                    "rust-call expanded",
+                );
+            }
+        }
 
         // TODO: check sty and length is equal
         let mut builder = self.env.build_clause();
