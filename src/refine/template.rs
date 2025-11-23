@@ -309,9 +309,12 @@ where
     where
         I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
     {
+        // this is necessary for local_def::Analyzer::elaborate_unused_args
+        let mut live_locals: Vec<_> = live_locals.into_iter().collect();
+        live_locals.sort_by_key(|(local, _)| *local);
+
         let mut locals = IndexVec::<rty::FunctionParamIdx, _>::new();
         let mut tys = Vec::new();
-        // TODO: avoid two iteration and assumption of FunctionParamIdx match between locals and ty
         for (local, ty) in live_locals {
             locals.push((local, ty.mutbl));
             tys.push(ty);
