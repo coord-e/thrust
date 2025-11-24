@@ -33,6 +33,10 @@ pub fn callable_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("callable")]
 }
 
+pub fn extern_spec_fn_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("extern_spec_fn")]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via
