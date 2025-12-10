@@ -24,9 +24,33 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      COAR_IMAGE: ghcr.io/hiroshi-unno/coar@sha256:73144ed27a02b163d1a71b41b58f3b5414f12e91326015600cfdca64ff19f011
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-z3
+      - name: Setup thrust-pcsat-wrapper
+        run: |
+          docker pull "$COAR_IMAGE"
+
+          cat <<"EOF" > thrust-pcsat-wrapper
+          #!/bin/bash
+
+          smt2=$(mktemp -p . --suffix .smt2)
+          trap "rm -f $smt2" EXIT
+          cp "$1" "$smt2"
+          out=$(
+            docker run --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
+              main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2"
+          )
+          exit_code=$?
+          echo "${out%,*}"
+          exit "$exit_code"
+          EOF
+          chmod +x thrust-pcsat-wrapper
+
+          mkdir -p ~/.local/bin
+          mv thrust-pcsat-wrapper ~/.local/bin/thrust-pcsat-wrapper
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
