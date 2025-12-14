@@ -104,14 +104,14 @@ impl<'tcx> ReplacePlacesVisitor<'tcx> {
 }
 
 #[derive(Debug, Clone)]
-struct DeferredDefTy {
-    cache: Rc<RefCell<HashMap<rty::TypeArgs, rty::RefinedType>>>,
+struct DeferredDefTy<'tcx> {
+    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
 }
 
 #[derive(Debug, Clone)]
-enum DefTy {
+enum DefTy<'tcx> {
     Concrete(rty::RefinedType),
-    Deferred(DeferredDefTy),
+    Deferred(DeferredDefTy<'tcx>),
 }
 
 #[derive(Clone)]
@@ -123,7 +123,7 @@ pub struct Analyzer<'tcx> {
     /// currently contains only local-def templates,
     /// but will be extended to contain externally known def's refinement types
     /// (at least for every defs referenced by local def bodies)
-    defs: HashMap<DefId, DefTy>,
+    defs: HashMap<DefId, DefTy<'tcx>>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -241,15 +241,17 @@ impl<'tcx> Analyzer<'tcx> {
     pub fn def_ty_with_args(
         &mut self,
         def_id: DefId,
-        rty_args: rty::TypeArgs,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<rty::RefinedType> {
+        let type_builder = TypeBuilder::new(self.tcx, def_id);
+
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
                 let mut def_ty = rty.clone();
                 def_ty.instantiate_ty_params(
-                    rty_args
-                        .clone()
-                        .into_iter()
+                    generic_args
+                        .types()
+                        .map(|ty| type_builder.build(ty))
                         .map(rty::RefinedType::unrefined)
                         .collect(),
                 );
@@ -259,21 +261,19 @@ impl<'tcx> Analyzer<'tcx> {
         };
 
         let deferred_ty_cache = Rc::clone(&deferred_ty.cache); // to cut reference to allow &mut self
-        if let Some(rty) = deferred_ty_cache.borrow().get(&rty_args) {
+        if let Some(rty) = deferred_ty_cache.borrow().get(&generic_args) {
             return Some(rty.clone());
         }
 
-        let type_builder = TypeBuilder::new(self.tcx, def_id).with_param_mapper({
-            let rty_args = rty_args.clone();
-            move |ty: rty::ParamType| rty_args[ty.idx].clone()
-        });
         let mut analyzer = self.local_def_analyzer(def_id.as_local()?);
-        analyzer.type_builder(type_builder);
+        analyzer
+            .type_builder(type_builder)
+            .generic_args(generic_args);
 
         let expected = analyzer.expected_ty();
         deferred_ty_cache
             .borrow_mut()
-            .insert(rty_args, expected.clone());
+            .insert(generic_args, expected.clone());
 
         analyzer.run(&expected);
         Some(expected)
@@ -339,5 +339,31 @@ impl<'tcx> Analyzer<'tcx> {
         if let Err(err) = self.system.borrow().solve() {
             self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
+    }
+
+    /// Computes the signature of the local function.
+    ///
+    /// This is a drop-in replacement of `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
+    /// but extracts parameter and return types directly from the given `body` to obtain a signature that
+    /// reflects potential type instantiations happened after `optimized_mir`.
+    pub fn local_fn_sig_with_body(
+        &self,
+        local_def_id: LocalDefId,
+        body: &mir::Body<'tcx>,
+    ) -> mir_ty::FnSig<'tcx> {
+        let ty = self.tcx.type_of(local_def_id).instantiate_identity();
+        let sig = if let mir_ty::TyKind::Closure(_, substs) = ty.kind() {
+            substs.as_closure().sig().skip_binder()
+        } else {
+            ty.fn_sig(self.tcx).skip_binder()
+        };
+
+        self.tcx.mk_fn_sig(
+            body.args_iter().map(|arg| body.local_decls[arg].ty),
+            body.return_ty(),
+            sig.c_variadic,
+            sig.unsafety,
+            sig.abi,
+        )
     }
 }
