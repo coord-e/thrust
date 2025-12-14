@@ -163,6 +163,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
+            mir_ty::TyKind::Closure(_, args) => self.build(args.as_closure().tupled_upvars_ty()),
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
     }
@@ -183,6 +184,11 @@ impl<'tcx> TypeBuilder<'tcx> {
         registry: &'a mut R,
         sig: mir_ty::FnSig<'tcx>,
     ) -> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
+        let abi = match sig.abi {
+            rustc_target::spec::abi::Abi::Rust => rty::FunctionAbi::Rust,
+            rustc_target::spec::abi::Abi::RustCall => rty::FunctionAbi::RustCall,
+            _ => unimplemented!("unsupported function ABI: {:?}", sig.abi),
+        };
         FunctionTemplateTypeBuilder {
             inner: self.clone(),
             registry,
@@ -198,6 +204,7 @@ impl<'tcx> TypeBuilder<'tcx> {
             param_rtys: Default::default(),
             param_refinement: None,
             ret_rty: None,
+            abi,
         }
     }
 }
@@ -282,6 +289,7 @@ where
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
+            mir_ty::TyKind::Closure(_, args) => self.build(args.as_closure().tupled_upvars_ty()),
             kind => unimplemented!("ty: {:?}", kind),
         }
     }
@@ -301,9 +309,12 @@ where
     where
         I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
     {
+        // this is necessary for local_def::Analyzer::elaborate_unused_args
+        let mut live_locals: Vec<_> = live_locals.into_iter().collect();
+        live_locals.sort_by_key(|(local, _)| *local);
+
         let mut locals = IndexVec::<rty::FunctionParamIdx, _>::new();
         let mut tys = Vec::new();
-        // TODO: avoid two iteration and assumption of FunctionParamIdx match between locals and ty
         for (local, ty) in live_locals {
             locals.push((local, ty.mutbl));
             tys.push(ty);
@@ -316,6 +327,7 @@ where
             param_rtys: Default::default(),
             param_refinement: None,
             ret_rty: None,
+            abi: Default::default(),
         }
         .build();
         BasicBlockType { ty, locals }
@@ -331,6 +343,7 @@ pub struct FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     param_refinement: Option<rty::Refinement<rty::FunctionParamIdx>>,
     param_rtys: HashMap<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
     ret_rty: Option<rty::RefinedType<rty::FunctionParamIdx>>,
+    abi: rty::FunctionAbi,
 }
 
 impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
@@ -439,6 +452,6 @@ where
                 .with_scope(&builder)
                 .build_refined(self.ret_ty)
         });
-        rty::FunctionType::new(param_rtys, ret_rty)
+        rty::FunctionType::new(param_rtys, ret_rty).with_abi(self.abi)
     }
 }
