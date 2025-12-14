@@ -57,6 +57,7 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
             }
         }
         chc::Term::DatatypeDiscr(_, t) => term_sorts(clause, t, sorts),
+        chc::Term::FormulaExistentialVar(_, _) => {}
     }
 }
 
