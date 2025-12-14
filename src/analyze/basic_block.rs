@@ -125,11 +125,111 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         clauses
     }
 
+    fn const_bytes_ty(
+        &self,
+        ty: mir_ty::Ty<'tcx>,
+        alloc: mir::interpret::ConstAllocation,
+        range: std::ops::Range<usize>,
+    ) -> PlaceType {
+        let alloc = alloc.inner();
+        let bytes = alloc.inspect_with_uninit_and_ptr_outside_interpreter(range);
+        match ty.kind() {
+            mir_ty::TyKind::Str => {
+                let content = std::str::from_utf8(bytes).unwrap();
+                PlaceType::with_ty_and_term(
+                    rty::Type::string(),
+                    chc::Term::string(content.to_owned()),
+                )
+            }
+            mir_ty::TyKind::Bool => {
+                PlaceType::with_ty_and_term(rty::Type::bool(), chc::Term::bool(bytes[0] != 0))
+            }
+            mir_ty::TyKind::Int(_) => {
+                // TODO: see target endianness
+                let val = match bytes.len() {
+                    1 => i8::from_ne_bytes(bytes.try_into().unwrap()) as i64,
+                    2 => i16::from_ne_bytes(bytes.try_into().unwrap()) as i64,
+                    4 => i32::from_ne_bytes(bytes.try_into().unwrap()) as i64,
+                    8 => i64::from_ne_bytes(bytes.try_into().unwrap()),
+                    _ => unimplemented!("const int bytes len: {}", bytes.len()),
+                };
+                PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(val))
+            }
+            _ => unimplemented!("const bytes ty: {:?}", ty),
+        }
+    }
+
+    fn const_value_ty(&self, val: &mir::ConstValue<'tcx>, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
+        use mir::{interpret::Scalar, ConstValue, Mutability};
+        match (ty.kind(), val) {
+            (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
+                let val = val.try_to_int(val.size()).unwrap();
+                PlaceType::with_ty_and_term(
+                    rty::Type::int(),
+                    chc::Term::int(val.try_into().unwrap()),
+                )
+            }
+            (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
+                PlaceType::with_ty_and_term(
+                    rty::Type::bool(),
+                    chc::Term::bool(val.try_to_bool().unwrap()),
+                )
+            }
+            (
+                mir_ty::TyKind::Ref(_, elem, Mutability::Not),
+                ConstValue::Scalar(Scalar::Ptr(ptr, _)),
+            ) => {
+                // Pointer::into_parts is OK for CtfeProvenance
+                // in a later version of rustc it has prov_and_relative_offset that ensures this
+                let (prov, offset) = ptr.into_parts();
+                let global_alloc = self.tcx.global_alloc(prov.alloc_id());
+                match global_alloc {
+                    mir::interpret::GlobalAlloc::Memory(alloc) => {
+                        let layout = self
+                            .tcx
+                            .layout_of(mir_ty::ParamEnv::reveal_all().and(*elem))
+                            .unwrap();
+                        let size = layout.size;
+                        let range =
+                            offset.bytes() as usize..(offset.bytes() + size.bytes()) as usize;
+                        self.const_bytes_ty(*elem, alloc, range).immut()
+                    }
+                    _ => unimplemented!("const ptr alloc: {:?}", global_alloc),
+                }
+            }
+            (mir_ty::TyKind::Ref(_, elem, Mutability::Not), ConstValue::Slice { data, meta }) => {
+                let end = (*meta).try_into().unwrap();
+                self.const_bytes_ty(*elem, *data, 0..end).immut()
+            }
+            _ => unimplemented!("const: {:?}, ty: {:?}", val, ty),
+        }
+    }
+
+    fn const_ty(&self, const_: &mir::Const<'tcx>) -> PlaceType {
+        match const_ {
+            mir::Const::Val(val, ty) => self.const_value_ty(val, ty),
+            mir::Const::Unevaluated(unevaluated, ty) => {
+                // since all constants are immutable in current setup,
+                // it should be okay to evaluate them here on-the-fly
+                let param_env = self.tcx.param_env(self.local_def_id);
+                let val = self
+                    .tcx
+                    .const_eval_resolve(param_env, *unevaluated, None)
+                    .unwrap();
+                self.const_value_ty(&val, ty)
+            }
+            _ => unimplemented!("const: {:?}", const_),
+        }
+    }
+
     fn operand_type(&self, mut operand: Operand<'tcx>) -> PlaceType {
         if let Operand::Copy(p) | Operand::Move(p) = &mut operand {
             *p = self.elaborate_place(p);
         }
-        let ty = self.env.operand_type(operand.clone());
+        let ty = match &operand {
+            Operand::Copy(place) | Operand::Move(place) => self.env.place_type(*place),
+            Operand::Constant(operand) => self.const_ty(&operand.const_),
+        };
         tracing::debug!(operand = ?operand, ty = %ty.display(), "operand_type");
         ty
     }
