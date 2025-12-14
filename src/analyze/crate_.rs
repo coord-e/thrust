@@ -76,8 +76,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
             // check polymorphic function def by replacing type params with some opaque type
             // (and this is no-op if the function is mono)
-            let type_builder = TypeBuilder::new(self.tcx, local_def_id.to_def_id())
-                .with_param_mapper(|_| rty::Type::int());
+            let type_builder = TypeBuilder::new(self.tcx, local_def_id.to_def_id());
             let mut expected = expected.clone();
             let subst = rty::TypeParamSubst::new(
                 expected
@@ -87,11 +86,61 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .collect(),
             );
             expected.subst_ty_params(&subst);
+            let generic_args = self.placeholder_generic_args(*local_def_id);
             self.ctx
                 .local_def_analyzer(*local_def_id)
                 .type_builder(type_builder)
+                .generic_args(generic_args)
                 .run(&expected);
         }
+    }
+
+    fn placeholder_generic_args(&self, local_def_id: LocalDefId) -> mir_ty::GenericArgsRef<'tcx> {
+        let mut constrained_params = HashSet::new();
+        let predicates = self.tcx.predicates_of(local_def_id);
+        let sized_trait = self.tcx.lang_items().sized_trait().unwrap();
+        for (clause, _) in predicates.predicates {
+            let mir_ty::ClauseKind::Trait(pred) = clause.kind().skip_binder() else {
+                continue;
+            };
+            if pred.def_id() == sized_trait {
+                continue;
+            };
+            for arg in pred.trait_ref.args.iter().flat_map(|ty| ty.walk()) {
+                let Some(ty) = arg.as_type() else {
+                    continue;
+                };
+                let mir_ty::TyKind::Param(param_ty) = ty.kind() else {
+                    continue;
+                };
+                constrained_params.insert(param_ty.index);
+            }
+        }
+
+        let mut args: Vec<mir_ty::GenericArg<'tcx>> = Vec::new();
+
+        let generics = self.tcx.generics_of(local_def_id);
+        for idx in 0..generics.count() {
+            let param = generics.param_at(idx, self.tcx);
+            let arg = match param.kind {
+                mir_ty::GenericParamDefKind::Type { .. } => {
+                    if constrained_params.contains(&param.index) {
+                        panic!(
+                            "unable to check generic function with constrained type parameter: {}",
+                            self.tcx.def_path_str(local_def_id)
+                        );
+                    }
+                    self.tcx.types.i32.into()
+                }
+                mir_ty::GenericParamDefKind::Const { .. } => {
+                    unimplemented!()
+                }
+                mir_ty::GenericParamDefKind::Lifetime { .. } => self.tcx.lifetimes.re_erased.into(),
+            };
+            args.push(arg);
+        }
+
+        self.tcx.mk_args(&args)
     }
 
     fn assert_callable_entry(&mut self) {

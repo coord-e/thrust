@@ -55,7 +55,7 @@ mod subtyping;
 pub use subtyping::{relate_sub_closed_type, ClauseScope, Subtyping};
 
 mod params;
-pub use params::{RefinedTypeArgs, TypeArgs, TypeParamIdx, TypeParamSubst};
+pub use params::{RefinedTypeArgs, TypeParamIdx, TypeParamSubst};
 
 rustc_index::newtype_index! {
     /// An index representing function parameter.
