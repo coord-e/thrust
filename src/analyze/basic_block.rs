@@ -363,15 +363,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 _ty,
             ) => {
                 let func_ty = match operand.const_fn_def() {
-                    Some((def_id, args)) => {
-                        let rty_args: IndexVec<_, _> =
-                            args.types().map(|ty| self.type_builder.build(ty)).collect();
-                        self.ctx
-                            .def_ty_with_args(def_id, rty_args)
-                            .expect("unknown def")
-                            .ty
-                            .clone()
-                    }
+                    Some((def_id, args)) => self
+                        .ctx
+                        .def_ty_with_args(def_id, args)
+                        .expect("unknown def")
+                        .ty
+                        .clone(),
                     _ => unimplemented!(),
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
@@ -571,14 +568,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let ret = rty::RefinedType::new(rty::Type::unit(), ret_formula.into());
                 rty::FunctionType::new([param1, param2].into_iter().collect(), ret).into()
             }
-            Some((def_id, args)) => {
-                let rty_args = args.types().map(|ty| self.type_builder.build(ty)).collect();
-                self.ctx
-                    .def_ty_with_args(def_id, rty_args)
-                    .expect("unknown def")
-                    .ty
-                    .vacuous()
-            }
+            Some((def_id, args)) => self
+                .ctx
+                .def_ty_with_args(def_id, args)
+                .expect("unknown def")
+                .ty
+                .vacuous(),
             _ => self.operand_type(func.clone()).ty,
         };
         let expected_args: IndexVec<_, _> = args
@@ -1085,11 +1080,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     pub fn env(&mut self, env: Env) -> &mut Self {
         self.env = env;
-        self
-    }
-
-    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
-        self.type_builder = type_builder;
         self
     }
 

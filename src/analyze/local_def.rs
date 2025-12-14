@@ -169,8 +169,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn expected_ty(&mut self) -> rty::RefinedType {
-        let sig = self.tcx.fn_sig(self.local_def_id);
-        let sig = sig.instantiate_identity().skip_binder();
+        let sig = self
+            .ctx
+            .local_fn_sig_with_body(self.local_def_id, &self.body);
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self
@@ -532,7 +533,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
-                .type_builder(self.type_builder.clone())
                 .run(&rty);
         }
     }
@@ -649,8 +649,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
-        self.type_builder = type_builder;
+    pub fn generic_args(&mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> &mut Self {
+        self.body =
+            mir_ty::EarlyBinder::bind(self.body.clone()).instantiate(self.tcx, generic_args);
         self
     }
 

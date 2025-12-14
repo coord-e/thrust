@@ -389,7 +389,7 @@ impl Function {
 }
 
 /// A logical term.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum Term<V = TermVarIdx> {
     Null,
     Var(V),
@@ -991,7 +991,7 @@ impl Pred {
 }
 
 /// An atom is a predicate applied to a list of terms.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Atom<V = TermVarIdx> {
     pub pred: Pred,
     pub args: Vec<Term<V>>,
@@ -1084,7 +1084,7 @@ impl<V> Atom<V> {
 /// While it allows arbitrary [`Atom`] in its `Atom` variant, we only expect atoms with known
 /// predicates (i.e., predicates other than `Pred::Var`) to appear in formulas. It is our TODO to
 /// enforce this restriction statically. Also see the definition of [`Body`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum Formula<V = TermVarIdx> {
     Atom(Atom<V>),
     Not(Box<Formula<V>>),
@@ -1338,7 +1338,7 @@ impl<V> Formula<V> {
 }
 
 /// The body part of a clause, consisting of atoms and a formula.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Body<V = TermVarIdx> {
     pub atoms: Vec<Atom<V>>,
     /// NOTE: This doesn't contain predicate variables. Also see [`Formula`].
