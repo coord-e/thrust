@@ -76,7 +76,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
             // check polymorphic function def by replacing type params with some opaque type
             // (and this is no-op if the function is mono)
-            let type_builder = TypeBuilder::new(self.tcx, local_def_id.to_def_id());
             let mut expected = expected.clone();
             let subst = rty::TypeParamSubst::new(
                 expected
@@ -89,7 +88,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let generic_args = self.placeholder_generic_args(*local_def_id);
             self.ctx
                 .local_def_analyzer(*local_def_id)
-                .type_builder(type_builder)
                 .generic_args(generic_args)
                 .run(&expected);
         }

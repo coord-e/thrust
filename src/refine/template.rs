@@ -59,19 +59,6 @@ where
     }
 }
 
-trait ParamTypeMapper {
-    fn map_param_ty(&self, ty: rty::ParamType) -> rty::Type<rty::Closed>;
-}
-
-impl<F> ParamTypeMapper for F
-where
-    F: Fn(rty::ParamType) -> rty::Type<rty::Closed>,
-{
-    fn map_param_ty(&self, ty: rty::ParamType) -> rty::Type<rty::Closed> {
-        self(ty)
-    }
-}
-
 /// Translates [`mir_ty::Ty`] to [`rty::Type`].
 ///
 /// This struct implements a translation from Rust MIR types to Thrust types.
@@ -87,9 +74,6 @@ pub struct TypeBuilder<'tcx> {
     /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
-    /// Optionally also want to further map rty::ParamType to other rty::Type before generating
-    /// templates. This is no-op by default.
-    param_type_mapper: std::rc::Rc<dyn ParamTypeMapper>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
@@ -109,16 +93,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         Self {
             tcx,
             param_idx_mapping,
-            param_type_mapper: std::rc::Rc::new(|ty: rty::ParamType| ty.into()),
         }
-    }
-
-    pub fn with_param_mapper<F>(mut self, mapper: F) -> Self
-    where
-        F: Fn(rty::ParamType) -> rty::Type<rty::Closed> + 'static,
-    {
-        self.param_type_mapper = std::rc::Rc::new(mapper);
-        self
     }
 
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
@@ -126,8 +101,7 @@ impl<'tcx> TypeBuilder<'tcx> {
             .param_idx_mapping
             .get(&ty.index)
             .expect("unknown type param idx");
-        let param_ty = rty::ParamType::new(index);
-        self.param_type_mapper.map_param_ty(param_ty)
+        rty::ParamType::new(index).into()
     }
 
     // TODO: consolidate two impls
@@ -399,17 +373,6 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     pub fn ret_rty(&mut self, rty: rty::RefinedType<rty::FunctionParamIdx>) -> &mut Self {
         self.ret_rty = Some(rty);
         self
-    }
-
-    pub fn would_contain_template(&self) -> bool {
-        if self.param_tys.is_empty() {
-            return self.ret_rty.is_none();
-        }
-
-        let last_param_idx = rty::FunctionParamIdx::from(self.param_tys.len() - 1);
-        let param_annotated =
-            self.param_refinement.is_some() || self.param_rtys.contains_key(&last_param_idx);
-        self.ret_rty.is_none() || !param_annotated
     }
 }
 
