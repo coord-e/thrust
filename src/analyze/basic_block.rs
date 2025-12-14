@@ -983,11 +983,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self
     }
 
-    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
-        self.type_builder = type_builder;
-        self
-    }
-
     pub fn run(&mut self, expected: &BasicBlockType) {
         let span = tracing::info_span!("bb", bb = ?self.basic_block);
         let _guard = span.enter();

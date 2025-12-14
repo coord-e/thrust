@@ -243,10 +243,10 @@ impl<'tcx> Analyzer<'tcx> {
         def_id: DefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<rty::RefinedType> {
-        let type_builder = TypeBuilder::new(self.tcx, def_id);
-
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
+                let type_builder = TypeBuilder::new(self.tcx, def_id);
+
                 let mut def_ty = rty.clone();
                 def_ty.instantiate_ty_params(
                     generic_args
@@ -266,9 +266,7 @@ impl<'tcx> Analyzer<'tcx> {
         }
 
         let mut analyzer = self.local_def_analyzer(def_id.as_local()?);
-        analyzer
-            .type_builder(type_builder)
-            .generic_args(generic_args);
+        analyzer.generic_args(generic_args);
 
         let expected = analyzer.expected_ty();
         deferred_ty_cache

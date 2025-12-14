@@ -533,7 +533,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
-                .type_builder(self.type_builder.clone())
                 .run(&rty);
         }
     }
@@ -648,11 +647,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             drop_points,
             type_builder,
         }
-    }
-
-    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
-        self.type_builder = type_builder;
-        self
     }
 
     pub fn generic_args(&mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> &mut Self {
