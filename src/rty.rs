@@ -55,7 +55,7 @@ mod subtyping;
 pub use subtyping::{relate_sub_closed_type, ClauseScope, Subtyping};
 
 mod params;
-pub use params::{RefinedTypeArgs, TypeArgs, TypeParamIdx, TypeParamSubst};
+pub use params::{RefinedTypeArgs, TypeParamIdx, TypeParamSubst};
 
 rustc_index::newtype_index! {
     /// An index representing function parameter.
@@ -88,7 +88,7 @@ where
 /// In Thrust, function types are closed. Because of that, function types, thus its parameters and
 /// return type only refer to the parameters of the function itself using [`FunctionParamIdx`] and
 /// do not accept other type of variables from the environment.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct FunctionType {
     pub params: IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
     pub ret: Box<RefinedType<FunctionParamIdx>>,
@@ -156,7 +156,7 @@ impl FunctionType {
 }
 
 /// The kind of a reference, which is either mutable or immutable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefKind {
     Mut,
     Immut,
@@ -181,7 +181,7 @@ where
 }
 
 /// The kind of a pointer, which is either a reference or an owned pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerKind {
     Ref(RefKind),
     Own,
@@ -221,7 +221,7 @@ impl PointerKind {
 }
 
 /// A pointer type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct PointerType<T> {
     pub kind: PointerKind,
     pub elem: Box<RefinedType<T>>,
@@ -334,7 +334,7 @@ impl<T> PointerType<T> {
 /// Note that the current implementation uses tuples to represent structs. See
 /// implementation in `crate::refine::template` module for details.
 /// It is our TODO to improve the struct representation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct TupleType<T> {
     pub elems: Vec<RefinedType<T>>,
 }
@@ -458,7 +458,7 @@ impl EnumDatatypeDef {
 /// An enum type.
 ///
 /// An enum type includes its type arguments and the argument types can refer to outer variables `T`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct EnumType<T> {
     pub symbol: chc::DatatypeSymbol,
     pub args: IndexVec<TypeParamIdx, RefinedType<T>>,
@@ -560,7 +560,7 @@ impl<T> EnumType<T> {
 }
 
 /// A type parameter.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct ParamType {
     pub idx: TypeParamIdx,
 }
@@ -589,7 +589,7 @@ impl ParamType {
 }
 
 /// An underlying type of a refinement type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum Type<T> {
     Int,
     Bool,
@@ -995,7 +995,7 @@ impl<T> ShiftExistential for RefinedTypeVar<T> {
 /// A formula, potentially equipped with an existential quantifier.
 ///
 /// Note: This is not to be confused with [`crate::chc::Formula`] in the [`crate::chc`] module, which is a different notion.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Formula<V> {
     pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
     pub body: chc::Body<V>,
@@ -1236,7 +1236,7 @@ impl<T> Instantiator<T> {
 }
 
 /// A refinement type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct RefinedType<FV = Closed> {
     pub ty: Type<FV>,
     pub refinement: Refinement<FV>,
