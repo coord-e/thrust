@@ -26,6 +26,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
     trusted: HashSet<DefId>,
+    predicates: HashSet<DefId>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -44,6 +45,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if analyzer.is_annotated_as_trusted() {
             assert!(analyzer.is_fully_annotated());
             self.trusted.insert(local_def_id.to_def_id());
+        }
+
+        if analyzer.is_annotated_as_predicate() {
+            self.predicates.insert(local_def_id.to_def_id());
         }
 
         let sig = self
@@ -180,7 +185,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn new(ctx: &'ctx mut analyze::Analyzer<'tcx>) -> Self {
         let tcx = ctx.tcx;
         let trusted = HashSet::default();
-        Self { ctx, tcx, trusted }
+        let predicates = HashSet::default();
+        Self { ctx, tcx, trusted, predicates }
     }
 
     pub fn run(&mut self) {
