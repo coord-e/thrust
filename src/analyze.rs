@@ -115,6 +115,33 @@ enum DefTy<'tcx> {
     Deferred(DeferredDefTy<'tcx>),
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct EnumDefs {
+    defs: HashMap<DefId, rty::EnumDatatypeDef>,
+}
+
+impl EnumDefs {
+    pub fn find_by_name(&self, name: &chc::DatatypeSymbol) -> Option<&rty::EnumDatatypeDef> {
+        self.defs.values().find(|def| &def.name == name)
+    }
+
+    pub fn get(&self, def_id: DefId) -> Option<&rty::EnumDatatypeDef> {
+        self.defs.get(&def_id)
+    }
+
+    pub fn insert(&mut self, def_id: DefId, def: rty::EnumDatatypeDef) {
+        self.defs.insert(def_id, def);
+    }
+}
+
+impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
+    fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef {
+        self.borrow().find_by_name(name).unwrap().clone()
+    }
+}
+
+pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
+
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -132,7 +159,7 @@ pub struct Analyzer<'tcx> {
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
-    enum_defs: Rc<RefCell<HashMap<DefId, rty::EnumDatatypeDef>>>,
+    enum_defs: Rc<RefCell<EnumDefs>>,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
@@ -345,14 +372,8 @@ impl<'tcx> Analyzer<'tcx> {
         self.register_def(panic_def_id, rty::RefinedType::unrefined(panic_ty.into()));
     }
 
-    pub fn new_env(&self) -> refine::Env {
-        let defs = self
-            .enum_defs
-            .borrow()
-            .values()
-            .map(|def| (def.name.clone(), def.clone()))
-            .collect();
-        refine::Env::new(defs)
+    pub fn new_env(&self) -> Env {
+        refine::Env::new(Rc::clone(&self.enum_defs))
     }
 
     pub fn crate_analyzer(&mut self) -> crate_::Analyzer<'tcx, '_> {
