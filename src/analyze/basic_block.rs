@@ -84,15 +84,54 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) -> Vec<chc::Clause> {
         let mut clauses = Vec::new();
 
-        if expected_args.is_empty() {
-            // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
-            expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
-        }
         tracing::debug!(
             got = %got.display(),
             expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
             "fn_sub_type"
         );
+
+        match got.abi {
+            rty::FunctionAbi::Rust => {
+                if expected_args.is_empty() {
+                    // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
+                    expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
+                }
+            }
+            rty::FunctionAbi::RustCall => {
+                // &Closure, { v: (own i32, own bool) | v = (<0>, <false>) }
+                // =>
+                // &Closure, { v: i32 | (<v>, _) = (<0>, <false>) }, { v: bool | (_, <v>) = (<0>, <false>) }
+
+                let rty::RefinedType { ty, mut refinement } =
+                    expected_args.pop().expect("rust-call last arg");
+                let ty = ty.into_tuple().expect("rust-call last arg is tuple");
+                let mut replacement_tuple = Vec::new(); // will be (<v>, _) or (_, <v>)
+                for elem in &ty.elems {
+                    let existential = refinement.existentials.push(elem.ty.to_sort());
+                    replacement_tuple.push(chc::Term::var(rty::RefinedTypeVar::Existential(
+                        existential,
+                    )));
+                }
+
+                for (i, elem) in ty.elems.into_iter().enumerate() {
+                    // all tuple elements are boxed during the translation to rty::Type
+                    let mut param_ty = elem.deref();
+                    param_ty
+                        .refinement
+                        .push_conj(refinement.clone().subst_value_var(|| {
+                            let mut value_elems = replacement_tuple.clone();
+                            value_elems[i] = chc::Term::var(rty::RefinedTypeVar::Value).boxed();
+                            chc::Term::tuple(value_elems)
+                        }));
+                    expected_args.push(param_ty);
+                }
+
+                tracing::info!(
+                    expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
+                    "rust-call expanded",
+                );
+            }
+        }
 
         // TODO: check sty and length is equal
         let mut builder = self.env.build_clause();
@@ -174,6 +213,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     rty::Type::bool(),
                     chc::Term::bool(val.try_to_bool().unwrap()),
                 )
+            }
+            (mir_ty::TyKind::Tuple(tys), _) if tys.is_empty() => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            }
+            (mir_ty::TyKind::Closure(_, args), _) if args.as_closure().upvar_tys().is_empty() => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
@@ -568,12 +613,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let ret = rty::RefinedType::new(rty::Type::unit(), ret_formula.into());
                 rty::FunctionType::new([param1, param2].into_iter().collect(), ret).into()
             }
-            Some((def_id, args)) => self
-                .ctx
-                .def_ty_with_args(def_id, args)
-                .expect("unknown def")
-                .ty
-                .vacuous(),
+            Some((def_id, args)) => {
+                let param_env = self.tcx.param_env(self.local_def_id);
+                let instance =
+                    mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+                let resolved_def_id = if let Some(instance) = instance {
+                    instance.def_id()
+                } else {
+                    def_id
+                };
+                if def_id != resolved_def_id {
+                    tracing::info!(?def_id, ?resolved_def_id, "resolve",);
+                }
+
+                self.ctx
+                    .def_ty_with_args(resolved_def_id, args)
+                    .expect("unknown def")
+                    .ty
+                    .vacuous()
+            }
             _ => self.operand_type(func.clone()).ty,
         };
         let expected_args: IndexVec<_, _> = args
