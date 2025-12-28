@@ -3,13 +3,11 @@
 use std::collections::HashSet;
 
 use rustc_hir::def::DefKind;
-use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
 use crate::chc;
-use crate::refine::{self, TypeBuilder};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 /// An implementation of local crate analysis.
@@ -173,49 +171,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let DefKind::Enum = self.tcx.def_kind(local_def_id) else {
                 continue;
             };
-            let adt = self.tcx.adt_def(local_def_id);
-
-            let name = refine::datatype_symbol(self.tcx, local_def_id.to_def_id());
-            let variants: IndexVec<_, _> = adt
-                .variants()
-                .iter()
-                .map(|variant| {
-                    let name = refine::datatype_symbol(self.tcx, variant.def_id);
-                    // TODO: consider using TyCtxt::tag_for_variant
-                    let discr = analyze::resolve_discr(self.tcx, variant.discr);
-                    let field_tys = variant
-                        .fields
-                        .iter()
-                        .map(|field| {
-                            let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                            TypeBuilder::new(self.tcx, local_def_id.to_def_id()).build(field_ty)
-                        })
-                        .collect();
-                    rty::EnumVariantDef {
-                        name,
-                        discr,
-                        field_tys,
-                    }
-                })
-                .collect();
-
-            let generics = self.tcx.generics_of(local_def_id);
-            let ty_params = (0..generics.count())
-                .filter(|idx| {
-                    matches!(
-                        generics.param_at(*idx, self.tcx).kind,
-                        mir_ty::GenericParamDefKind::Type { .. }
-                    )
-                })
-                .count();
-            tracing::debug!(?local_def_id, ?name, ?ty_params, "ty_params count");
-
-            let def = rty::EnumDatatypeDef {
-                name,
-                ty_params,
-                variants,
-            };
-            self.ctx.register_enum_def(local_def_id.to_def_id(), def);
+            self.ctx.register_enum_def(local_def_id.to_def_id());
         }
     }
 }

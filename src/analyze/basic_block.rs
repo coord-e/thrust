@@ -350,16 +350,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .map(|operand| self.operand_type(operand).boxed())
                     .collect();
                 match *kind {
-                    mir::AggregateKind::Adt(did, variant_id, args, _, _)
+                    mir::AggregateKind::Adt(did, variant_idx, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
                     {
-                        let adt = self.tcx.adt_def(did);
-                        let ty_sym = refine::datatype_symbol(self.tcx, did);
-                        let variant = adt.variant(variant_id);
-                        let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
-
-                        let enum_variant_def = self.ctx.find_enum_variant(&ty_sym, &v_sym).unwrap();
-                        let variant_rtys = enum_variant_def
+                        let enum_def = self.ctx.get_or_register_enum_def(did);
+                        let variant_def = &enum_def.variants[variant_idx];
+                        let variant_rtys = variant_def
                             .field_tys
                             .clone()
                             .into_iter()
@@ -386,7 +382,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
                         let sort_args: Vec<_> =
                             rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
-                        let ty = rty::EnumType::new(ty_sym.clone(), rty_args).into();
+                        let ty = rty::EnumType::new(enum_def.name.clone(), rty_args).into();
 
                         let mut builder = PlaceTypeBuilder::default();
                         let mut field_terms = Vec::new();
@@ -396,7 +392,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         }
                         builder.build(
                             ty,
-                            chc::Term::datatype_ctor(ty_sym, sort_args, v_sym, field_terms),
+                            chc::Term::datatype_ctor(
+                                enum_def.name,
+                                sort_args,
+                                variant_def.name.clone(),
+                                field_terms,
+                            ),
                         )
                     }
                     _ => PlaceType::tuple(field_tys),

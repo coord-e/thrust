@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
+use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
@@ -174,7 +175,58 @@ impl<'tcx> Analyzer<'tcx> {
         }
     }
 
-    pub fn register_enum_def(&mut self, def_id: DefId, enum_def: rty::EnumDatatypeDef) {
+    fn build_enum_def(&self, def_id: DefId) -> rty::EnumDatatypeDef {
+        let adt = self.tcx.adt_def(def_id);
+
+        let name = refine::datatype_symbol(self.tcx, def_id);
+        let variants: IndexVec<_, _> = adt
+            .variants()
+            .iter()
+            .map(|variant| {
+                let name = refine::datatype_symbol(self.tcx, variant.def_id);
+                // TODO: consider using TyCtxt::tag_for_variant
+                let discr = resolve_discr(self.tcx, variant.discr);
+                let field_tys = variant
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let field_ty = self.tcx.type_of(field.did).instantiate_identity();
+                        TypeBuilder::new(self.tcx, def_id).build(field_ty)
+                    })
+                    .collect();
+                rty::EnumVariantDef {
+                    name,
+                    discr,
+                    field_tys,
+                }
+            })
+            .collect();
+
+        let generics = self.tcx.generics_of(def_id);
+        let ty_params = (0..generics.count())
+            .filter(|idx| {
+                matches!(
+                    generics.param_at(*idx, self.tcx).kind,
+                    mir_ty::GenericParamDefKind::Type { .. }
+                )
+            })
+            .count();
+        tracing::debug!(?def_id, ?name, ?ty_params, "ty_params count");
+
+        rty::EnumDatatypeDef {
+            name,
+            ty_params,
+            variants,
+        }
+    }
+
+    pub fn get_or_register_enum_def(&self, def_id: DefId) -> rty::EnumDatatypeDef {
+        let mut enum_defs = self.enum_defs.borrow_mut();
+        if let Some(enum_def) = enum_defs.get(def_id) {
+            return enum_def.clone();
+        }
+
+        let enum_def = self.build_enum_def(def_id);
         tracing::debug!(def_id = ?def_id, enum_def = ?enum_def, "register_enum_def");
         let ctors = enum_def
             .variants
@@ -199,21 +251,10 @@ impl<'tcx> Analyzer<'tcx> {
             params: enum_def.ty_params,
             ctors,
         };
-        self.enum_defs.borrow_mut().insert(def_id, enum_def);
+        enum_defs.insert(def_id, enum_def.clone());
         self.system.borrow_mut().datatypes.push(datatype);
-    }
 
-    pub fn find_enum_variant(
-        &self,
-        ty_sym: &chc::DatatypeSymbol,
-        v_sym: &chc::DatatypeSymbol,
-    ) -> Option<rty::EnumVariantDef> {
-        self.enum_defs
-            .borrow()
-            .iter()
-            .find(|(_, d)| &d.name == ty_sym)
-            .and_then(|(_, d)| d.variants.iter().find(|v| &v.name == v_sym))
-            .cloned()
+        enum_def
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
