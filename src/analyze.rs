@@ -341,7 +341,7 @@ impl<'tcx> Analyzer<'tcx> {
 
     /// Computes the signature of the local function.
     ///
-    /// This is a drop-in replacement of `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
+    /// This works like `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
     /// but extracts parameter and return types directly from the given `body` to obtain a signature that
     /// reflects potential type instantiations happened after `optimized_mir`.
     pub fn local_fn_sig_with_body(
@@ -363,5 +363,15 @@ impl<'tcx> Analyzer<'tcx> {
             sig.unsafety,
             sig.abi,
         )
+    }
+
+    /// Computes the signature of the local function.
+    ///
+    /// This works like `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
+    /// but extracts parameter and return types directly from [`mir::Body`] to obtain a signature that
+    /// reflects the actual type of lifted closure functions.
+    pub fn local_fn_sig(&self, local_def_id: LocalDefId) -> mir_ty::FnSig<'tcx> {
+        let body = self.tcx.optimized_mir(local_def_id);
+        self.local_fn_sig_with_body(local_def_id, body)
     }
 }

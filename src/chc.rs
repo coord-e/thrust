@@ -623,6 +623,10 @@ impl<V> Term<V> {
         Term::Mut(Box::new(t1), Box::new(t2))
     }
 
+    pub fn boxed(self) -> Self {
+        Term::Box(Box::new(self))
+    }
+
     pub fn box_current(self) -> Self {
         Term::BoxCurrent(Box::new(self))
     }
