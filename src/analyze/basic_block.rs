@@ -34,7 +34,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     body: Cow<'tcx, Body<'tcx>>,
 
     type_builder: TypeBuilder<'tcx>,
-    env: Env,
+    env: analyze::Env,
     local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>,
     // TODO: remove this
     prophecy_vars: HashMap<usize, TempVarIdx>,
@@ -968,7 +968,7 @@ impl<T> UnbindAtoms<T> {
         self.existentials.extend(var_ty.existentials);
     }
 
-    pub fn unbind(mut self, env: &Env, ty: rty::RefinedType<Var>) -> rty::RefinedType<T> {
+    pub fn unbind(mut self, env: &analyze::Env, ty: rty::RefinedType<Var>) -> rty::RefinedType<T> {
         let rty::RefinedType {
             ty: src_ty,
             refinement,
@@ -1134,11 +1134,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     pub fn local_decls(&mut self, local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>) -> &mut Self {
         self.local_decls = local_decls;
-        self
-    }
-
-    pub fn env(&mut self, env: Env) -> &mut Self {
-        self.env = env;
         self
     }
 
