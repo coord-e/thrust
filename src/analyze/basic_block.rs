@@ -13,8 +13,8 @@ use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, Assumption, BasicBlockType, Env, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx,
-    TypeBuilder, Var,
+    Assumption, BasicBlockType, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx, TypeBuilder,
+    Var,
 };
 use crate::rty::{
     self, ClauseBuilderExt as _, ClauseScope as _, ShiftExistential as _, Subtyping as _,
@@ -925,6 +925,31 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
     }
+
+    fn register_enum_defs(&mut self) {
+        for local_decl in &self.local_decls {
+            use mir_ty::{TypeSuperVisitable as _, TypeVisitable as _};
+            #[derive(Default)]
+            struct EnumCollector {
+                enums: std::collections::HashSet<DefId>,
+            }
+            impl<'tcx> mir_ty::TypeVisitor<mir_ty::TyCtxt<'tcx>> for EnumCollector {
+                fn visit_ty(&mut self, ty: mir_ty::Ty<'tcx>) {
+                    if let mir_ty::TyKind::Adt(adt_def, _) = ty.kind() {
+                        if adt_def.is_enum() {
+                            self.enums.insert(adt_def.did());
+                        }
+                    }
+                    ty.super_visit_with(self);
+                }
+            }
+            let mut visitor = EnumCollector::default();
+            local_decl.ty.visit_with(&mut visitor);
+            for def_id in visitor.enums {
+                self.ctx.get_or_register_enum_def(def_id);
+            }
+        }
+    }
 }
 
 /// Turns [`rty::RefinedType<Var>`] into [`rty::RefinedType<T>`].
@@ -1140,6 +1165,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn run(&mut self, expected: &BasicBlockType) {
         let span = tracing::info_span!("bb", bb = ?self.basic_block);
         let _guard = span.enter();
+        self.register_enum_defs();
 
         let params = expected.as_ref().params.clone();
         self.bind_locals(&params);

@@ -2,7 +2,6 @@
 
 use std::collections::HashSet;
 
-use rustc_hir::def::DefKind;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
@@ -165,15 +164,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
     }
-
-    fn register_enum_defs(&mut self) {
-        for local_def_id in self.tcx.iter_local_def_id() {
-            let DefKind::Enum = self.tcx.def_kind(local_def_id) else {
-                continue;
-            };
-            self.ctx.register_enum_def(local_def_id.to_def_id());
-        }
-    }
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -187,7 +177,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let span = tracing::debug_span!("crate", krate = %self.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE));
         let _guard = span.enter();
 
-        self.register_enum_defs();
         self.refine_local_defs();
         self.analyze_local_defs();
         self.assert_callable_entry();
