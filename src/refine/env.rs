@@ -317,9 +317,11 @@ impl From<PlaceType> for rty::RefinedType<Var> {
             formula,
         } = ty;
         let mut body = formula.map_var(Into::into);
-        body.push_conj(
-            chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
-        );
+        if !ty.to_sort().is_singleton() {
+            body.push_conj(
+                chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
+            );
+        }
         let refinement = rty::Refinement::new(existentials, body);
         rty::RefinedType::new(ty, refinement)
     }
