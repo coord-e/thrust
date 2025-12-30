@@ -730,6 +730,12 @@ impl Env {
         let def = self.enum_defs[&ty.symbol].clone();
         let matcher_pred = chc::MatcherPred::new(ty.symbol.clone(), ty.arg_sorts());
 
+        let discr_var = self
+            .temp_vars
+            .push(TempVarBinding::Type(rty::RefinedType::unrefined(
+                rty::Type::int(),
+            )));
+
         let mut variants = IndexVec::new();
         for variant_def in &def.variants {
             let mut fields = IndexVec::new();
@@ -738,7 +744,12 @@ impl Env {
                 fields.push(x);
                 let mut field_ty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
                 field_ty.instantiate_ty_params(ty.args.clone());
-                self.bind_impl(x.into(), field_ty.boxed(), depth);
+                let guarded_field_ty = field_ty.guarded(
+                    chc::Term::var(discr_var.into())
+                        .equal_to(chc::Term::int(variant_def.discr as i64))
+                        .into(),
+                );
+                self.bind_impl(x.into(), guarded_field_ty.boxed(), depth);
             }
             variants.push(FlowBindingVariant { fields });
         }
@@ -773,11 +784,6 @@ impl Env {
         assumption
             .body
             .push_conj(chc::Atom::new(matcher_pred.into(), pred_args));
-        let discr_var = self
-            .temp_vars
-            .push(TempVarBinding::Type(rty::RefinedType::unrefined(
-                rty::Type::int(),
-            )));
         assumption
             .body
             .push_conj(
