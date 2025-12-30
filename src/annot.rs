@@ -839,7 +839,16 @@ where
                     "string" => unimplemented!(),
                     "null" => chc::Sort::null(),
                     "fn" => unimplemented!(),
-                    _ => unimplemented!(),
+                    name => {
+                        // TODO: ad-hoc
+                        if let Some(i) =
+                            name.strip_prefix("T").and_then(|s| s.parse::<usize>().ok())
+                        {
+                            chc::Sort::param(i)
+                        } else {
+                            unimplemented!();
+                        }
+                    }
                 };
                 Ok(sort)
             }
