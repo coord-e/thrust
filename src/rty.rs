@@ -1174,6 +1174,19 @@ impl<V> Formula<V> {
 
 impl<V> Formula<V>
 where
+    V: chc::Var,
+{
+    pub fn guarded(self, guard: chc::Formula<V>) -> Self {
+        let Formula { existentials, body } = self;
+        Formula {
+            existentials,
+            body: body.guarded(guard),
+        }
+    }
+}
+
+impl<V> Formula<V>
+where
     V: ShiftExistential,
 {
     pub fn push_conj(&mut self, other: Self) {
@@ -1348,6 +1361,15 @@ impl<FV> RefinedType<FV> {
         let ty = PointerType::own(inner_ty).into();
         let refinement = inner_refinement
             .subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).box_current());
+        RefinedType { ty, refinement }
+    }
+
+    pub fn guarded(self, guard: chc::Formula<FV>) -> Self
+    where
+        FV: chc::Var,
+    {
+        let RefinedType { ty, refinement } = self;
+        let refinement = refinement.guarded(guard.map_var(RefinedTypeVar::Free));
         RefinedType { ty, refinement }
     }
 
