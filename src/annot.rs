@@ -502,6 +502,31 @@ where
                     ),
                     _ => unimplemented!(),
                 },
+                TokenKind::Lt => {
+                    let (t1, s1) = self
+                        .parse_binop_2()?
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("in box/mut term"))?;
+
+                    match self.next_token("> or ,")? {
+                        Token {
+                            kind: TokenKind::Gt,
+                            ..
+                        } => FormulaOrTerm::Term(chc::Term::box_(t1), chc::Sort::box_(s1)),
+                        Token {
+                            kind: TokenKind::Comma,
+                            ..
+                        } => {
+                            let (t2, _s2) = self
+                                .parse_binop_2()?
+                                .into_term()
+                                .ok_or_else(|| ParseAttrError::unexpected_formula("in mut term"))?;
+                            self.expect_next_token(TokenKind::Gt, ">")?;
+                            FormulaOrTerm::Term(chc::Term::mut_(t1, t2), chc::Sort::mut_(s1))
+                        }
+                        t => return Err(ParseAttrError::unexpected_token("> or ,", t.clone())),
+                    }
+                }
                 _ => {
                     return Err(ParseAttrError::unexpected_token(
                         "identifier, or literal",
