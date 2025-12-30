@@ -13,9 +13,11 @@ fn unbox_term(term: Term) -> Term {
         Term::App(fun, args) => Term::App(fun, args.into_iter().map(unbox_term).collect()),
         Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(unbox_term).collect()),
         Term::TupleProj(t, i) => Term::TupleProj(Box::new(unbox_term(*t)), i),
-        Term::DatatypeCtor(s1, s2, args) => {
-            Term::DatatypeCtor(s1, s2, args.into_iter().map(unbox_term).collect())
-        }
+        Term::DatatypeCtor(s1, s2, args) => Term::DatatypeCtor(
+            unbox_datatype_sort(s1),
+            s2,
+            args.into_iter().map(unbox_term).collect(),
+        ),
         Term::DatatypeDiscr(sym, arg) => Term::DatatypeDiscr(sym, Box::new(unbox_term(*arg))),
         Term::FormulaExistentialVar(sort, name) => {
             Term::FormulaExistentialVar(unbox_sort(sort), name)
@@ -23,9 +25,30 @@ fn unbox_term(term: Term) -> Term {
     }
 }
 
+fn unbox_matcher_pred(pred: MatcherPred) -> Pred {
+    let MatcherPred {
+        datatype_symbol,
+        datatype_args,
+    } = pred;
+    let datatype_args = datatype_args.into_iter().map(unbox_sort).collect();
+    Pred::Matcher(MatcherPred {
+        datatype_symbol,
+        datatype_args,
+    })
+}
+
+fn unbox_pred(pred: Pred) -> Pred {
+    match pred {
+        Pred::Known(pred) => Pred::Known(pred),
+        Pred::Var(pred) => Pred::Var(pred),
+        Pred::Matcher(pred) => unbox_matcher_pred(pred),
+    }
+}
+
 fn unbox_atom(atom: Atom) -> Atom {
     let Atom { guard, pred, args } = atom;
     let guard = guard.map(|fo| Box::new(unbox_formula(*fo)));
+    let pred = unbox_pred(pred);
     let args = args.into_iter().map(unbox_term).collect();
     Atom { guard, pred, args }
 }
