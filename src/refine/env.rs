@@ -290,6 +290,16 @@ impl PlaceTypeBuilder {
     }
 }
 
+pub trait EnumDefProvider {
+    fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef;
+}
+
+impl<'a, T: EnumDefProvider> EnumDefProvider for &'a T {
+    fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef {
+        <T as EnumDefProvider>::enum_def(self, name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlaceType {
     pub ty: rty::Type<Var>,
@@ -307,9 +317,11 @@ impl From<PlaceType> for rty::RefinedType<Var> {
             formula,
         } = ty;
         let mut body = formula.map_var(Into::into);
-        body.push_conj(
-            chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
-        );
+        if !ty.to_sort().is_singleton() {
+            body.push_conj(
+                chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
+            );
+        }
         let refinement = rty::Refinement::new(existentials, body);
         rty::RefinedType::new(ty, refinement)
     }
@@ -392,16 +404,19 @@ impl PlaceType {
         builder.build(ty, term)
     }
 
-    pub fn downcast(
+    pub fn downcast<T>(
         self,
         variant_idx: VariantIdx,
         field_idx: FieldIdx,
-        enum_defs: &HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
-    ) -> PlaceType {
+        enum_defs: T,
+    ) -> PlaceType
+    where
+        T: EnumDefProvider,
+    {
         let mut builder = PlaceTypeBuilder::default();
         let (inner_ty, inner_term) = builder.subsume(self);
         let inner_ty = inner_ty.into_enum().unwrap();
-        let def = &enum_defs[&inner_ty.symbol];
+        let def = enum_defs.enum_def(&inner_ty.symbol);
         let variant = &def.variants[variant_idx];
 
         let mut field_terms = Vec::new();
@@ -510,18 +525,21 @@ impl PlaceType {
 pub type Assumption = rty::Formula<PlaceTypeVar>;
 
 #[derive(Debug, Clone)]
-pub struct Env {
+pub struct Env<T> {
     locals: BTreeMap<Local, rty::RefinedType<Var>>,
     flow_locals: BTreeMap<Local, FlowBinding>,
     temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
     assumptions: Vec<Assumption>,
 
-    enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
+    enum_defs: T,
 
     enum_expansion_depth_limit: usize,
 }
 
-impl rty::ClauseScope for Env {
+impl<T> rty::ClauseScope for Env<T>
+where
+    T: EnumDefProvider,
+{
     fn build_clause(&self) -> chc::ClauseBuilder {
         let mut builder = chc::ClauseBuilder::default();
         for (v, sort) in self.dependencies() {
@@ -565,7 +583,10 @@ impl rty::ClauseScope for Env {
     }
 }
 
-impl refine::TemplateScope for Env {
+impl<T> refine::TemplateScope for Env<T>
+where
+    T: EnumDefProvider,
+{
     type Var = Var;
     fn build_template(&self) -> rty::TemplateBuilder<Var> {
         let mut builder = rty::TemplateBuilder::default();
@@ -576,8 +597,11 @@ impl refine::TemplateScope for Env {
     }
 }
 
-impl Env {
-    pub fn new(enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>) -> Self {
+impl<T> Env<T>
+where
+    T: EnumDefProvider,
+{
+    pub fn new(enum_defs: T) -> Self {
         Env {
             locals: Default::default(),
             flow_locals: Default::default(),
@@ -727,7 +751,7 @@ impl Env {
             assert_eq!(temp, self.temp_vars.push(TempVarBinding::Flow(dummy)));
         }
 
-        let def = self.enum_defs[&ty.symbol].clone();
+        let def = self.enum_defs.enum_def(&ty.symbol);
         let matcher_pred = chc::MatcherPred::new(ty.symbol.clone(), ty.arg_sorts());
 
         let discr_var = self
@@ -939,7 +963,7 @@ impl Env {
                     .collect();
 
                 let arg_rtys = {
-                    let def = &self.enum_defs[sym];
+                    let def = self.enum_defs.enum_def(sym);
                     let expected_tys = def
                         .field_tys()
                         .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()).boxed());
@@ -1052,7 +1076,10 @@ impl Path {
     }
 }
 
-impl Env {
+impl<T> Env<T>
+where
+    T: EnumDefProvider,
+{
     fn path_type(&self, path: &Path) -> PlaceType {
         match path {
             Path::PlaceTy(pty) => pty.clone(),
@@ -1084,7 +1111,7 @@ impl Env {
                 .map(|i| self.dropping_assumption(&path.clone().tuple_proj(i)))
                 .collect()
         } else if let Some(ety) = ty.ty.as_enum() {
-            let enum_def = self.enum_defs[&ety.symbol].clone();
+            let enum_def = self.enum_defs.enum_def(&ety.symbol);
             let matcher_pred = chc::MatcherPred::new(ety.symbol.clone(), ety.arg_sorts());
 
             let PlaceType {
