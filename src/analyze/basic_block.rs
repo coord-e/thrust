@@ -562,78 +562,30 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         });
     }
 
-    fn is_box_new(&self, def_id: DefId) -> bool {
-        // TODO: stop using diagnositc item for semantic purpose
-        self.tcx.all_diagnostic_items(()).id_to_name.get(&def_id)
-            == Some(&rustc_span::symbol::sym::box_new)
-    }
-
-    fn is_mem_swap(&self, def_id: DefId) -> bool {
-        // TODO: stop using diagnositc item for semantic purpose
-        self.tcx.all_diagnostic_items(()).id_to_name.get(&def_id)
-            == Some(&rustc_span::symbol::sym::mem_swap)
-    }
-
     fn type_call<I>(&mut self, func: Operand<'tcx>, args: I, expected_ret: &rty::RefinedType<Var>)
     where
         I: IntoIterator<Item = Operand<'tcx>>,
     {
         // TODO: handle const_fn_def on Env side
-        let func_ty = match func.const_fn_def() {
-            // TODO: move this to well-known defs?
-            Some((def_id, args)) if self.is_box_new(def_id) => {
-                let inner_ty = self
-                    .type_builder
-                    .for_template(&mut self.ctx)
-                    .build(args.type_at(0))
-                    .vacuous();
-                let param = rty::RefinedType::unrefined(inner_ty.clone());
-                let ret_term =
-                    chc::Term::box_(chc::Term::var(rty::FunctionParamIdx::from(0_usize)));
-                let ret = rty::RefinedType::refined_with_term(
-                    rty::PointerType::own(inner_ty).into(),
-                    ret_term,
-                );
-                rty::FunctionType::new([param].into_iter().collect(), ret).into()
+        let func_ty = if let Some((def_id, args)) = func.const_fn_def() {
+            let param_env = self.tcx.param_env(self.local_def_id);
+            let instance = mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+            let resolved_def_id = if let Some(instance) = instance {
+                instance.def_id()
+            } else {
+                def_id
+            };
+            if def_id != resolved_def_id {
+                tracing::info!(?def_id, ?resolved_def_id, "resolve",);
             }
-            Some((def_id, args)) if self.is_mem_swap(def_id) => {
-                let inner_ty = self.type_builder.build(args.type_at(0)).vacuous();
-                let param1 =
-                    rty::RefinedType::unrefined(rty::PointerType::mut_to(inner_ty.clone()).into());
-                let param2 =
-                    rty::RefinedType::unrefined(rty::PointerType::mut_to(inner_ty.clone()).into());
-                let param1_var = rty::RefinedTypeVar::Free(rty::FunctionParamIdx::from(0_usize));
-                let param2_var = rty::RefinedTypeVar::Free(rty::FunctionParamIdx::from(1_usize));
-                let ret1 = chc::Term::var(param1_var)
-                    .mut_current()
-                    .equal_to(chc::Term::var(param2_var).mut_final());
-                let ret2 = chc::Term::var(param2_var)
-                    .mut_current()
-                    .equal_to(chc::Term::var(param1_var).mut_final());
-                let ret_formula = chc::Formula::Atom(ret1).and(chc::Formula::Atom(ret2));
-                let ret = rty::RefinedType::new(rty::Type::unit(), ret_formula.into());
-                rty::FunctionType::new([param1, param2].into_iter().collect(), ret).into()
-            }
-            Some((def_id, args)) => {
-                let param_env = self.tcx.param_env(self.local_def_id);
-                let instance =
-                    mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
-                let resolved_def_id = if let Some(instance) = instance {
-                    instance.def_id()
-                } else {
-                    def_id
-                };
-                if def_id != resolved_def_id {
-                    tracing::info!(?def_id, ?resolved_def_id, "resolve",);
-                }
 
-                self.ctx
-                    .def_ty_with_args(resolved_def_id, args)
-                    .expect("unknown def")
-                    .ty
-                    .vacuous()
-            }
-            _ => self.operand_type(func.clone()).ty,
+            self.ctx
+                .def_ty_with_args(resolved_def_id, args)
+                .expect("unknown def")
+                .ty
+                .vacuous()
+        } else {
+            self.operand_type(func.clone()).ty
         };
         let expected_args: IndexVec<_, _> = args
             .into_iter()

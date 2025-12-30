@@ -1,8 +1,11 @@
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_interface;
+extern crate rustc_parse;
 extern crate rustc_session;
+extern crate rustc_span;
 
 use rustc_driver::{Callbacks, Compilation, RunCompiler};
 use rustc_interface::interface::{Compiler, Config};
@@ -15,6 +18,29 @@ impl Callbacks for CompilerCalls {
         let attrs = &mut config.opts.unstable_opts.crate_attr;
         attrs.push("feature(register_tool)".to_owned());
         attrs.push("register_tool(thrust)".to_owned());
+    }
+
+    fn after_crate_root_parsing<'tcx>(
+        &mut self,
+        compiler: &Compiler,
+        queries: &'tcx Queries<'tcx>,
+    ) -> Compilation {
+        let mut result = queries.parse().unwrap();
+        let krate = result.get_mut();
+
+        let injected = include_str!("../std.rs");
+        let mut parser = rustc_parse::new_parser_from_source_str(
+            &compiler.sess.psess,
+            rustc_span::FileName::Custom("thrust std injected".to_string()),
+            injected.to_owned(),
+        );
+        while let Some(item) = parser
+            .parse_item(rustc_parse::parser::ForceCollect::No)
+            .unwrap()
+        {
+            krate.items.push(item);
+        }
+        Compilation::Continue
     }
 
     fn after_analysis<'tcx>(
