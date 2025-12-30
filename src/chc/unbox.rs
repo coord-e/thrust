@@ -24,9 +24,10 @@ fn unbox_term(term: Term) -> Term {
 }
 
 fn unbox_atom(atom: Atom) -> Atom {
-    let Atom { pred, args } = atom;
+    let Atom { guard, pred, args } = atom;
+    let guard = guard.map(|fo| Box::new(unbox_formula(*fo)));
     let args = args.into_iter().map(unbox_term).collect();
-    Atom { pred, args }
+    Atom { guard, pred, args }
 }
 
 fn unbox_datatype_sort(sort: DatatypeSort) -> DatatypeSort {

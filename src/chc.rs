@@ -997,6 +997,12 @@ impl Pred {
 /// An atom is a predicate applied to a list of terms.
 #[derive(Debug, Clone)]
 pub struct Atom<V = TermVarIdx> {
+    /// With `guard`, this represents `guard => pred(args)`.
+    ///
+    /// As long as there is no pvar in the `guard`, it forms a valid CHC. However, in that case,
+    /// it becomes odd to call this an `Atom`... It is our TODO to clean this up by either
+    /// getting rid of the `guard` or renaming `Atom`.
+    pub guard: Option<Box<Formula<V>>>,
     pub pred: Pred,
     pub args: Vec<Term<V>>,
 }
@@ -1008,7 +1014,12 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        if self.pred.is_infix() {
+        let guard = if let Some(guard) = &self.guard {
+            guard.pretty(allocator).append(allocator.text(" ⇒"))
+        } else {
+            allocator.nil()
+        };
+        let atom = if self.pred.is_infix() {
             self.args[0]
                 .pretty_atom(allocator)
                 .append(allocator.line())
@@ -1027,35 +1038,50 @@ where
             } else {
                 p.append(allocator.line()).append(inner.nest(2)).group()
             }
-        }
+        };
+        guard.append(allocator.line()).append(atom).group()
     }
 }
 
 impl<V> Atom<V> {
     pub fn new(pred: Pred, args: Vec<Term<V>>) -> Self {
-        Atom { pred, args }
+        Atom {
+            guard: None,
+            pred,
+            args,
+        }
+    }
+
+    pub fn with_guard(guard: Formula<V>, pred: Pred, args: Vec<Term<V>>) -> Self {
+        Atom {
+            guard: Some(Box::new(guard)),
+            pred,
+            args,
+        }
     }
 
     pub fn top() -> Self {
-        Atom {
-            pred: KnownPred::TOP.into(),
-            args: vec![],
-        }
+        Atom::new(KnownPred::TOP.into(), vec![])
     }
 
     pub fn bottom() -> Self {
-        Atom {
-            pred: KnownPred::BOTTOM.into(),
-            args: vec![],
-        }
+        Atom::new(KnownPred::BOTTOM.into(), vec![])
     }
 
     pub fn is_top(&self) -> bool {
-        self.pred.is_top()
+        if let Some(guard) = &self.guard {
+            guard.is_bottom() || self.pred.is_top()
+        } else {
+            self.pred.is_top()
+        }
     }
 
     pub fn is_bottom(&self) -> bool {
-        self.pred.is_bottom()
+        if let Some(guard) = &self.guard {
+            guard.is_top() && self.pred.is_bottom()
+        } else {
+            self.pred.is_bottom()
+        }
     }
 
     pub fn subst_var<F, W>(self, mut f: F) -> Atom<W>
@@ -1063,6 +1089,7 @@ impl<V> Atom<V> {
         F: FnMut(V) -> Term<W>,
     {
         Atom {
+            guard: self.guard.map(|fo| Box::new(fo.subst_var(&mut f))),
             pred: self.pred,
             args: self.args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
         }
@@ -1073,13 +1100,37 @@ impl<V> Atom<V> {
         F: FnMut(V) -> W,
     {
         Atom {
+            guard: self.guard.map(|fo| Box::new(fo.map_var(&mut f))),
             pred: self.pred,
             args: self.args.into_iter().map(|t| t.map_var(&mut f)).collect(),
         }
     }
 
     pub fn fv(&self) -> impl Iterator<Item = &V> {
-        self.args.iter().flat_map(|t| t.fv())
+        let guard_fvs: Box<dyn Iterator<Item = &V>> = if let Some(guard) = &self.guard {
+            Box::new(guard.fv())
+        } else {
+            Box::new(std::iter::empty())
+        };
+        self.args.iter().flat_map(|t| t.fv()).chain(guard_fvs)
+    }
+
+    pub fn guarded(self, new_guard: Formula<V>) -> Atom<V> {
+        let Atom {
+            guard: self_guard,
+            pred,
+            args,
+        } = self;
+        let guard = if let Some(self_guard) = self_guard {
+            self_guard.and(new_guard)
+        } else {
+            new_guard
+        };
+        Atom {
+            guard: Some(Box::new(guard)),
+            pred,
+            args,
+        }
     }
 }
 
@@ -1453,6 +1504,22 @@ impl<V> Body<V> {
 
     pub fn iter_atoms(&self) -> impl Iterator<Item = &Atom<V>> {
         self.formula.iter_atoms().chain(&self.atoms)
+    }
+}
+
+impl<V> Body<V>
+where
+    V: Var,
+{
+    pub fn guarded(self, guard: Formula<V>) -> Body<V> {
+        let Body { atoms, formula } = self;
+        Body {
+            atoms: atoms
+                .into_iter()
+                .map(|a| a.guarded(guard.clone()))
+                .collect(),
+            formula: guard.not().or(formula),
+        }
     }
 }
 
