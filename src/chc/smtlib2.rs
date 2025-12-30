@@ -223,6 +223,10 @@ pub struct Atom<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(guard) = &self.inner.guard {
+            let guard = Formula::new(self.ctx, self.clause, guard);
+            write!(f, "(=> {} ", guard)?;
+        }
         if self.inner.pred.is_negative() {
             write!(f, "(not ")?;
         }
@@ -242,6 +246,9 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
             write!(f, "({} {})", pred, args)?;
         }
         if self.inner.pred.is_negative() {
+            write!(f, ")")?;
+        }
+        if self.inner.guard.is_some() {
             write!(f, ")")?;
         }
         Ok(())
