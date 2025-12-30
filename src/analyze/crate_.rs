@@ -45,12 +45,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.trusted.insert(local_def_id.to_def_id());
         }
 
+        if analyzer.is_annotated_as_extern_spec_fn() {
+            assert!(analyzer.is_fully_annotated());
+            self.trusted.insert(local_def_id.to_def_id());
+        }
+
         use mir_ty::TypeVisitableExt as _;
         if sig.has_param() && !analyzer.is_fully_annotated() {
             self.ctx.register_deferred_def(local_def_id.to_def_id());
         } else {
             let expected = analyzer.expected_ty();
-            self.ctx.register_def(local_def_id.to_def_id(), expected);
+            let target_def_id = if analyzer.is_annotated_as_extern_spec_fn() {
+                analyzer.extern_spec_fn_target_def_id()
+            } else {
+                local_def_id.to_def_id()
+            };
+            self.ctx.register_def(target_def_id, expected);
         }
     }
 
