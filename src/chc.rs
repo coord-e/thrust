@@ -1507,6 +1507,22 @@ impl<V> Body<V> {
     }
 }
 
+impl<V> Body<V>
+where
+    V: Var,
+{
+    pub fn guarded(self, guard: Formula<V>) -> Body<V> {
+        let Body { atoms, formula } = self;
+        Body {
+            atoms: atoms
+                .into_iter()
+                .map(|a| a.guarded(guard.clone()))
+                .collect(),
+            formula: guard.not().or(formula),
+        }
+    }
+}
+
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Body<V>
 where
     V: Var,
