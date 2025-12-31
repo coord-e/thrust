@@ -196,6 +196,7 @@ enum FormulaOrTerm<T> {
     Term(chc::Term<T>, chc::Sort),
     BinOp(chc::Term<T>, AmbiguousBinOp, chc::Term<T>),
     Not(Box<FormulaOrTerm<T>>),
+    Literal(bool),
 }
 
 impl<T> FormulaOrTerm<T> {
@@ -215,6 +216,13 @@ impl<T> FormulaOrTerm<T> {
                 chc::Formula::Atom(chc::Atom::new(pred.into(), vec![lhs, rhs]))
             }
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_formula()?.not(),
+            FormulaOrTerm::Literal(b) => {
+                if b {
+                    chc::Formula::top()
+                } else {
+                    chc::Formula::bottom()
+                }
+            }
         };
         Some(fo)
     }
@@ -233,6 +241,7 @@ impl<T> FormulaOrTerm<T> {
                 let (t, _) = formula_or_term.into_term()?;
                 (t.not(), chc::Sort::bool())
             }
+            FormulaOrTerm::Literal(b) => (chc::Term::bool(b), chc::Sort::bool()),
         };
         Some((t, s))
     }
@@ -461,8 +470,8 @@ where
                     ident.as_str(),
                     self.formula_existentials.get(ident.name.as_str()),
                 ) {
-                    ("true", _) => FormulaOrTerm::Formula(chc::Formula::top()),
-                    ("false", _) => FormulaOrTerm::Formula(chc::Formula::bottom()),
+                    ("true", _) => FormulaOrTerm::Literal(true),
+                    ("false", _) => FormulaOrTerm::Literal(false),
                     (_, Some(sort)) => {
                         let var =
                             chc::Term::FormulaExistentialVar(sort.clone(), ident.name.to_string());
