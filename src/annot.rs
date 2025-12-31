@@ -196,6 +196,7 @@ enum FormulaOrTerm<T> {
     Term(chc::Term<T>, chc::Sort),
     BinOp(chc::Term<T>, AmbiguousBinOp, chc::Term<T>),
     Not(Box<FormulaOrTerm<T>>),
+    Literal(bool),
 }
 
 impl<T> FormulaOrTerm<T> {
@@ -215,6 +216,13 @@ impl<T> FormulaOrTerm<T> {
                 chc::Formula::Atom(chc::Atom::new(pred.into(), vec![lhs, rhs]))
             }
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_formula()?.not(),
+            FormulaOrTerm::Literal(b) => {
+                if b {
+                    chc::Formula::top()
+                } else {
+                    chc::Formula::bottom()
+                }
+            }
         };
         Some(fo)
     }
@@ -233,6 +241,7 @@ impl<T> FormulaOrTerm<T> {
                 let (t, _) = formula_or_term.into_term()?;
                 (t.not(), chc::Sort::bool())
             }
+            FormulaOrTerm::Literal(b) => (chc::Term::bool(b), chc::Sort::bool()),
         };
         Some((t, s))
     }
@@ -461,8 +470,8 @@ where
                     ident.as_str(),
                     self.formula_existentials.get(ident.name.as_str()),
                 ) {
-                    ("true", _) => FormulaOrTerm::Formula(chc::Formula::top()),
-                    ("false", _) => FormulaOrTerm::Formula(chc::Formula::bottom()),
+                    ("true", _) => FormulaOrTerm::Literal(true),
+                    ("false", _) => FormulaOrTerm::Literal(false),
                     (_, Some(sort)) => {
                         let var =
                             chc::Term::FormulaExistentialVar(sort.clone(), ident.name.to_string());
@@ -502,6 +511,31 @@ where
                     ),
                     _ => unimplemented!(),
                 },
+                TokenKind::Lt => {
+                    let (t1, s1) = self
+                        .parse_binop_2()?
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("in box/mut term"))?;
+
+                    match self.next_token("> or ,")? {
+                        Token {
+                            kind: TokenKind::Gt,
+                            ..
+                        } => FormulaOrTerm::Term(chc::Term::box_(t1), chc::Sort::box_(s1)),
+                        Token {
+                            kind: TokenKind::Comma,
+                            ..
+                        } => {
+                            let (t2, _s2) = self
+                                .parse_binop_2()?
+                                .into_term()
+                                .ok_or_else(|| ParseAttrError::unexpected_formula("in mut term"))?;
+                            self.expect_next_token(TokenKind::Gt, ">")?;
+                            FormulaOrTerm::Term(chc::Term::mut_(t1, t2), chc::Sort::mut_(s1))
+                        }
+                        t => return Err(ParseAttrError::unexpected_token("> or ,", t.clone())),
+                    }
+                }
                 _ => {
                     return Err(ParseAttrError::unexpected_token(
                         "identifier, or literal",
@@ -803,6 +837,26 @@ where
         match tt {
             TokenTree::Token(
                 Token {
+                    kind: TokenKind::BinOp(BinOpToken::And),
+                    ..
+                },
+                _,
+            ) => match self.look_ahead_token(0) {
+                Some(Token {
+                    kind: TokenKind::Ident(sym, _),
+                    ..
+                }) if sym.as_str() == "mut" => {
+                    self.consume();
+                    let inner_sort = self.parse_sort()?;
+                    Ok(chc::Sort::mut_(inner_sort))
+                }
+                _ => {
+                    let inner_sort = self.parse_sort()?;
+                    Ok(chc::Sort::box_(inner_sort))
+                }
+            },
+            TokenTree::Token(
+                Token {
                     kind: TokenKind::Ident(sym, _),
                     ..
                 },
@@ -814,7 +868,16 @@ where
                     "string" => unimplemented!(),
                     "null" => chc::Sort::null(),
                     "fn" => unimplemented!(),
-                    _ => unimplemented!(),
+                    name => {
+                        // TODO: ad-hoc
+                        if let Some(i) =
+                            name.strip_prefix('T').and_then(|s| s.parse::<usize>().ok())
+                        {
+                            chc::Sort::param(i)
+                        } else {
+                            unimplemented!();
+                        }
+                    }
                 };
                 Ok(sort)
             }
