@@ -412,6 +412,8 @@ where
                                 .with_scope(&builder)
                                 .build_refined(param_ty.ty)
                         }
+                    } else if self.param_refinement.is_some() {
+                        rty::RefinedType::unrefined(self.inner.build(param_ty.ty).vacuous())
                     } else {
                         rty::RefinedType::unrefined(
                             self.inner

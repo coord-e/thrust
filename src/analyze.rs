@@ -210,7 +210,6 @@ impl<'tcx> Analyzer<'tcx> {
             .variants()
             .iter()
             .map(|variant| {
-                let name = refine::datatype_symbol(self.tcx, variant.def_id);
                 // TODO: consider using TyCtxt::tag_for_variant
                 let discr = resolve_discr(self.tcx, variant.discr);
                 let field_tys = variant
@@ -222,7 +221,7 @@ impl<'tcx> Analyzer<'tcx> {
                     })
                     .collect();
                 rty::EnumVariantDef {
-                    name,
+                    name: chc::DatatypeSymbol::new(format!("{}.{}", name, variant.name)),
                     discr,
                     field_tys,
                 }

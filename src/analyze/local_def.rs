@@ -274,8 +274,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let typeck_result = self.tcx.typeck(self.outer_def_id);
                 if let rustc_hir::def::Res::Def(_, def_id) = typeck_result.qpath_res(qpath, hir_id)
                 {
-                    assert!(self.inner_def_id.is_none(), "invalid extern_spec_fn");
-                    self.inner_def_id = Some(def_id);
+                    if matches!(
+                        self.tcx.def_kind(def_id),
+                        rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
+                    ) {
+                        assert!(self.inner_def_id.is_none(), "invalid extern_spec_fn");
+                        self.inner_def_id = Some(def_id);
+                    }
                 }
             }
         }

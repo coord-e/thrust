@@ -78,6 +78,10 @@ impl DatatypeSort {
     pub fn new(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
         DatatypeSort { symbol, args }
     }
+
+    pub fn args_mut(&mut self) -> &mut Vec<Sort> {
+        &mut self.args
+    }
 }
 
 /// A sort is the type of a logical term.
