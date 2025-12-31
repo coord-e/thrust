@@ -837,6 +837,26 @@ where
         match tt {
             TokenTree::Token(
                 Token {
+                    kind: TokenKind::BinOp(BinOpToken::And),
+                    ..
+                },
+                _,
+            ) => match self.look_ahead_token(0) {
+                Some(Token {
+                    kind: TokenKind::Ident(sym, _),
+                    ..
+                }) if sym.as_str() == "mut" => {
+                    self.consume();
+                    let inner_sort = self.parse_sort()?;
+                    Ok(chc::Sort::mut_(inner_sort))
+                }
+                _ => {
+                    let inner_sort = self.parse_sort()?;
+                    Ok(chc::Sort::box_(inner_sort))
+                }
+            },
+            TokenTree::Token(
+                Token {
                     kind: TokenKind::Ident(sym, _),
                     ..
                 },
