@@ -13,8 +13,8 @@ use crate::analyze;
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
-    self, Assumption, BasicBlockType, Env, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx,
-    TypeBuilder, Var,
+    Assumption, BasicBlockType, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx, TypeBuilder,
+    Var,
 };
 use crate::rty::{
     self, ClauseBuilderExt as _, ClauseScope as _, ShiftExistential as _, Subtyping as _,
@@ -34,7 +34,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     body: Cow<'tcx, Body<'tcx>>,
 
     type_builder: TypeBuilder<'tcx>,
-    env: Env,
+    env: analyze::Env,
     local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>,
     // TODO: remove this
     prophecy_vars: HashMap<usize, TempVarIdx>,
@@ -84,15 +84,54 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) -> Vec<chc::Clause> {
         let mut clauses = Vec::new();
 
-        if expected_args.is_empty() {
-            // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
-            expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
-        }
         tracing::debug!(
             got = %got.display(),
             expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
             "fn_sub_type"
         );
+
+        match got.abi {
+            rty::FunctionAbi::Rust => {
+                if expected_args.is_empty() {
+                    // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
+                    expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
+                }
+            }
+            rty::FunctionAbi::RustCall => {
+                // &Closure, { v: (own i32, own bool) | v = (<0>, <false>) }
+                // =>
+                // &Closure, { v: i32 | (<v>, _) = (<0>, <false>) }, { v: bool | (_, <v>) = (<0>, <false>) }
+
+                let rty::RefinedType { ty, mut refinement } =
+                    expected_args.pop().expect("rust-call last arg");
+                let ty = ty.into_tuple().expect("rust-call last arg is tuple");
+                let mut replacement_tuple = Vec::new(); // will be (<v>, _) or (_, <v>)
+                for elem in &ty.elems {
+                    let existential = refinement.existentials.push(elem.ty.to_sort());
+                    replacement_tuple.push(chc::Term::var(rty::RefinedTypeVar::Existential(
+                        existential,
+                    )));
+                }
+
+                for (i, elem) in ty.elems.into_iter().enumerate() {
+                    // all tuple elements are boxed during the translation to rty::Type
+                    let mut param_ty = elem.deref();
+                    param_ty
+                        .refinement
+                        .push_conj(refinement.clone().subst_value_var(|| {
+                            let mut value_elems = replacement_tuple.clone();
+                            value_elems[i] = chc::Term::var(rty::RefinedTypeVar::Value).boxed();
+                            chc::Term::tuple(value_elems)
+                        }));
+                    expected_args.push(param_ty);
+                }
+
+                tracing::info!(
+                    expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
+                    "rust-call expanded",
+                );
+            }
+        }
 
         // TODO: check sty and length is equal
         let mut builder = self.env.build_clause();
@@ -125,11 +164,117 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         clauses
     }
 
+    fn const_bytes_ty(
+        &self,
+        ty: mir_ty::Ty<'tcx>,
+        alloc: mir::interpret::ConstAllocation,
+        range: std::ops::Range<usize>,
+    ) -> PlaceType {
+        let alloc = alloc.inner();
+        let bytes = alloc.inspect_with_uninit_and_ptr_outside_interpreter(range);
+        match ty.kind() {
+            mir_ty::TyKind::Str => {
+                let content = std::str::from_utf8(bytes).unwrap();
+                PlaceType::with_ty_and_term(
+                    rty::Type::string(),
+                    chc::Term::string(content.to_owned()),
+                )
+            }
+            mir_ty::TyKind::Bool => {
+                PlaceType::with_ty_and_term(rty::Type::bool(), chc::Term::bool(bytes[0] != 0))
+            }
+            mir_ty::TyKind::Int(_) => {
+                // TODO: see target endianness
+                let val = match bytes.len() {
+                    1 => i8::from_ne_bytes(bytes.try_into().unwrap()) as i64,
+                    2 => i16::from_ne_bytes(bytes.try_into().unwrap()) as i64,
+                    4 => i32::from_ne_bytes(bytes.try_into().unwrap()) as i64,
+                    8 => i64::from_ne_bytes(bytes.try_into().unwrap()),
+                    _ => unimplemented!("const int bytes len: {}", bytes.len()),
+                };
+                PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(val))
+            }
+            _ => unimplemented!("const bytes ty: {:?}", ty),
+        }
+    }
+
+    fn const_value_ty(&self, val: &mir::ConstValue<'tcx>, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
+        use mir::{interpret::Scalar, ConstValue, Mutability};
+        match (ty.kind(), val) {
+            (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
+                let val = val.try_to_int(val.size()).unwrap();
+                PlaceType::with_ty_and_term(
+                    rty::Type::int(),
+                    chc::Term::int(val.try_into().unwrap()),
+                )
+            }
+            (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
+                PlaceType::with_ty_and_term(
+                    rty::Type::bool(),
+                    chc::Term::bool(val.try_to_bool().unwrap()),
+                )
+            }
+            (mir_ty::TyKind::Tuple(tys), _) if tys.is_empty() => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            }
+            (mir_ty::TyKind::Closure(_, args), _) if args.as_closure().upvar_tys().is_empty() => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            }
+            (
+                mir_ty::TyKind::Ref(_, elem, Mutability::Not),
+                ConstValue::Scalar(Scalar::Ptr(ptr, _)),
+            ) => {
+                // Pointer::into_parts is OK for CtfeProvenance
+                // in a later version of rustc it has prov_and_relative_offset that ensures this
+                let (prov, offset) = ptr.into_parts();
+                let global_alloc = self.tcx.global_alloc(prov.alloc_id());
+                match global_alloc {
+                    mir::interpret::GlobalAlloc::Memory(alloc) => {
+                        let layout = self
+                            .tcx
+                            .layout_of(mir_ty::ParamEnv::reveal_all().and(*elem))
+                            .unwrap();
+                        let size = layout.size;
+                        let range =
+                            offset.bytes() as usize..(offset.bytes() + size.bytes()) as usize;
+                        self.const_bytes_ty(*elem, alloc, range).immut()
+                    }
+                    _ => unimplemented!("const ptr alloc: {:?}", global_alloc),
+                }
+            }
+            (mir_ty::TyKind::Ref(_, elem, Mutability::Not), ConstValue::Slice { data, meta }) => {
+                let end = (*meta).try_into().unwrap();
+                self.const_bytes_ty(*elem, *data, 0..end).immut()
+            }
+            _ => unimplemented!("const: {:?}, ty: {:?}", val, ty),
+        }
+    }
+
+    fn const_ty(&self, const_: &mir::Const<'tcx>) -> PlaceType {
+        match const_ {
+            mir::Const::Val(val, ty) => self.const_value_ty(val, ty),
+            mir::Const::Unevaluated(unevaluated, ty) => {
+                // since all constants are immutable in current setup,
+                // it should be okay to evaluate them here on-the-fly
+                let param_env = self.tcx.param_env(self.local_def_id);
+                let val = self
+                    .tcx
+                    .const_eval_resolve(param_env, *unevaluated, None)
+                    .unwrap();
+                self.const_value_ty(&val, ty)
+            }
+            _ => unimplemented!("const: {:?}", const_),
+        }
+    }
+
     fn operand_type(&self, mut operand: Operand<'tcx>) -> PlaceType {
         if let Operand::Copy(p) | Operand::Move(p) = &mut operand {
             *p = self.elaborate_place(p);
         }
-        let ty = self.env.operand_type(operand.clone());
+        let ty = match &operand {
+            Operand::Copy(place) | Operand::Move(place) => self.env.place_type(*place),
+            Operand::Constant(operand) => self.const_ty(&operand.const_),
+        };
         tracing::debug!(operand = ?operand, ty = %ty.display(), "operand_type");
         ty
     }
@@ -205,16 +350,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .map(|operand| self.operand_type(operand).boxed())
                     .collect();
                 match *kind {
-                    mir::AggregateKind::Adt(did, variant_id, args, _, _)
+                    mir::AggregateKind::Adt(did, variant_idx, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
                     {
-                        let adt = self.tcx.adt_def(did);
-                        let ty_sym = refine::datatype_symbol(self.tcx, did);
-                        let variant = adt.variant(variant_id);
-                        let v_sym = refine::datatype_symbol(self.tcx, variant.def_id);
-
-                        let enum_variant_def = self.ctx.find_enum_variant(&ty_sym, &v_sym).unwrap();
-                        let variant_rtys = enum_variant_def
+                        let enum_def = self.ctx.get_or_register_enum_def(did);
+                        let variant_def = &enum_def.variants[variant_idx];
+                        let variant_rtys = variant_def
                             .field_tys
                             .clone()
                             .into_iter()
@@ -241,7 +382,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
                         let sort_args: Vec<_> =
                             rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
-                        let ty = rty::EnumType::new(ty_sym.clone(), rty_args).into();
+                        let ty = rty::EnumType::new(enum_def.name.clone(), rty_args).into();
 
                         let mut builder = PlaceTypeBuilder::default();
                         let mut field_terms = Vec::new();
@@ -251,7 +392,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         }
                         builder.build(
                             ty,
-                            chc::Term::datatype_ctor(ty_sym, sort_args, v_sym, field_terms),
+                            chc::Term::datatype_ctor(
+                                enum_def.name,
+                                sort_args,
+                                variant_def.name.clone(),
+                                field_terms,
+                            ),
                         )
                     }
                     _ => PlaceType::tuple(field_tys),
@@ -263,15 +409,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 _ty,
             ) => {
                 let func_ty = match operand.const_fn_def() {
-                    Some((def_id, args)) => {
-                        let rty_args: IndexVec<_, _> =
-                            args.types().map(|ty| self.type_builder.build(ty)).collect();
-                        self.ctx
-                            .def_ty_with_args(def_id, rty_args)
-                            .expect("unknown def")
-                            .ty
-                            .clone()
-                    }
+                    Some((def_id, args)) => self
+                        .ctx
+                        .def_ty_with_args(def_id, args)
+                        .expect("unknown def")
+                        .ty
+                        .clone(),
                     _ => unimplemented!(),
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
@@ -472,9 +615,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 rty::FunctionType::new([param1, param2].into_iter().collect(), ret).into()
             }
             Some((def_id, args)) => {
-                let rty_args = args.types().map(|ty| self.type_builder.build(ty)).collect();
+                let param_env = self.tcx.param_env(self.local_def_id);
+                let instance =
+                    mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+                let resolved_def_id = if let Some(instance) = instance {
+                    instance.def_id()
+                } else {
+                    def_id
+                };
+                if def_id != resolved_def_id {
+                    tracing::info!(?def_id, ?resolved_def_id, "resolve",);
+                }
+
                 self.ctx
-                    .def_ty_with_args(def_id, rty_args)
+                    .def_ty_with_args(resolved_def_id, args)
                     .expect("unknown def")
                     .ty
                     .vacuous()
@@ -771,6 +925,31 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
     }
+
+    fn register_enum_defs(&mut self) {
+        for local_decl in &self.local_decls {
+            use mir_ty::{TypeSuperVisitable as _, TypeVisitable as _};
+            #[derive(Default)]
+            struct EnumCollector {
+                enums: std::collections::HashSet<DefId>,
+            }
+            impl<'tcx> mir_ty::TypeVisitor<mir_ty::TyCtxt<'tcx>> for EnumCollector {
+                fn visit_ty(&mut self, ty: mir_ty::Ty<'tcx>) {
+                    if let mir_ty::TyKind::Adt(adt_def, _) = ty.kind() {
+                        if adt_def.is_enum() {
+                            self.enums.insert(adt_def.did());
+                        }
+                    }
+                    ty.super_visit_with(self);
+                }
+            }
+            let mut visitor = EnumCollector::default();
+            local_decl.ty.visit_with(&mut visitor);
+            for def_id in visitor.enums {
+                self.ctx.get_or_register_enum_def(def_id);
+            }
+        }
+    }
 }
 
 /// Turns [`rty::RefinedType<Var>`] into [`rty::RefinedType<T>`].
@@ -814,7 +993,7 @@ impl<T> UnbindAtoms<T> {
         self.existentials.extend(var_ty.existentials);
     }
 
-    pub fn unbind(mut self, env: &Env, ty: rty::RefinedType<Var>) -> rty::RefinedType<T> {
+    pub fn unbind(mut self, env: &analyze::Env, ty: rty::RefinedType<Var>) -> rty::RefinedType<T> {
         let rty::RefinedType {
             ty: src_ty,
             refinement,
@@ -983,19 +1162,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self
     }
 
-    pub fn env(&mut self, env: Env) -> &mut Self {
-        self.env = env;
-        self
-    }
-
-    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
-        self.type_builder = type_builder;
-        self
-    }
-
     pub fn run(&mut self, expected: &BasicBlockType) {
         let span = tracing::info_span!("bb", bb = ?self.basic_block);
         let _guard = span.enter();
+        self.register_enum_defs();
 
         let params = expected.as_ref().params.clone();
         self.bind_locals(&params);

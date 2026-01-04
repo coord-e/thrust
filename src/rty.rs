@@ -55,7 +55,7 @@ mod subtyping;
 pub use subtyping::{relate_sub_closed_type, ClauseScope, Subtyping};
 
 mod params;
-pub use params::{RefinedTypeArgs, TypeArgs, TypeParamIdx, TypeParamSubst};
+pub use params::{RefinedTypeArgs, TypeParamIdx, TypeParamSubst};
 
 rustc_index::newtype_index! {
     /// An index representing function parameter.
@@ -83,15 +83,46 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum FunctionAbi {
+    #[default]
+    Rust,
+    RustCall,
+}
+
+impl std::fmt::Display for FunctionAbi {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl FunctionAbi {
+    pub fn name(&self) -> &'static str {
+        match self {
+            FunctionAbi::Rust => "rust",
+            FunctionAbi::RustCall => "rust-call",
+        }
+    }
+
+    pub fn is_rust(&self) -> bool {
+        matches!(self, FunctionAbi::Rust)
+    }
+
+    pub fn is_rust_call(&self) -> bool {
+        matches!(self, FunctionAbi::RustCall)
+    }
+}
+
 /// A function type.
 ///
 /// In Thrust, function types are closed. Because of that, function types, thus its parameters and
 /// return type only refer to the parameters of the function itself using [`FunctionParamIdx`] and
 /// do not accept other type of variables from the environment.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct FunctionType {
     pub params: IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
     pub ret: Box<RefinedType<FunctionParamIdx>>,
+    pub abi: FunctionAbi,
 }
 
 impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b FunctionType
@@ -100,15 +131,25 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let abi = match self.abi {
+            FunctionAbi::Rust => allocator.nil(),
+            abi => allocator
+                .text("extern")
+                .append(allocator.space())
+                .append(allocator.as_string(abi))
+                .append(allocator.space()),
+        };
         let separator = allocator.text(",").append(allocator.line());
-        allocator
-            .intersperse(self.params.iter().map(|ty| ty.pretty(allocator)), separator)
-            .parens()
-            .append(allocator.space())
-            .append(allocator.text("→"))
-            .append(allocator.line())
-            .append(self.ret.pretty(allocator))
-            .group()
+        abi.append(
+            allocator
+                .intersperse(self.params.iter().map(|ty| ty.pretty(allocator)), separator)
+                .parens(),
+        )
+        .append(allocator.space())
+        .append(allocator.text("→"))
+        .append(allocator.line())
+        .append(self.ret.pretty(allocator))
+        .group()
     }
 }
 
@@ -120,7 +161,13 @@ impl FunctionType {
         FunctionType {
             params,
             ret: Box::new(ret),
+            abi: FunctionAbi::Rust,
         }
+    }
+
+    pub fn with_abi(mut self, abi: FunctionAbi) -> Self {
+        self.abi = abi;
+        self
     }
 
     /// Because function types are always closed in Thrust, we can convert this into
@@ -156,7 +203,7 @@ impl FunctionType {
 }
 
 /// The kind of a reference, which is either mutable or immutable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefKind {
     Mut,
     Immut,
@@ -181,7 +228,7 @@ where
 }
 
 /// The kind of a pointer, which is either a reference or an owned pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerKind {
     Ref(RefKind),
     Own,
@@ -221,7 +268,7 @@ impl PointerKind {
 }
 
 /// A pointer type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct PointerType<T> {
     pub kind: PointerKind,
     pub elem: Box<RefinedType<T>>,
@@ -334,7 +381,7 @@ impl<T> PointerType<T> {
 /// Note that the current implementation uses tuples to represent structs. See
 /// implementation in `crate::refine::template` module for details.
 /// It is our TODO to improve the struct representation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct TupleType<T> {
     pub elems: Vec<RefinedType<T>>,
 }
@@ -458,7 +505,7 @@ impl EnumDatatypeDef {
 /// An enum type.
 ///
 /// An enum type includes its type arguments and the argument types can refer to outer variables `T`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct EnumType<T> {
     pub symbol: chc::DatatypeSymbol,
     pub args: IndexVec<TypeParamIdx, RefinedType<T>>,
@@ -560,7 +607,7 @@ impl<T> EnumType<T> {
 }
 
 /// A type parameter.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct ParamType {
     pub idx: TypeParamIdx,
 }
@@ -589,7 +636,7 @@ impl ParamType {
 }
 
 /// An underlying type of a refinement type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum Type<T> {
     Int,
     Bool,
@@ -995,7 +1042,7 @@ impl<T> ShiftExistential for RefinedTypeVar<T> {
 /// A formula, potentially equipped with an existential quantifier.
 ///
 /// Note: This is not to be confused with [`crate::chc::Formula`] in the [`crate::chc`] module, which is a different notion.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Formula<V> {
     pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
     pub body: chc::Body<V>,
@@ -1127,6 +1174,19 @@ impl<V> Formula<V> {
 
 impl<V> Formula<V>
 where
+    V: chc::Var,
+{
+    pub fn guarded(self, guard: chc::Formula<V>) -> Self {
+        let Formula { existentials, body } = self;
+        Formula {
+            existentials,
+            body: body.guarded(guard),
+        }
+    }
+}
+
+impl<V> Formula<V>
+where
     V: ShiftExistential,
 {
     pub fn push_conj(&mut self, other: Self) {
@@ -1236,7 +1296,7 @@ impl<T> Instantiator<T> {
 }
 
 /// A refinement type.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct RefinedType<FV = Closed> {
     pub ty: Type<FV>,
     pub refinement: Refinement<FV>,
@@ -1302,6 +1362,41 @@ impl<FV> RefinedType<FV> {
         let refinement = inner_refinement
             .subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).box_current());
         RefinedType { ty, refinement }
+    }
+
+    pub fn guarded(self, guard: chc::Formula<FV>) -> Self
+    where
+        FV: chc::Var,
+    {
+        let RefinedType { ty, refinement } = self;
+        let refinement = refinement.guarded(guard.map_var(RefinedTypeVar::Free));
+        RefinedType { ty, refinement }
+    }
+
+    /// Returns a dereferenced type of the immutable reference or owned pointer.
+    ///
+    /// e.g. `{ v: Box<T> | φ }  -->  { v: T | φ[box v/v] }`
+    pub fn deref(self) -> Self {
+        let RefinedType {
+            ty,
+            refinement: outer_refinement,
+        } = self;
+        let inner_ty = ty.into_pointer().expect("invalid deref");
+        if inner_ty.is_mut() {
+            // losing info about proph
+            panic!("invalid deref");
+        }
+        let RefinedType {
+            ty: inner_ty,
+            refinement: mut inner_refinement,
+        } = *inner_ty.elem;
+        inner_refinement.push_conj(
+            outer_refinement.subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).boxed()),
+        );
+        RefinedType {
+            ty: inner_ty,
+            refinement: inner_refinement,
+        }
     }
 
     pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>

@@ -389,7 +389,7 @@ impl Function {
 }
 
 /// A logical term.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum Term<V = TermVarIdx> {
     Null,
     Var(V),
@@ -406,6 +406,8 @@ pub enum Term<V = TermVarIdx> {
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
     DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
+    /// Used in [`Formula`] to represent existentially quantified variables appearing in annotations.
+    FormulaExistentialVar(Sort, String),
 }
 
 impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
@@ -475,6 +477,7 @@ where
             Term::DatatypeDiscr(_, t) => allocator
                 .text("discriminant")
                 .append(t.pretty(allocator).parens()),
+            Term::FormulaExistentialVar(_, name) => allocator.text(name.clone()),
         }
     }
 }
@@ -521,6 +524,7 @@ impl<V> Term<V> {
                 args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
             ),
             Term::DatatypeDiscr(d_sym, t) => Term::DatatypeDiscr(d_sym, Box::new(t.subst_var(f))),
+            Term::FormulaExistentialVar(sort, name) => Term::FormulaExistentialVar(sort, name),
         }
     }
 
@@ -562,15 +566,18 @@ impl<V> Term<V> {
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
             Term::DatatypeCtor(sort, _, _) => sort.clone().into(),
             Term::DatatypeDiscr(_, _) => Sort::int(),
+            Term::FormulaExistentialVar(sort, _) => sort.clone(),
         }
     }
 
     fn fv_impl(&self) -> Box<dyn Iterator<Item = &V> + '_> {
         match self {
             Term::Var(v) => Box::new(std::iter::once(v)),
-            Term::Null | Term::Bool(_) | Term::Int(_) | Term::String(_) => {
-                Box::new(std::iter::empty())
-            }
+            Term::Null
+            | Term::Bool(_)
+            | Term::Int(_)
+            | Term::String(_)
+            | Term::FormulaExistentialVar { .. } => Box::new(std::iter::empty()),
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
             Term::BoxCurrent(t) => t.fv_impl(),
@@ -614,6 +621,10 @@ impl<V> Term<V> {
 
     pub fn mut_(t1: Term<V>, t2: Term<V>) -> Self {
         Term::Mut(Box::new(t1), Box::new(t2))
+    }
+
+    pub fn boxed(self) -> Self {
+        Term::Box(Box::new(self))
     }
 
     pub fn box_current(self) -> Self {
@@ -984,8 +995,14 @@ impl Pred {
 }
 
 /// An atom is a predicate applied to a list of terms.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Atom<V = TermVarIdx> {
+    /// With `guard`, this represents `guard => pred(args)`.
+    ///
+    /// As long as there is no pvar in the `guard`, it forms a valid CHC. However, in that case,
+    /// it becomes odd to call this an `Atom`... It is our TODO to clean this up by either
+    /// getting rid of the `guard` or renaming `Atom`.
+    pub guard: Option<Box<Formula<V>>>,
     pub pred: Pred,
     pub args: Vec<Term<V>>,
 }
@@ -997,7 +1014,12 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        if self.pred.is_infix() {
+        let guard = if let Some(guard) = &self.guard {
+            guard.pretty(allocator).append(allocator.text(" ⇒"))
+        } else {
+            allocator.nil()
+        };
+        let atom = if self.pred.is_infix() {
             self.args[0]
                 .pretty_atom(allocator)
                 .append(allocator.line())
@@ -1016,35 +1038,50 @@ where
             } else {
                 p.append(allocator.line()).append(inner.nest(2)).group()
             }
-        }
+        };
+        guard.append(allocator.line()).append(atom).group()
     }
 }
 
 impl<V> Atom<V> {
     pub fn new(pred: Pred, args: Vec<Term<V>>) -> Self {
-        Atom { pred, args }
+        Atom {
+            guard: None,
+            pred,
+            args,
+        }
+    }
+
+    pub fn with_guard(guard: Formula<V>, pred: Pred, args: Vec<Term<V>>) -> Self {
+        Atom {
+            guard: Some(Box::new(guard)),
+            pred,
+            args,
+        }
     }
 
     pub fn top() -> Self {
-        Atom {
-            pred: KnownPred::TOP.into(),
-            args: vec![],
-        }
+        Atom::new(KnownPred::TOP.into(), vec![])
     }
 
     pub fn bottom() -> Self {
-        Atom {
-            pred: KnownPred::BOTTOM.into(),
-            args: vec![],
-        }
+        Atom::new(KnownPred::BOTTOM.into(), vec![])
     }
 
     pub fn is_top(&self) -> bool {
-        self.pred.is_top()
+        if let Some(guard) = &self.guard {
+            guard.is_bottom() || self.pred.is_top()
+        } else {
+            self.pred.is_top()
+        }
     }
 
     pub fn is_bottom(&self) -> bool {
-        self.pred.is_bottom()
+        if let Some(guard) = &self.guard {
+            guard.is_top() && self.pred.is_bottom()
+        } else {
+            self.pred.is_bottom()
+        }
     }
 
     pub fn subst_var<F, W>(self, mut f: F) -> Atom<W>
@@ -1052,6 +1089,7 @@ impl<V> Atom<V> {
         F: FnMut(V) -> Term<W>,
     {
         Atom {
+            guard: self.guard.map(|fo| Box::new(fo.subst_var(&mut f))),
             pred: self.pred,
             args: self.args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
         }
@@ -1062,13 +1100,37 @@ impl<V> Atom<V> {
         F: FnMut(V) -> W,
     {
         Atom {
+            guard: self.guard.map(|fo| Box::new(fo.map_var(&mut f))),
             pred: self.pred,
             args: self.args.into_iter().map(|t| t.map_var(&mut f)).collect(),
         }
     }
 
     pub fn fv(&self) -> impl Iterator<Item = &V> {
-        self.args.iter().flat_map(|t| t.fv())
+        let guard_fvs: Box<dyn Iterator<Item = &V>> = if let Some(guard) = &self.guard {
+            Box::new(guard.fv())
+        } else {
+            Box::new(std::iter::empty())
+        };
+        self.args.iter().flat_map(|t| t.fv()).chain(guard_fvs)
+    }
+
+    pub fn guarded(self, new_guard: Formula<V>) -> Atom<V> {
+        let Atom {
+            guard: self_guard,
+            pred,
+            args,
+        } = self;
+        let guard = if let Some(self_guard) = self_guard {
+            self_guard.and(new_guard)
+        } else {
+            new_guard
+        };
+        Atom {
+            guard: Some(Box::new(guard)),
+            pred,
+            args,
+        }
     }
 }
 
@@ -1077,12 +1139,13 @@ impl<V> Atom<V> {
 /// While it allows arbitrary [`Atom`] in its `Atom` variant, we only expect atoms with known
 /// predicates (i.e., predicates other than `Pred::Var`) to appear in formulas. It is our TODO to
 /// enforce this restriction statically. Also see the definition of [`Body`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub enum Formula<V = TermVarIdx> {
     Atom(Atom<V>),
     Not(Box<Formula<V>>),
     And(Vec<Formula<V>>),
     Or(Vec<Formula<V>>),
+    Exists(Vec<(String, Sort)>, Box<Formula<V>>),
 }
 
 impl<V> Default for Formula<V> {
@@ -1124,6 +1187,25 @@ where
                 );
                 inner.group()
             }
+            Formula::Exists(vars, fo) => {
+                let vars = allocator.intersperse(
+                    vars.iter().map(|(name, sort)| {
+                        allocator
+                            .text(name.clone())
+                            .append(allocator.text(":"))
+                            .append(allocator.text(" "))
+                            .append(sort.pretty(allocator))
+                    }),
+                    allocator.text(", ").append(allocator.line()),
+                );
+                allocator
+                    .text("∃")
+                    .append(vars)
+                    .append(allocator.text("."))
+                    .append(allocator.line())
+                    .append(fo.pretty(allocator).nest(2))
+                    .group()
+            }
         }
     }
 }
@@ -1139,7 +1221,9 @@ impl<V> Formula<V> {
         D::Doc: Clone,
     {
         match self {
-            Formula::And(_) | Formula::Or(_) => self.pretty(allocator).parens(),
+            Formula::And(_) | Formula::Or(_) | Formula::Exists { .. } => {
+                self.pretty(allocator).parens()
+            }
             _ => self.pretty(allocator),
         }
     }
@@ -1158,6 +1242,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => fo.is_bottom(),
             Formula::And(fs) => fs.iter().all(Formula::is_top),
             Formula::Or(fs) => fs.iter().any(Formula::is_top),
+            Formula::Exists(_, fo) => fo.is_top(),
         }
     }
 
@@ -1167,6 +1252,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => fo.is_top(),
             Formula::And(fs) => fs.iter().any(Formula::is_bottom),
             Formula::Or(fs) => fs.iter().all(Formula::is_bottom),
+            Formula::Exists(_, fo) => fo.is_bottom(),
         }
     }
 
@@ -1197,6 +1283,10 @@ impl<V> Formula<V> {
         }
     }
 
+    pub fn exists(vars: Vec<(String, Sort)>, body: Self) -> Self {
+        Formula::Exists(vars, Box::new(body))
+    }
+
     pub fn subst_var<F, W>(self, f: F) -> Formula<W>
     where
         F: FnMut(V) -> Term<W>,
@@ -1210,6 +1300,7 @@ impl<V> Formula<V> {
                 Formula::And(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect())
             }
             Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect()),
+            Formula::Exists(vars, fo) => Formula::Exists(vars, Box::new(fo.subst_var(f))),
         }
     }
 
@@ -1224,6 +1315,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Formula::Not(Box::new(fo.map_var(&mut f))),
             Formula::And(fs) => Formula::And(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
             Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
+            Formula::Exists(vars, fo) => Formula::Exists(vars, Box::new(fo.map_var(f))),
         }
     }
 
@@ -1237,6 +1329,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Box::new(fo.fv()),
             Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
+            Formula::Exists(_, fo) => Box::new(fo.fv()),
         }
     }
 
@@ -1250,6 +1343,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Box::new(fo.iter_atoms()),
             Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
+            Formula::Exists(_, fo) => Box::new(fo.iter_atoms()),
         }
     }
 
@@ -1291,12 +1385,15 @@ impl<V> Formula<V> {
                     *self = fs.pop().unwrap();
                 }
             }
+            Formula::Exists(_, fo) => {
+                fo.simplify();
+            }
         }
     }
 }
 
 /// The body part of a clause, consisting of atoms and a formula.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone)]
 pub struct Body<V = TermVarIdx> {
     pub atoms: Vec<Atom<V>>,
     /// NOTE: This doesn't contain predicate variables. Also see [`Formula`].
@@ -1407,6 +1504,22 @@ impl<V> Body<V> {
 
     pub fn iter_atoms(&self) -> impl Iterator<Item = &Atom<V>> {
         self.formula.iter_atoms().chain(&self.atoms)
+    }
+}
+
+impl<V> Body<V>
+where
+    V: Var,
+{
+    pub fn guarded(self, guard: Formula<V>) -> Body<V> {
+        let Body { atoms, formula } = self;
+        Body {
+            atoms: atoms
+                .into_iter()
+                .map(|a| a.guarded(guard.clone()))
+                .collect(),
+            formula: guard.not().or(formula),
+        }
     }
 }
 

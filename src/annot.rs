@@ -12,6 +12,7 @@ use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Token, TokenKind};
 use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenStream, TokenTree};
 use rustc_index::IndexVec;
 use rustc_span::symbol::Ident;
+use std::collections::HashMap;
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
@@ -30,6 +31,62 @@ impl<T> AnnotFormula<T> {
     pub fn top() -> Self {
         AnnotFormula::Formula(chc::Formula::top())
     }
+}
+
+/// A path in an annotation.
+///
+/// Handling of paths in Thrust annotations is intentionally limited now. We plan to re-implement
+/// annotation parsing while letting rustc handle path resolution in the future.
+#[derive(Debug, Clone)]
+pub struct AnnotPath {
+    pub segments: Vec<AnnotPathSegment>,
+}
+
+impl AnnotPath {
+    /// Convert the path to a datatype constructor term with the given arguments.
+    pub fn to_datatype_ctor<V>(&self, ctor_args: Vec<chc::Term<V>>) -> (chc::Term<V>, chc::Sort) {
+        let mut segments = self.segments.clone();
+
+        let ctor = segments.pop().unwrap();
+        if !ctor.generic_args.is_empty() {
+            unimplemented!("generic arguments in datatype constructor");
+        }
+        let Some(ty_last_segment) = segments.last_mut() else {
+            unimplemented!("single segment path");
+        };
+        let generic_args: Vec<_> = ty_last_segment.generic_args.drain(..).collect();
+        let ty_path_idents: Vec<_> = segments
+            .into_iter()
+            .map(|segment| {
+                if !segment.generic_args.is_empty() {
+                    unimplemented!("generic arguments in datatype constructor");
+                }
+                segment.ident.to_string()
+            })
+            .collect();
+        // see refine::datatype_symbol
+        let d_sym = chc::DatatypeSymbol::new(ty_path_idents.join("."));
+        let v_sym = chc::DatatypeSymbol::new(format!("{}.{}", d_sym, ctor.ident.as_str()));
+        let term = chc::Term::datatype_ctor(d_sym.clone(), generic_args.clone(), v_sym, ctor_args);
+        let sort = chc::Sort::datatype(d_sym, generic_args);
+        (term, sort)
+    }
+
+    /// If the path consists of a single segment without generic arguments, return that identifier.
+    pub fn single_segment_ident(&self) -> Option<&Ident> {
+        if self.segments.len() == 1 && self.segments[0].generic_args.is_empty() {
+            Some(&self.segments[0].ident)
+        } else {
+            None
+        }
+    }
+}
+
+/// A segment of a path in an annotation.
+#[derive(Debug, Clone)]
+pub struct AnnotPathSegment {
+    pub ident: Ident,
+    pub generic_args: Vec<chc::Sort>,
 }
 
 /// A trait for resolving variables in annotations to their logical representation and their sorts.
@@ -139,6 +196,7 @@ enum FormulaOrTerm<T> {
     Term(chc::Term<T>, chc::Sort),
     BinOp(chc::Term<T>, AmbiguousBinOp, chc::Term<T>),
     Not(Box<FormulaOrTerm<T>>),
+    Literal(bool),
 }
 
 impl<T> FormulaOrTerm<T> {
@@ -158,6 +216,13 @@ impl<T> FormulaOrTerm<T> {
                 chc::Formula::Atom(chc::Atom::new(pred.into(), vec![lhs, rhs]))
             }
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_formula()?.not(),
+            FormulaOrTerm::Literal(b) => {
+                if b {
+                    chc::Formula::top()
+                } else {
+                    chc::Formula::bottom()
+                }
+            }
         };
         Some(fo)
     }
@@ -176,6 +241,7 @@ impl<T> FormulaOrTerm<T> {
                 let (t, _) = formula_or_term.into_term()?;
                 (t.not(), chc::Sort::bool())
             }
+            FormulaOrTerm::Literal(b) => (chc::Term::bool(b), chc::Sort::bool()),
         };
         Some((t, s))
     }
@@ -185,6 +251,7 @@ impl<T> FormulaOrTerm<T> {
 struct Parser<'a, T> {
     resolver: T,
     cursor: RefTokenTreeCursor<'a>,
+    formula_existentials: HashMap<String, chc::Sort>,
 }
 
 impl<'a, T> Parser<'a, T>
@@ -229,6 +296,15 @@ where
             Ok(())
         } else {
             Err(ParseAttrError::unexpected_token(expected_str, t.clone()))
+        }
+    }
+
+    fn expect_next_ident(&mut self) -> Result<Ident> {
+        let t = self.next_token("ident")?;
+        if let Some((ident, _)) = t.ident() {
+            Ok(ident)
+        } else {
+            Err(ParseAttrError::unexpected_token("ident", t.clone()))
         }
     }
 
@@ -287,6 +363,88 @@ where
         }
     }
 
+    fn parse_path_tail(&mut self, head: Ident) -> Result<AnnotPath> {
+        let mut segments: Vec<AnnotPathSegment> = Vec::new();
+        segments.push(AnnotPathSegment {
+            ident: head,
+            generic_args: Vec::new(),
+        });
+        while let Some(Token {
+            kind: TokenKind::ModSep,
+            ..
+        }) = self.look_ahead_token(0)
+        {
+            self.consume();
+            match self.next_token("ident or <")? {
+                t @ Token {
+                    kind: TokenKind::Lt,
+                    ..
+                } => {
+                    if segments.is_empty() {
+                        return Err(ParseAttrError::unexpected_token(
+                            "path segment before <",
+                            t.clone(),
+                        ));
+                    }
+                    let mut generic_args = Vec::new();
+                    loop {
+                        let sort = self.parse_sort()?;
+                        generic_args.push(sort);
+                        match self.next_token(", or >")? {
+                            Token {
+                                kind: TokenKind::Comma,
+                                ..
+                            } => {}
+                            Token {
+                                kind: TokenKind::Gt,
+                                ..
+                            } => break,
+                            t => return Err(ParseAttrError::unexpected_token(", or >", t.clone())),
+                        }
+                    }
+                    segments.last_mut().unwrap().generic_args = generic_args;
+                }
+                t @ Token {
+                    kind: TokenKind::Ident(_, _),
+                    ..
+                } => {
+                    let (ident, _) = t.ident().unwrap();
+                    segments.push(AnnotPathSegment {
+                        ident,
+                        generic_args: Vec::new(),
+                    });
+                }
+                t => return Err(ParseAttrError::unexpected_token("ident or <", t.clone())),
+            }
+        }
+        Ok(AnnotPath { segments })
+    }
+
+    fn parse_datatype_ctor_args(&mut self) -> Result<Vec<chc::Term<T::Output>>> {
+        if self.look_ahead_token(0).is_none() {
+            return Ok(Vec::new());
+        }
+
+        let mut terms = Vec::new();
+        loop {
+            let formula_or_term = self.parse_formula_or_term()?;
+            let (t, _) = formula_or_term.into_term().ok_or_else(|| {
+                ParseAttrError::unexpected_formula("in datatype constructor arguments")
+            })?;
+            terms.push(t);
+            if let Some(Token {
+                kind: TokenKind::Comma,
+                ..
+            }) = self.look_ahead_token(0)
+            {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+        Ok(terms)
+    }
+
     fn parse_atom(&mut self) -> Result<FormulaOrTerm<T::Output>> {
         let tt = self.next_token_tree("term or formula")?.clone();
 
@@ -296,6 +454,7 @@ where
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
                     cursor: s.trees(),
+                    formula_existentials: self.formula_existentials.clone(),
                 };
                 let formula_or_term = parser.parse_formula_or_term_or_tuple()?;
                 parser.end_of_input()?;
@@ -305,13 +464,43 @@ where
         };
 
         let formula_or_term = if let Some((ident, _)) = t.ident() {
-            match ident.as_str() {
-                "true" => FormulaOrTerm::Formula(chc::Formula::top()),
-                "false" => FormulaOrTerm::Formula(chc::Formula::bottom()),
-                _ => {
-                    let (v, sort) = self.resolve(ident)?;
-                    FormulaOrTerm::Term(chc::Term::var(v), sort)
+            let path = self.parse_path_tail(ident)?;
+            if let Some(ident) = path.single_segment_ident() {
+                match (
+                    ident.as_str(),
+                    self.formula_existentials.get(ident.name.as_str()),
+                ) {
+                    ("true", _) => FormulaOrTerm::Literal(true),
+                    ("false", _) => FormulaOrTerm::Literal(false),
+                    (_, Some(sort)) => {
+                        let var =
+                            chc::Term::FormulaExistentialVar(sort.clone(), ident.name.to_string());
+                        FormulaOrTerm::Term(var, sort.clone())
+                    }
+                    _ => {
+                        let (v, sort) = self.resolve(*ident)?;
+                        FormulaOrTerm::Term(chc::Term::var(v), sort)
+                    }
                 }
+            } else {
+                let next_tt = self
+                    .next_token_tree("arguments for datatype constructor")?
+                    .clone();
+                let TokenTree::Delimited(_, _, Delimiter::Parenthesis, s) = next_tt else {
+                    return Err(ParseAttrError::unexpected_token_tree(
+                        "arguments for datatype constructor",
+                        next_tt.clone(),
+                    ));
+                };
+                let mut parser = Parser {
+                    resolver: self.boxed_resolver(),
+                    cursor: s.trees(),
+                    formula_existentials: self.formula_existentials.clone(),
+                };
+                let args = parser.parse_datatype_ctor_args()?;
+                parser.end_of_input()?;
+                let (term, sort) = path.to_datatype_ctor(args);
+                FormulaOrTerm::Term(term, sort)
             }
         } else {
             match t.kind {
@@ -322,6 +511,31 @@ where
                     ),
                     _ => unimplemented!(),
                 },
+                TokenKind::Lt => {
+                    let (t1, s1) = self
+                        .parse_binop_2()?
+                        .into_term()
+                        .ok_or_else(|| ParseAttrError::unexpected_formula("in box/mut term"))?;
+
+                    match self.next_token("> or ,")? {
+                        Token {
+                            kind: TokenKind::Gt,
+                            ..
+                        } => FormulaOrTerm::Term(chc::Term::box_(t1), chc::Sort::box_(s1)),
+                        Token {
+                            kind: TokenKind::Comma,
+                            ..
+                        } => {
+                            let (t2, _s2) = self
+                                .parse_binop_2()?
+                                .into_term()
+                                .ok_or_else(|| ParseAttrError::unexpected_formula("in mut term"))?;
+                            self.expect_next_token(TokenKind::Gt, ">")?;
+                            FormulaOrTerm::Term(chc::Term::mut_(t1, t2), chc::Sort::mut_(s1))
+                        }
+                        t => return Err(ParseAttrError::unexpected_token("> or ,", t.clone())),
+                    }
+                }
                 _ => {
                     return Err(ParseAttrError::unexpected_token(
                         "identifier, or literal",
@@ -575,8 +789,123 @@ where
         Ok(formula_or_term)
     }
 
+    fn parse_exists(&mut self) -> Result<FormulaOrTerm<T::Output>> {
+        match self.look_ahead_token(0) {
+            Some(Token {
+                kind: TokenKind::Ident(sym, _),
+                ..
+            }) if sym.as_str() == "exists" => {
+                self.consume();
+                let mut vars = Vec::new();
+                loop {
+                    let ident = self.expect_next_ident()?;
+                    self.expect_next_token(TokenKind::Colon, ":")?;
+                    let sort = self.parse_sort()?;
+                    vars.push((ident.name.to_string(), sort));
+                    match self.next_token(". or ,")? {
+                        Token {
+                            kind: TokenKind::Comma,
+                            ..
+                        } => {}
+                        Token {
+                            kind: TokenKind::Dot,
+                            ..
+                        } => break,
+                        t => return Err(ParseAttrError::unexpected_token(". or ,", t.clone())),
+                    }
+                }
+                self.formula_existentials.extend(vars.iter().cloned());
+                let formula = self
+                    .parse_formula_or_term()?
+                    .into_formula()
+                    .ok_or_else(|| ParseAttrError::unexpected_term("in exists formula"))?;
+                for (name, _) in &vars {
+                    self.formula_existentials.remove(name);
+                }
+                Ok(FormulaOrTerm::Formula(chc::Formula::exists(vars, formula)))
+            }
+            _ => self.parse_binop_5(),
+        }
+    }
+
     fn parse_formula_or_term(&mut self) -> Result<FormulaOrTerm<T::Output>> {
-        self.parse_binop_5()
+        self.parse_exists()
+    }
+
+    fn parse_sort(&mut self) -> Result<chc::Sort> {
+        let tt = self.next_token_tree("sort")?.clone();
+        match tt {
+            TokenTree::Token(
+                Token {
+                    kind: TokenKind::BinOp(BinOpToken::And),
+                    ..
+                },
+                _,
+            ) => match self.look_ahead_token(0) {
+                Some(Token {
+                    kind: TokenKind::Ident(sym, _),
+                    ..
+                }) if sym.as_str() == "mut" => {
+                    self.consume();
+                    let inner_sort = self.parse_sort()?;
+                    Ok(chc::Sort::mut_(inner_sort))
+                }
+                _ => {
+                    let inner_sort = self.parse_sort()?;
+                    Ok(chc::Sort::box_(inner_sort))
+                }
+            },
+            TokenTree::Token(
+                Token {
+                    kind: TokenKind::Ident(sym, _),
+                    ..
+                },
+                _,
+            ) => {
+                let sort = match sym.as_str() {
+                    "bool" => chc::Sort::bool(),
+                    "int" => chc::Sort::int(),
+                    "string" => unimplemented!(),
+                    "null" => chc::Sort::null(),
+                    "fn" => unimplemented!(),
+                    name => {
+                        // TODO: ad-hoc
+                        if let Some(i) =
+                            name.strip_prefix('T').and_then(|s| s.parse::<usize>().ok())
+                        {
+                            chc::Sort::param(i)
+                        } else {
+                            unimplemented!();
+                        }
+                    }
+                };
+                Ok(sort)
+            }
+            TokenTree::Delimited(_, _, Delimiter::Parenthesis, ts) => {
+                let mut parser = Parser {
+                    resolver: self.boxed_resolver(),
+                    cursor: ts.trees(),
+                    formula_existentials: self.formula_existentials.clone(),
+                };
+                let mut sorts = Vec::new();
+                loop {
+                    sorts.push(parser.parse_sort()?);
+                    match parser.look_ahead_token(0) {
+                        Some(Token {
+                            kind: TokenKind::Comma,
+                            ..
+                        }) => {
+                            parser.consume();
+                        }
+                        None => break,
+                        Some(t) => return Err(ParseAttrError::unexpected_token(",", t.clone())),
+                    }
+                }
+                parser.end_of_input()?;
+                Ok(chc::Sort::tuple(sorts))
+            }
+            t => Err(ParseAttrError::unexpected_token_tree("sort", t.clone())),
+        }
     }
 
     fn parse_ty(&mut self) -> Result<rty::Type<T::Output>> {
@@ -662,6 +991,7 @@ where
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
                     cursor: ts.trees(),
+                    formula_existentials: self.formula_existentials.clone(),
                 };
                 let mut rtys = Vec::new();
                 loop {
@@ -697,6 +1027,7 @@ where
         let mut parser = Parser {
             resolver: self.boxed_resolver(),
             cursor: ts.trees(),
+            formula_existentials: self.formula_existentials.clone(),
         };
         let self_ident = if matches!(
             parser.look_ahead_token(1),
@@ -720,6 +1051,7 @@ where
         let mut parser = Parser {
             resolver: RefinementResolver::new(self.boxed_resolver()),
             cursor: parser.cursor,
+            formula_existentials: self.formula_existentials.clone(),
         };
         if let Some(self_ident) = self_ident {
             parser.resolver.set_self(self_ident, ty.to_sort());
@@ -859,6 +1191,7 @@ where
         let mut parser = Parser {
             resolver: &self.resolver,
             cursor: ts.trees(),
+            formula_existentials: Default::default(),
         };
         let rty = parser.parse_rty()?;
         parser.end_of_input()?;
@@ -869,6 +1202,7 @@ where
         let mut parser = Parser {
             resolver: &self.resolver,
             cursor: ts.trees(),
+            formula_existentials: Default::default(),
         };
         let formula = parser.parse_annot_formula()?;
         parser.end_of_input()?;

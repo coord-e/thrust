@@ -2,14 +2,11 @@
 
 use std::collections::HashSet;
 
-use rustc_hir::def::DefKind;
-use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
 use crate::chc;
-use crate::refine::{self, TypeBuilder};
 use crate::rty::{self, ClauseBuilderExt as _};
 
 /// An implementation of local crate analysis.
@@ -40,6 +37,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(local_def_id)))]
     fn refine_fn_def(&mut self, local_def_id: LocalDefId) {
+        let sig = self.ctx.local_fn_sig(local_def_id);
+
         let mut analyzer = self.ctx.local_def_analyzer(local_def_id);
 
         if analyzer.is_annotated_as_trusted() {
@@ -51,17 +50,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.predicates.insert(local_def_id.to_def_id());
         }
 
-        let sig = self
-            .tcx
-            .fn_sig(local_def_id)
-            .instantiate_identity()
-            .skip_binder();
+        if analyzer.is_annotated_as_extern_spec_fn() {
+            assert!(analyzer.is_fully_annotated());
+            self.trusted.insert(local_def_id.to_def_id());
+        }
+
         use mir_ty::TypeVisitableExt as _;
         if sig.has_param() && !analyzer.is_fully_annotated() {
             self.ctx.register_deferred_def(local_def_id.to_def_id());
         } else {
             let expected = analyzer.expected_ty();
-            self.ctx.register_def(local_def_id.to_def_id(), expected);
+            let target_def_id = if analyzer.is_annotated_as_extern_spec_fn() {
+                analyzer.extern_spec_fn_target_def_id()
+            } else {
+                local_def_id.to_def_id()
+            };
+            self.ctx.register_def(target_def_id, expected);
         }
     }
 
@@ -81,8 +85,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
             // check polymorphic function def by replacing type params with some opaque type
             // (and this is no-op if the function is mono)
-            let type_builder = TypeBuilder::new(self.tcx, local_def_id.to_def_id())
-                .with_param_mapper(|_| rty::Type::int());
             let mut expected = expected.clone();
             let subst = rty::TypeParamSubst::new(
                 expected
@@ -92,11 +94,60 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .collect(),
             );
             expected.subst_ty_params(&subst);
+            let generic_args = self.placeholder_generic_args(*local_def_id);
             self.ctx
                 .local_def_analyzer(*local_def_id)
-                .type_builder(type_builder)
+                .generic_args(generic_args)
                 .run(&expected);
         }
+    }
+
+    fn placeholder_generic_args(&self, local_def_id: LocalDefId) -> mir_ty::GenericArgsRef<'tcx> {
+        let mut constrained_params = HashSet::new();
+        let predicates = self.tcx.predicates_of(local_def_id);
+        let sized_trait = self.tcx.lang_items().sized_trait().unwrap();
+        for (clause, _) in predicates.predicates {
+            let mir_ty::ClauseKind::Trait(pred) = clause.kind().skip_binder() else {
+                continue;
+            };
+            if pred.def_id() == sized_trait {
+                continue;
+            };
+            for arg in pred.trait_ref.args.iter().flat_map(|ty| ty.walk()) {
+                let Some(ty) = arg.as_type() else {
+                    continue;
+                };
+                let mir_ty::TyKind::Param(param_ty) = ty.kind() else {
+                    continue;
+                };
+                constrained_params.insert(param_ty.index);
+            }
+        }
+
+        let mut args: Vec<mir_ty::GenericArg<'tcx>> = Vec::new();
+
+        let generics = self.tcx.generics_of(local_def_id);
+        for idx in 0..generics.count() {
+            let param = generics.param_at(idx, self.tcx);
+            let arg = match param.kind {
+                mir_ty::GenericParamDefKind::Type { .. } => {
+                    if constrained_params.contains(&param.index) {
+                        panic!(
+                            "unable to check generic function with constrained type parameter: {}",
+                            self.tcx.def_path_str(local_def_id)
+                        );
+                    }
+                    self.tcx.types.i32.into()
+                }
+                mir_ty::GenericParamDefKind::Const { .. } => {
+                    unimplemented!()
+                }
+                mir_ty::GenericParamDefKind::Lifetime { .. } => self.tcx.lifetimes.re_erased.into(),
+            };
+            args.push(arg);
+        }
+
+        self.tcx.mk_args(&args)
     }
 
     fn assert_callable_entry(&mut self) {
@@ -128,57 +179,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
     }
-
-    fn register_enum_defs(&mut self) {
-        for local_def_id in self.tcx.iter_local_def_id() {
-            let DefKind::Enum = self.tcx.def_kind(local_def_id) else {
-                continue;
-            };
-            let adt = self.tcx.adt_def(local_def_id);
-
-            let name = refine::datatype_symbol(self.tcx, local_def_id.to_def_id());
-            let variants: IndexVec<_, _> = adt
-                .variants()
-                .iter()
-                .map(|variant| {
-                    let name = refine::datatype_symbol(self.tcx, variant.def_id);
-                    // TODO: consider using TyCtxt::tag_for_variant
-                    let discr = analyze::resolve_discr(self.tcx, variant.discr);
-                    let field_tys = variant
-                        .fields
-                        .iter()
-                        .map(|field| {
-                            let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                            TypeBuilder::new(self.tcx, local_def_id.to_def_id()).build(field_ty)
-                        })
-                        .collect();
-                    rty::EnumVariantDef {
-                        name,
-                        discr,
-                        field_tys,
-                    }
-                })
-                .collect();
-
-            let generics = self.tcx.generics_of(local_def_id);
-            let ty_params = (0..generics.count())
-                .filter(|idx| {
-                    matches!(
-                        generics.param_at(*idx, self.tcx).kind,
-                        mir_ty::GenericParamDefKind::Type { .. }
-                    )
-                })
-                .count();
-            tracing::debug!(?local_def_id, ?name, ?ty_params, "ty_params count");
-
-            let def = rty::EnumDatatypeDef {
-                name,
-                ty_params,
-                variants,
-            };
-            self.ctx.register_enum_def(local_def_id.to_def_id(), def);
-        }
-    }
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -193,7 +193,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let span = tracing::debug_span!("crate", krate = %self.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE));
         let _guard = span.enter();
 
-        self.register_enum_defs();
         self.refine_local_defs();
         self.analyze_local_defs();
         self.assert_callable_entry();

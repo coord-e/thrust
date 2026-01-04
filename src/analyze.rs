@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
+use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
@@ -104,15 +105,42 @@ impl<'tcx> ReplacePlacesVisitor<'tcx> {
 }
 
 #[derive(Debug, Clone)]
-struct DeferredDefTy {
-    cache: Rc<RefCell<HashMap<rty::TypeArgs, rty::RefinedType>>>,
+struct DeferredDefTy<'tcx> {
+    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
 }
 
 #[derive(Debug, Clone)]
-enum DefTy {
+enum DefTy<'tcx> {
     Concrete(rty::RefinedType),
-    Deferred(DeferredDefTy),
+    Deferred(DeferredDefTy<'tcx>),
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct EnumDefs {
+    defs: HashMap<DefId, rty::EnumDatatypeDef>,
+}
+
+impl EnumDefs {
+    pub fn find_by_name(&self, name: &chc::DatatypeSymbol) -> Option<&rty::EnumDatatypeDef> {
+        self.defs.values().find(|def| &def.name == name)
+    }
+
+    pub fn get(&self, def_id: DefId) -> Option<&rty::EnumDatatypeDef> {
+        self.defs.get(&def_id)
+    }
+
+    pub fn insert(&mut self, def_id: DefId, def: rty::EnumDatatypeDef) {
+        self.defs.insert(def_id, def);
+    }
+}
+
+impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
+    fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef {
+        self.borrow().find_by_name(name).unwrap().clone()
+    }
+}
+
+pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
 
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
@@ -123,7 +151,7 @@ pub struct Analyzer<'tcx> {
     /// currently contains only local-def templates,
     /// but will be extended to contain externally known def's refinement types
     /// (at least for every defs referenced by local def bodies)
-    defs: HashMap<DefId, DefTy>,
+    defs: HashMap<DefId, DefTy<'tcx>>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -131,7 +159,7 @@ pub struct Analyzer<'tcx> {
     basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
-    enum_defs: Rc<RefCell<HashMap<DefId, rty::EnumDatatypeDef>>>,
+    enum_defs: Rc<RefCell<EnumDefs>>,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
@@ -174,7 +202,58 @@ impl<'tcx> Analyzer<'tcx> {
         }
     }
 
-    pub fn register_enum_def(&mut self, def_id: DefId, enum_def: rty::EnumDatatypeDef) {
+    fn build_enum_def(&self, def_id: DefId) -> rty::EnumDatatypeDef {
+        let adt = self.tcx.adt_def(def_id);
+
+        let name = refine::datatype_symbol(self.tcx, def_id);
+        let variants: IndexVec<_, _> = adt
+            .variants()
+            .iter()
+            .map(|variant| {
+                let name = refine::datatype_symbol(self.tcx, variant.def_id);
+                // TODO: consider using TyCtxt::tag_for_variant
+                let discr = resolve_discr(self.tcx, variant.discr);
+                let field_tys = variant
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let field_ty = self.tcx.type_of(field.did).instantiate_identity();
+                        TypeBuilder::new(self.tcx, def_id).build(field_ty)
+                    })
+                    .collect();
+                rty::EnumVariantDef {
+                    name,
+                    discr,
+                    field_tys,
+                }
+            })
+            .collect();
+
+        let generics = self.tcx.generics_of(def_id);
+        let ty_params = (0..generics.count())
+            .filter(|idx| {
+                matches!(
+                    generics.param_at(*idx, self.tcx).kind,
+                    mir_ty::GenericParamDefKind::Type { .. }
+                )
+            })
+            .count();
+        tracing::debug!(?def_id, ?name, ?ty_params, "ty_params count");
+
+        rty::EnumDatatypeDef {
+            name,
+            ty_params,
+            variants,
+        }
+    }
+
+    pub fn get_or_register_enum_def(&self, def_id: DefId) -> rty::EnumDatatypeDef {
+        let mut enum_defs = self.enum_defs.borrow_mut();
+        if let Some(enum_def) = enum_defs.get(def_id) {
+            return enum_def.clone();
+        }
+
+        let enum_def = self.build_enum_def(def_id);
         tracing::debug!(def_id = ?def_id, enum_def = ?enum_def, "register_enum_def");
         let ctors = enum_def
             .variants
@@ -199,21 +278,10 @@ impl<'tcx> Analyzer<'tcx> {
             params: enum_def.ty_params,
             ctors,
         };
-        self.enum_defs.borrow_mut().insert(def_id, enum_def);
+        enum_defs.insert(def_id, enum_def.clone());
         self.system.borrow_mut().datatypes.push(datatype);
-    }
 
-    pub fn find_enum_variant(
-        &self,
-        ty_sym: &chc::DatatypeSymbol,
-        v_sym: &chc::DatatypeSymbol,
-    ) -> Option<rty::EnumVariantDef> {
-        self.enum_defs
-            .borrow()
-            .iter()
-            .find(|(_, d)| &d.name == ty_sym)
-            .and_then(|(_, d)| d.variants.iter().find(|v| &v.name == v_sym))
-            .cloned()
+        enum_def
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {
@@ -241,15 +309,17 @@ impl<'tcx> Analyzer<'tcx> {
     pub fn def_ty_with_args(
         &mut self,
         def_id: DefId,
-        rty_args: rty::TypeArgs,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<rty::RefinedType> {
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
+                let type_builder = TypeBuilder::new(self.tcx, def_id);
+
                 let mut def_ty = rty.clone();
                 def_ty.instantiate_ty_params(
-                    rty_args
-                        .clone()
-                        .into_iter()
+                    generic_args
+                        .types()
+                        .map(|ty| type_builder.build(ty))
                         .map(rty::RefinedType::unrefined)
                         .collect(),
                 );
@@ -259,21 +329,17 @@ impl<'tcx> Analyzer<'tcx> {
         };
 
         let deferred_ty_cache = Rc::clone(&deferred_ty.cache); // to cut reference to allow &mut self
-        if let Some(rty) = deferred_ty_cache.borrow().get(&rty_args) {
+        if let Some(rty) = deferred_ty_cache.borrow().get(&generic_args) {
             return Some(rty.clone());
         }
 
-        let type_builder = TypeBuilder::new(self.tcx, def_id).with_param_mapper({
-            let rty_args = rty_args.clone();
-            move |ty: rty::ParamType| rty_args[ty.idx].clone()
-        });
         let mut analyzer = self.local_def_analyzer(def_id.as_local()?);
-        analyzer.type_builder(type_builder);
+        analyzer.generic_args(generic_args);
 
         let expected = analyzer.expected_ty();
         deferred_ty_cache
             .borrow_mut()
-            .insert(rty_args, expected.clone());
+            .insert(generic_args, expected.clone());
 
         analyzer.run(&expected);
         Some(expected)
@@ -306,14 +372,8 @@ impl<'tcx> Analyzer<'tcx> {
         self.register_def(panic_def_id, rty::RefinedType::unrefined(panic_ty.into()));
     }
 
-    pub fn new_env(&self) -> refine::Env {
-        let defs = self
-            .enum_defs
-            .borrow()
-            .values()
-            .map(|def| (def.name.clone(), def.clone()))
-            .collect();
-        refine::Env::new(defs)
+    pub fn new_env(&self) -> Env {
+        refine::Env::new(Rc::clone(&self.enum_defs))
     }
 
     pub fn crate_analyzer(&mut self) -> crate_::Analyzer<'tcx, '_> {
@@ -339,5 +399,41 @@ impl<'tcx> Analyzer<'tcx> {
         if let Err(err) = self.system.borrow().solve() {
             self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
+    }
+
+    /// Computes the signature of the local function.
+    ///
+    /// This works like `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
+    /// but extracts parameter and return types directly from the given `body` to obtain a signature that
+    /// reflects potential type instantiations happened after `optimized_mir`.
+    pub fn local_fn_sig_with_body(
+        &self,
+        local_def_id: LocalDefId,
+        body: &mir::Body<'tcx>,
+    ) -> mir_ty::FnSig<'tcx> {
+        let ty = self.tcx.type_of(local_def_id).instantiate_identity();
+        let sig = if let mir_ty::TyKind::Closure(_, substs) = ty.kind() {
+            substs.as_closure().sig().skip_binder()
+        } else {
+            ty.fn_sig(self.tcx).skip_binder()
+        };
+
+        self.tcx.mk_fn_sig(
+            body.args_iter().map(|arg| body.local_decls[arg].ty),
+            body.return_ty(),
+            sig.c_variadic,
+            sig.unsafety,
+            sig.abi,
+        )
+    }
+
+    /// Computes the signature of the local function.
+    ///
+    /// This works like `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
+    /// but extracts parameter and return types directly from [`mir::Body`] to obtain a signature that
+    /// reflects the actual type of lifted closure functions.
+    pub fn local_fn_sig(&self, local_def_id: LocalDefId) -> mir_ty::FnSig<'tcx> {
+        let body = self.tcx.optimized_mir(local_def_id);
+        self.local_fn_sig_with_body(local_def_id, body)
     }
 }

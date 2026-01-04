@@ -6,7 +6,7 @@ use rustc_index::bit_set::BitSet;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeAndMut};
-use rustc_span::def_id::LocalDefId;
+use rustc_span::def_id::{DefId, LocalDefId};
 use rustc_span::symbol::Ident;
 
 use crate::analyze;
@@ -135,6 +135,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .next()
             .is_some()
     }
+    
+    pub fn is_annotated_as_extern_spec_fn(&self) -> bool {
+        self.tcx
+            .get_attrs_by_path(
+                self.local_def_id.to_def_id(),
+                &analyze::annot::extern_spec_fn_path(),
+            )
+            .next()
+            .is_some()
+    }
 
     // TODO: unify this logic with extraction functions above
     pub fn is_fully_annotated(&self) -> bool {
@@ -179,8 +189,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn expected_ty(&mut self) -> rty::RefinedType {
-        let sig = self.tcx.fn_sig(self.local_def_id);
-        let sig = sig.instantiate_identity().skip_binder();
+        let sig = self
+            .ctx
+            .local_fn_sig_with_body(self.local_def_id, &self.body);
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self
@@ -247,6 +258,48 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // - type params are fully instantiated, or
         // - the function is fully annotated
         rty::RefinedType::unrefined(builder.build().into())
+    }
+
+    /// Extract the target DefId from `#[thrust::extern_spec_fn]` function.
+    pub fn extern_spec_fn_target_def_id(&self) -> DefId {
+        struct ExtractDefId<'tcx> {
+            tcx: TyCtxt<'tcx>,
+            outer_def_id: LocalDefId,
+            inner_def_id: Option<DefId>,
+        }
+
+        impl<'tcx> rustc_hir::intravisit::Visitor<'tcx> for ExtractDefId<'tcx> {
+            type NestedFilter = rustc_middle::hir::nested_filter::OnlyBodies;
+
+            fn nested_visit_map(&mut self) -> Self::Map {
+                self.tcx.hir()
+            }
+
+            fn visit_qpath(
+                &mut self,
+                qpath: &rustc_hir::QPath<'tcx>,
+                hir_id: rustc_hir::HirId,
+                _span: rustc_span::Span,
+            ) {
+                let typeck_result = self.tcx.typeck(self.outer_def_id);
+                if let rustc_hir::def::Res::Def(_, def_id) = typeck_result.qpath_res(qpath, hir_id)
+                {
+                    assert!(self.inner_def_id.is_none(), "invalid extern_spec_fn");
+                    self.inner_def_id = Some(def_id);
+                }
+            }
+        }
+
+        use rustc_hir::intravisit::Visitor as _;
+        let mut visitor = ExtractDefId {
+            tcx: self.tcx,
+            outer_def_id: self.local_def_id,
+            inner_def_id: None,
+        };
+        if let rustc_hir::Node::Item(item) = self.tcx.hir_node_by_def_id(self.local_def_id) {
+            visitor.visit_item(item);
+        }
+        visitor.inner_def_id.expect("invalid extern_spec_fn")
     }
 
     fn is_mut_param(&self, param_idx: rty::FunctionParamIdx) -> bool {
@@ -542,7 +595,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
-                .type_builder(self.type_builder.clone())
                 .run(&rty);
         }
     }
@@ -659,8 +711,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    pub fn type_builder(&mut self, type_builder: TypeBuilder<'tcx>) -> &mut Self {
-        self.type_builder = type_builder;
+    pub fn generic_args(&mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> &mut Self {
+        self.body =
+            mir_ty::EarlyBinder::bind(self.body.clone()).instantiate(self.tcx, generic_args);
         self
     }
 

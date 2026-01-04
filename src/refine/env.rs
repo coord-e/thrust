@@ -2,8 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
-use rustc_middle::mir::{self, Local, Operand, Place, PlaceElem};
-use rustc_middle::ty as mir_ty;
+use rustc_middle::mir::{Local, Place, PlaceElem};
 use rustc_target::abi::{FieldIdx, VariantIdx};
 
 use crate::chc;
@@ -291,6 +290,16 @@ impl PlaceTypeBuilder {
     }
 }
 
+pub trait EnumDefProvider {
+    fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef;
+}
+
+impl<'a, T: EnumDefProvider> EnumDefProvider for &'a T {
+    fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef {
+        <T as EnumDefProvider>::enum_def(self, name)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlaceType {
     pub ty: rty::Type<Var>,
@@ -308,9 +317,11 @@ impl From<PlaceType> for rty::RefinedType<Var> {
             formula,
         } = ty;
         let mut body = formula.map_var(Into::into);
-        body.push_conj(
-            chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
-        );
+        if !ty.to_sort().is_singleton() {
+            body.push_conj(
+                chc::Term::var(rty::RefinedTypeVar::Value).equal_to(term.map_var(Into::into)),
+            );
+        }
         let refinement = rty::Refinement::new(existentials, body);
         rty::RefinedType::new(ty, refinement)
     }
@@ -393,16 +404,19 @@ impl PlaceType {
         builder.build(ty, term)
     }
 
-    pub fn downcast(
+    pub fn downcast<T>(
         self,
         variant_idx: VariantIdx,
         field_idx: FieldIdx,
-        enum_defs: &HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
-    ) -> PlaceType {
+        enum_defs: T,
+    ) -> PlaceType
+    where
+        T: EnumDefProvider,
+    {
         let mut builder = PlaceTypeBuilder::default();
         let (inner_ty, inner_term) = builder.subsume(self);
         let inner_ty = inner_ty.into_enum().unwrap();
-        let def = &enum_defs[&inner_ty.symbol];
+        let def = enum_defs.enum_def(&inner_ty.symbol);
         let variant = &def.variants[variant_idx];
 
         let mut field_terms = Vec::new();
@@ -451,6 +465,14 @@ impl PlaceType {
         // TODO: check ty1 = ty2
         let ty = rty::PointerType::mut_to(ty1).into();
         let term = chc::Term::mut_(term1, term2);
+        builder.build(ty, term)
+    }
+
+    pub fn immut(self) -> PlaceType {
+        let mut builder = PlaceTypeBuilder::default();
+        let (inner_ty, inner_term) = builder.subsume(self);
+        let ty = rty::PointerType::immut_to(inner_ty).into();
+        let term = chc::Term::box_(inner_term);
         builder.build(ty, term)
     }
 
@@ -503,18 +525,21 @@ impl PlaceType {
 pub type Assumption = rty::Formula<PlaceTypeVar>;
 
 #[derive(Debug, Clone)]
-pub struct Env {
+pub struct Env<T> {
     locals: BTreeMap<Local, rty::RefinedType<Var>>,
     flow_locals: BTreeMap<Local, FlowBinding>,
     temp_vars: IndexVec<TempVarIdx, TempVarBinding>,
     assumptions: Vec<Assumption>,
 
-    enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>,
+    enum_defs: T,
 
     enum_expansion_depth_limit: usize,
 }
 
-impl rty::ClauseScope for Env {
+impl<T> rty::ClauseScope for Env<T>
+where
+    T: EnumDefProvider,
+{
     fn build_clause(&self) -> chc::ClauseBuilder {
         let mut builder = chc::ClauseBuilder::default();
         for (v, sort) in self.dependencies() {
@@ -558,7 +583,10 @@ impl rty::ClauseScope for Env {
     }
 }
 
-impl refine::TemplateScope for Env {
+impl<T> refine::TemplateScope for Env<T>
+where
+    T: EnumDefProvider,
+{
     type Var = Var;
     fn build_template(&self) -> rty::TemplateBuilder<Var> {
         let mut builder = rty::TemplateBuilder::default();
@@ -569,8 +597,11 @@ impl refine::TemplateScope for Env {
     }
 }
 
-impl Env {
-    pub fn new(enum_defs: HashMap<chc::DatatypeSymbol, rty::EnumDatatypeDef>) -> Self {
+impl<T> Env<T>
+where
+    T: EnumDefProvider,
+{
+    pub fn new(enum_defs: T) -> Self {
         Env {
             locals: Default::default(),
             flow_locals: Default::default(),
@@ -720,8 +751,14 @@ impl Env {
             assert_eq!(temp, self.temp_vars.push(TempVarBinding::Flow(dummy)));
         }
 
-        let def = self.enum_defs[&ty.symbol].clone();
+        let def = self.enum_defs.enum_def(&ty.symbol);
         let matcher_pred = chc::MatcherPred::new(ty.symbol.clone(), ty.arg_sorts());
+
+        let discr_var = self
+            .temp_vars
+            .push(TempVarBinding::Type(rty::RefinedType::unrefined(
+                rty::Type::int(),
+            )));
 
         let mut variants = IndexVec::new();
         for variant_def in &def.variants {
@@ -731,7 +768,12 @@ impl Env {
                 fields.push(x);
                 let mut field_ty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
                 field_ty.instantiate_ty_params(ty.args.clone());
-                self.bind_impl(x.into(), field_ty.boxed(), depth);
+                let guarded_field_ty = field_ty.guarded(
+                    chc::Term::var(discr_var.into())
+                        .equal_to(chc::Term::int(variant_def.discr as i64))
+                        .into(),
+                );
+                self.bind_impl(x.into(), guarded_field_ty.boxed(), depth);
             }
             variants.push(FlowBindingVariant { fields });
         }
@@ -766,11 +808,6 @@ impl Env {
         assumption
             .body
             .push_conj(chc::Atom::new(matcher_pred.into(), pred_args));
-        let discr_var = self
-            .temp_vars
-            .push(TempVarBinding::Type(rty::RefinedType::unrefined(
-                rty::Type::int(),
-            )));
         assumption
             .body
             .push_conj(
@@ -926,7 +963,7 @@ impl Env {
                     .collect();
 
                 let arg_rtys = {
-                    let def = &self.enum_defs[sym];
+                    let def = self.enum_defs.enum_def(sym);
                     let expected_tys = def
                         .field_tys()
                         .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()).boxed());
@@ -949,48 +986,6 @@ impl Env {
 
     pub fn local_type(&self, local: Local) -> PlaceType {
         self.var_type(local.into())
-    }
-
-    pub fn operand_type(&self, operand: Operand<'_>) -> PlaceType {
-        use mir::{interpret::Scalar, Const, ConstValue, Mutability};
-        match operand {
-            Operand::Copy(place) | Operand::Move(place) => self.place_type(place),
-            Operand::Constant(operand) => {
-                let Const::Val(val, ty) = operand.const_ else {
-                    unimplemented!("const: {:?}", operand.const_);
-                };
-                match (ty.kind(), val) {
-                    (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                        let val = val.try_to_int(val.size()).unwrap();
-                        PlaceType::with_ty_and_term(
-                            rty::Type::int(),
-                            chc::Term::int(val.try_into().unwrap()),
-                        )
-                    }
-                    (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
-                        PlaceType::with_ty_and_term(
-                            rty::Type::bool(),
-                            chc::Term::bool(val.try_to_bool().unwrap()),
-                        )
-                    }
-                    (
-                        mir_ty::TyKind::Ref(_, elem, Mutability::Not),
-                        ConstValue::Slice { data, meta },
-                    ) if matches!(elem.kind(), mir_ty::TyKind::Str) => {
-                        let end = meta.try_into().unwrap();
-                        let content = data
-                            .inner()
-                            .inspect_with_uninit_and_ptr_outside_interpreter(0..end);
-                        let content = std::str::from_utf8(content).unwrap();
-                        PlaceType::with_ty_and_term(
-                            rty::PointerType::immut_to(rty::Type::string()).into(),
-                            chc::Term::box_(chc::Term::string(content.to_owned())),
-                        )
-                    }
-                    _ => unimplemented!("const: {:?}, ty: {:?}", val, ty),
-                }
-            }
-        }
     }
 
     fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> PlaceType {
@@ -1081,7 +1076,10 @@ impl Path {
     }
 }
 
-impl Env {
+impl<T> Env<T>
+where
+    T: EnumDefProvider,
+{
     fn path_type(&self, path: &Path) -> PlaceType {
         match path {
             Path::PlaceTy(pty) => pty.clone(),
@@ -1113,7 +1111,7 @@ impl Env {
                 .map(|i| self.dropping_assumption(&path.clone().tuple_proj(i)))
                 .collect()
         } else if let Some(ety) = ty.ty.as_enum() {
-            let enum_def = self.enum_defs[&ety.symbol].clone();
+            let enum_def = self.enum_defs.enum_def(&ety.symbol);
             let matcher_pred = chc::MatcherPred::new(ety.symbol.clone(), ety.arg_sorts());
 
             let PlaceType {
