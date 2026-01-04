@@ -1,8 +1,8 @@
 //! Analyze a local crate.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
-use rustc_middle::ty::{self as mir_ty, TyCtxt};
+use rustc_middle::ty::{self as mir_ty, TyCtxt, FnSig};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
@@ -23,7 +23,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
     trusted: HashSet<DefId>,
-    predicates: HashSet<DefId>,
+    predicates: HashMap<DefId, FnSig<'tcx>>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -47,7 +47,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         if analyzer.is_annotated_as_predicate() {
-            self.predicates.insert(local_def_id.to_def_id());
+            self.predicates.insert(local_def_id.to_def_id(), sig);
         }
 
         if analyzer.is_annotated_as_extern_spec_fn() {
@@ -185,7 +185,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn new(ctx: &'ctx mut analyze::Analyzer<'tcx>) -> Self {
         let tcx = ctx.tcx;
         let trusted = HashSet::default();
-        let predicates = HashSet::default();
+        let predicates = HashMap::default();
         Self { ctx, tcx, trusted, predicates }
     }
 
