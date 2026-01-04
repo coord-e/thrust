@@ -78,6 +78,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::info!(?local_def_id, "trusted");
                 continue;
             }
+            if self.predicates.contains_key(&local_def_id.to_def_id()) {
+                let sig = self.predicates.get(&local_def_id.to_def_id()).unwrap();
+                tracing::info!(?local_def_id, ?sig, "predicate");
+                continue;
+            }
             let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
                 // when the local_def_id is deferred it would be skipped
                 continue;
