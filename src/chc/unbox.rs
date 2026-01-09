@@ -42,6 +42,7 @@ fn unbox_pred(pred: Pred) -> Pred {
         Pred::Known(pred) => Pred::Known(pred),
         Pred::Var(pred) => Pred::Var(pred),
         Pred::Matcher(pred) => unbox_matcher_pred(pred),
+        Pred::UserDefined(pred) => Pred::UserDefined(pred),
     }
 }
 
