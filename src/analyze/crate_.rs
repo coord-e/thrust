@@ -1,8 +1,8 @@
 //! Analyze a local crate.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
-use rustc_middle::ty::{self as mir_ty, TyCtxt};
+use rustc_middle::ty::{self as mir_ty, TyCtxt, FnSig};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
@@ -23,6 +23,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
     trusted: HashSet<DefId>,
+    predicates: HashMap<DefId, FnSig<'tcx>>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -43,6 +44,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if analyzer.is_annotated_as_trusted() {
             assert!(analyzer.is_fully_annotated());
             self.trusted.insert(local_def_id.to_def_id());
+        }
+
+        if analyzer.is_annotated_as_predicate() {
+            self.predicates.insert(local_def_id.to_def_id(), sig);
         }
 
         if analyzer.is_annotated_as_extern_spec_fn() {
@@ -71,6 +76,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             };
             if self.trusted.contains(&local_def_id.to_def_id()) {
                 tracing::info!(?local_def_id, "trusted");
+                continue;
+            }
+            if self.predicates.contains_key(&local_def_id.to_def_id()) {
+                let sig = self.predicates.get(&local_def_id.to_def_id()).unwrap();
+                tracing::info!(?local_def_id, ?sig, "predicate");
                 continue;
             }
             let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
@@ -180,7 +190,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn new(ctx: &'ctx mut analyze::Analyzer<'tcx>) -> Self {
         let tcx = ctx.tcx;
         let trusted = HashSet::default();
-        Self { ctx, tcx, trusted }
+        let predicates = HashMap::default();
+        Self { ctx, tcx, trusted, predicates }
     }
 
     pub fn run(&mut self) {
