@@ -1,0 +1,24 @@
+//@check-pass
+//@compile-flags: -Adead_code -C debug-assertions=off
+
+// Insert definitions written in SMT-LIB2 format into .smt file directly.
+// This feature is intended for debug or experiment purpose.
+#![thrust::raw_define("(define-fun is_double ((x Int) (doubled_x Int)) Bool
+    (=(
+        (* (x 2))
+        doubled_x
+    ))
+)")]
+
+#[thrust::requires(true)]
+#[thrust::ensures(result == 2 * x)]
+// #[thrust::ensures(is_double(x, result))]
+fn double(x: i64) -> i64 {
+    x + x
+}
+
+fn main() {
+    let a = 3;
+    assert!(double(a) == 6);
+    assert!(is_double(a, double(a)));
+}
