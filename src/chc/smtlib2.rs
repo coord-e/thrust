@@ -370,6 +370,30 @@ impl<'ctx, 'a> Clause<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::RawDefinition`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
+#[derive(Debug, Clone)]
+pub struct RawDefinition<'a> {
+    inner: &'a chc::RawDefinition,
+}
+
+impl<'a> std::fmt::Display for RawDefinition<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.inner.definition,
+        )
+    }
+}
+
+impl<'a> RawDefinition<'a> {
+    pub fn new(inner: &'a chc::RawDefinition) -> Self {
+        Self {
+            inner
+        }
+    }
+}
+
 /// A wrapper around a [`chc::DatatypeSelector`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct DatatypeSelector<'ctx, 'a> {
@@ -554,6 +578,11 @@ pub struct System<'a> {
 impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
+
+        // insert definition from #![thrust::define_chc()] here
+        for raw_def in self.ctx.raw_definitions() {
+            writeln!(f, "{}\n", RawDefinition::new(raw_def))?;
+        }
 
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {

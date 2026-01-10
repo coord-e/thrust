@@ -21,6 +21,7 @@ use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 pub struct FormatContext {
     renamer: HoiceDatatypeRenamer,
     datatypes: Vec<chc::Datatype>,
+    raw_definitions: Vec<chc::RawDefinition>,
 }
 
 // FIXME: this is obviously ineffective and should be replaced
@@ -273,11 +274,16 @@ impl FormatContext {
             .filter(|d| d.params == 0)
             .collect();
         let renamer = HoiceDatatypeRenamer::new(&datatypes);
-        FormatContext { renamer, datatypes }
+        let raw_definitions = system.raw_definitions.clone();
+        FormatContext { renamer, datatypes, raw_definitions }
     }
 
     pub fn datatypes(&self) -> &[chc::Datatype] {
         &self.datatypes
+    }
+
+    pub fn raw_definitions(&self) -> &[chc::RawDefinition] {
+        &self.raw_definitions
     }
 
     pub fn box_ctor(&self, sort: &chc::Sort) -> impl std::fmt::Display {
