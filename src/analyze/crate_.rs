@@ -2,12 +2,14 @@
 
 use std::collections::HashSet;
 
+use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
 use crate::chc;
 use crate::rty::{self, ClauseBuilderExt as _};
+use crate::annot;
 
 /// An implementation of local crate analysis.
 ///
@@ -26,6 +28,31 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    // fn is_annotated_as_raw_define(&self) -> bool {
+    //     self.tcx
+    //         .get_attrs_by_path(
+    //             CRATE_DEF_ID.to_def_id(),
+    //             &analyze::annot::raw_define_path(),
+    //         )
+    //         .next()
+    //         .is_some()
+    // }
+
+    fn analyze_raw_define_annot(&mut self) {
+        for attrs in self.tcx.get_attrs_by_path(
+            CRATE_DEF_ID.to_def_id(),
+            &analyze::annot::raw_define_path(),
+        ) {
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let parser = annot::AnnotParser::new(
+                // TODO: this resolver is not actually used.
+                analyze::annot::ParamResolver::default()
+            );
+            let raw_definition = parser.parse_raw_definition(ts).unwrap();
+            self.ctx.system.borrow_mut().push_raw_definition(raw_definition);
+        }
+    }
+
     fn refine_local_defs(&mut self) {
         for local_def_id in self.tcx.mir_keys(()) {
             if self.tcx.def_kind(*local_def_id).is_fn_like() {
@@ -187,6 +214,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let span = tracing::debug_span!("crate", krate = %self.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE));
         let _guard = span.enter();
 
+        self.analyze_raw_define_annot();
         self.refine_local_defs();
         self.analyze_local_defs();
         self.assert_callable_entry();
