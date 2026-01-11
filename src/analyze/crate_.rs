@@ -28,16 +28,6 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    // fn is_annotated_as_raw_define(&self) -> bool {
-    //     self.tcx
-    //         .get_attrs_by_path(
-    //             CRATE_DEF_ID.to_def_id(),
-    //             &analyze::annot::raw_define_path(),
-    //         )
-    //         .next()
-    //         .is_some()
-    // }
-
     fn analyze_raw_define_annot(&mut self) {
         for attrs in self.tcx.get_attrs_by_path(
             CRATE_DEF_ID.to_def_id(),
