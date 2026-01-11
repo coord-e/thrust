@@ -8,7 +8,7 @@
 //! The main entry point is [`AnnotParser`], which parses a [`TokenStream`] into a
 //! [`rty::RefinedType`] or a [`chc::Formula`].
 
-use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Token, TokenKind};
+use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Lit, Token, TokenKind};
 use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenStream, TokenTree};
 use rustc_index::IndexVec;
 use rustc_span::symbol::Ident;
@@ -1076,6 +1076,32 @@ where
             .ok_or_else(|| ParseAttrError::unexpected_term("in annotation"))?;
         Ok(AnnotFormula::Formula(formula))
     }
+
+    pub fn parse_annot_raw_definition(&mut self) -> Result<chc::RawDefinition> {
+        let t = self.next_token("raw CHC definition")?;
+
+        match t {
+            Token {
+                kind: TokenKind::Literal(
+                    Lit { kind, symbol, .. }
+                ),
+                ..
+            } => {
+                match kind {
+                    LitKind::Str => {
+                        let definition = symbol.to_string();
+                        Ok(chc::RawDefinition{ definition })
+                    },
+                    _ =>  Err(ParseAttrError::unexpected_token(
+                        "string literal", t.clone()
+                    ))
+                }
+            },
+            _ => Err(ParseAttrError::unexpected_token(
+                "string literal", t.clone()
+            ))
+        }
+    }
 }
 
 /// A [`Resolver`] implementation for resolving specific variable as [`rty::RefinedTypeVar::Value`].
@@ -1207,5 +1233,16 @@ where
         let formula = parser.parse_annot_formula()?;
         parser.end_of_input()?;
         Ok(formula)
+    }
+
+    pub fn parse_raw_definition(&self, ts: TokenStream) -> Result<chc::RawDefinition> {
+        let mut parser = Parser {
+            resolver: &self.resolver,
+            cursor: ts.trees(),
+            formula_existentials: Default::default(),
+        };
+        let raw_definition = parser.parse_annot_raw_definition()?;
+        parser.end_of_input()?;
+        Ok(raw_definition)
     }
 }
