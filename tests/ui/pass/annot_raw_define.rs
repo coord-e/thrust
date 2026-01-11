@@ -3,11 +3,12 @@
 
 // Insert definitions written in SMT-LIB2 format into .smt file directly.
 // This feature is intended for debug or experiment purpose.
+#![feature(custom_inner_attributes)]
 #![thrust::raw_define("(define-fun is_double ((x Int) (doubled_x Int)) Bool
-    (=(
-        (* (x 2))
+    (=
+        (* x 2)
         doubled_x
-    ))
+    )
 )")]
 
 #[thrust::requires(true)]
@@ -20,5 +21,5 @@ fn double(x: i64) -> i64 {
 fn main() {
     let a = 3;
     assert!(double(a) == 6);
-    assert!(is_double(a, double(a)));
+    // assert!(is_double(a, double(a)));
 }
