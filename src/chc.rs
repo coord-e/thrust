@@ -902,7 +902,7 @@ impl MatcherPred {
     }
 }
 
-// TODO: DatatypeSymbolをほぼそのままコピーする形になっているので、エイリアスなどで共通化すべき？
+// TODO: This struct is almost copy of `DatatypeSymbol`. Two traits maight be unified with aliases.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserDefinedPredSymbol {
     inner: String,
