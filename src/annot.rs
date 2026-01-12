@@ -478,6 +478,17 @@ where
                         FormulaOrTerm::Term(var, sort.clone())
                     }
                     _ => {
+                        if let Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, _args)) = self.look_ahead_token_tree(1) {
+                            self.consume();
+                            let pred_symbol = chc::UserDefinedPredSymbol::new(ident.name.to_string());
+                            let pred = chc::Pred::UserDefined(pred_symbol);
+
+                            let args = self.parse_datatype_ctor_args()?;
+                            
+                            let atom = chc::Atom::new(pred, args);
+                            let formula = chc::Formula::Atom(atom);
+                            return Ok(FormulaOrTerm::Formula(formula));
+                        }
                         let (v, sort) = self.resolve(*ident)?;
                         FormulaOrTerm::Term(chc::Term::var(v), sort)
                     }
