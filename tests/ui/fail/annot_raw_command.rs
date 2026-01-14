@@ -1,5 +1,5 @@
 //@compile-flags: -Adead_code -C debug-assertions=off
-// This test panics with "invalid attribute" for now.
+// This test panics with "UnexpectedToken" for now.
 // TODO: reporting rustc diagnostics for parse errors
 
 // Insert commands written in SMT-LIB2 format into .smt2 file directly.
