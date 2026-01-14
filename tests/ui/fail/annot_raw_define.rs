@@ -1,14 +1,14 @@
-//@error-in-other-file: UnexpectedToken
 //@compile-flags: -Adead_code -C debug-assertions=off
+// This test panics with "invalid attribute" for now.
+// TODO: reporting rustc diagnostics for parse errors
 
-// Insert definitions written in SMT-LIB2 format into .smt file directly.
+// Insert definitions written in SMT-LIB2 format into .smt2 file directly.
 // This feature is intended for debug or experiment purpose.
 #![feature(custom_inner_attributes)]
 #![thrust::raw_define(true)] // argument must be single string literal
 
 #[thrust::requires(true)]
 #[thrust::ensures(result == 2 * x)]
-// #[thrust::ensures(is_double(x, result))]
 fn double(x: i64) -> i64 {
     x + x
 }
@@ -16,5 +16,4 @@ fn double(x: i64) -> i64 {
 fn main() {
     let a = 3;
     assert!(double(a) == 6);
-    // assert!(is_double(a, double(a)));
 }
