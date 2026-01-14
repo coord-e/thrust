@@ -579,9 +579,9 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
 
-        // insert command from #![thrust::define_chc()] here
-        for raw_def in self.ctx.raw_commands() {
-            writeln!(f, "{}\n", RawCommand::new(raw_def))?;
+        // insert command from #![thrust::raw_command()] here
+        for raw_command in &self.inner.raw_commands {
+            writeln!(f, "{}\n", RawCommand::new(raw_command))?;
         }
 
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
@@ -590,15 +590,15 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
         }
         writeln!(f)?;
-        for (p, def) in self.inner.pred_vars.iter_enumerated() {
-            if !def.debug_info.is_empty() {
-                writeln!(f, "{}", def.debug_info.display("; "))?;
+        for (p, cmd) in self.inner.pred_vars.iter_enumerated() {
+            if !cmd.debug_info.is_empty() {
+                writeln!(f, "{}", cmd.debug_info.display("; "))?;
             }
             writeln!(
                 f,
                 "(declare-fun {} {} Bool)\n",
                 p,
-                List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
+                List::closed(cmd.sig.iter().map(|s| self.ctx.fmt_sort(s)))
             )?;
         }
         for (id, clause) in self.inner.clauses.iter_enumerated() {
