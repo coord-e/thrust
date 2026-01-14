@@ -370,24 +370,24 @@ impl<'ctx, 'a> Clause<'ctx, 'a> {
     }
 }
 
-/// A wrapper around a [`chc::RawDefinition`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
+/// A wrapper around a [`chc::RawCommand`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
-pub struct RawDefinition<'a> {
-    inner: &'a chc::RawDefinition,
+pub struct RawCommand<'a> {
+    inner: &'a chc::RawCommand,
 }
 
-impl<'a> std::fmt::Display for RawDefinition<'a> {
+impl<'a> std::fmt::Display for RawCommand<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{}",
-            self.inner.definition,
+            self.inner.command,
         )
     }
 }
 
-impl<'a> RawDefinition<'a> {
-    pub fn new(inner: &'a chc::RawDefinition) -> Self {
+impl<'a> RawCommand<'a> {
+    pub fn new(inner: &'a chc::RawCommand) -> Self {
         Self {
             inner
         }
@@ -579,9 +579,9 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
 
-        // insert definition from #![thrust::define_chc()] here
-        for raw_def in self.ctx.raw_definitions() {
-            writeln!(f, "{}\n", RawDefinition::new(raw_def))?;
+        // insert command from #![thrust::define_chc()] here
+        for raw_def in self.ctx.raw_commands() {
+            writeln!(f, "{}\n", RawCommand::new(raw_def))?;
         }
 
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;

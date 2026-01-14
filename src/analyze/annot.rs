@@ -37,8 +37,8 @@ pub fn extern_spec_fn_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("extern_spec_fn")]
 }
 
-pub fn raw_define_path() -> [Symbol; 2] {
-    [Symbol::intern("thrust"), Symbol::intern("raw_define")]
+pub fn raw_command_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("raw_command")]
 }
 
 /// A [`annot::Resolver`] implementation for resolving function parameters.

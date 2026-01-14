@@ -1606,12 +1606,12 @@ impl Clause {
     }
 }
 
-/// A definition specified using #![thrust::define_raw()]
+/// A command specified using #![thrust::define_raw()]
 ///
 /// Those will be directly inserted into the generated SMT-LIB2 file.
 #[derive(Debug, Clone)]
-pub struct RawDefinition {
-    pub definition: String,
+pub struct RawCommand {
+    pub command: String,
 }
 
 /// A selector for a datatype constructor.
@@ -1663,7 +1663,7 @@ pub struct PredVarDef {
 /// A CHC system.
 #[derive(Debug, Clone, Default)]
 pub struct System {
-    pub raw_definitions: Vec<RawDefinition>,
+    pub raw_commands: Vec<RawCommand>,
     pub datatypes: Vec<Datatype>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
@@ -1674,8 +1674,8 @@ impl System {
         self.pred_vars.push(PredVarDef { sig, debug_info })
     }
 
-    pub fn push_raw_definition(&mut self, raw_definition: RawDefinition) {
-        self.raw_definitions.push(raw_definition)
+    pub fn push_raw_command(&mut self, raw_command: RawCommand) {
+        self.raw_commands.push(raw_command)
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {

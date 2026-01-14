@@ -1077,8 +1077,8 @@ where
         Ok(AnnotFormula::Formula(formula))
     }
 
-    pub fn parse_annot_raw_definition(&mut self) -> Result<chc::RawDefinition> {
-        let t = self.next_token("raw CHC definition")?;
+    pub fn parse_annot_raw_command(&mut self) -> Result<chc::RawCommand> {
+        let t = self.next_token("raw CHC command")?;
 
         match t {
             Token {
@@ -1089,8 +1089,8 @@ where
             } => {
                 match kind {
                     LitKind::Str => {
-                        let definition = symbol.to_string();
-                        Ok(chc::RawDefinition{ definition })
+                        let command = symbol.to_string();
+                        Ok(chc::RawCommand{ command })
                     },
                     _ =>  Err(ParseAttrError::unexpected_token(
                         "string literal", t.clone()
@@ -1235,14 +1235,14 @@ where
         Ok(formula)
     }
 
-    pub fn parse_raw_definition(&self, ts: TokenStream) -> Result<chc::RawDefinition> {
+    pub fn parse_raw_command(&self, ts: TokenStream) -> Result<chc::RawCommand> {
         let mut parser = Parser {
             resolver: &self.resolver,
             cursor: ts.trees(),
             formula_existentials: Default::default(),
         };
-        let raw_definition = parser.parse_annot_raw_definition()?;
+        let raw_command = parser.parse_annot_raw_command()?;
         parser.end_of_input()?;
-        Ok(raw_definition)
+        Ok(raw_command)
     }
 }

@@ -1,10 +1,10 @@
 //@check-pass
 //@compile-flags: -Adead_code -C debug-assertions=off
 
-// Insert definitions written in SMT-LIB2 format into .smt2 file directly.
+// Insert commands written in SMT-LIB2 format into .smt2 file directly.
 // This feature is intended for debug or experiment purpose.
 #![feature(custom_inner_attributes)]
-#![thrust::raw_define("(define-fun is_double ((x Int) (doubled_x Int)) Bool
+#![thrust::raw_command("(define-fun is_double ((x Int) (doubled_x Int)) Bool
     (=
         (* x 2)
         doubled_x

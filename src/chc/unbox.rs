@@ -161,7 +161,7 @@ pub fn unbox(system: System) -> System {
         clauses,
         pred_vars,
         datatypes,
-        raw_definitions,
+        raw_commands,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
@@ -170,6 +170,6 @@ pub fn unbox(system: System) -> System {
         clauses,
         pred_vars,
         datatypes,
-        raw_definitions,
+        raw_commands,
     }
 }

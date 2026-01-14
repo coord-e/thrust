@@ -28,18 +28,18 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    fn analyze_raw_define_annot(&mut self) {
+    fn analyze_raw_command_annot(&mut self) {
         for attrs in self.tcx.get_attrs_by_path(
             CRATE_DEF_ID.to_def_id(),
-            &analyze::annot::raw_define_path(),
+            &analyze::annot::raw_command_path(),
         ) {
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
             let parser = annot::AnnotParser::new(
                 // TODO: this resolver is not actually used.
                 analyze::annot::ParamResolver::default()
             );
-            let raw_definition = parser.parse_raw_definition(ts).unwrap();
-            self.ctx.system.borrow_mut().push_raw_definition(raw_definition);
+            let raw_command = parser.parse_raw_command(ts).unwrap();
+            self.ctx.system.borrow_mut().push_raw_command(raw_command);
         }
     }
 
@@ -204,7 +204,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let span = tracing::debug_span!("crate", krate = %self.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE));
         let _guard = span.enter();
 
-        self.analyze_raw_define_annot();
+        self.analyze_raw_command_annot();
         self.refine_local_defs();
         self.analyze_local_defs();
         self.assert_callable_entry();
