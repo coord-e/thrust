@@ -902,7 +902,6 @@ impl MatcherPred {
     }
 }
 
-// TODO: This struct is almost copy of `DatatypeSymbol`. Two traits maight be unified with aliases.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UserDefinedPredSymbol {
     inner: String,
@@ -1035,7 +1034,7 @@ impl Pred {
             Pred::Known(p) => p.name().into(),
             Pred::Var(p) => p.to_string().into(),
             Pred::Matcher(p) => p.name().into(),
-            Pred::UserDefined(p) => p.inner.clone().into(),
+            Pred::UserDefined(p) => p.to_string().into(),
         }
     }
 
