@@ -9,7 +9,6 @@ use rustc_span::def_id::{DefId, LocalDefId};
 use crate::analyze;
 use crate::chc;
 use crate::rty::{self, ClauseBuilderExt as _};
-use crate::annot;
 
 /// An implementation of local crate analysis.
 ///
@@ -33,13 +32,21 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             CRATE_DEF_ID.to_def_id(),
             &analyze::annot::raw_command_path(),
         ) {
+            use rustc_ast::token::{LitKind, Token, TokenKind};
+            use rustc_ast::tokenstream::TokenTree;
+
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let parser = annot::AnnotParser::new(
-                // TODO: this resolver is not actually used.
-                analyze::annot::ParamResolver::default()
+            let tt = ts.trees().next().expect("string literal");
+
+            let raw_command = match tt {
+                TokenTree::Token(Token{ kind: TokenKind::Literal(lit), .. }, _)
+                    if lit.kind == LitKind::Str => Some(lit.symbol.to_string()),
+                _ => None,
+            }.expect("invalid raw_command annotation");
+
+            self.ctx.system.borrow_mut().push_raw_command(
+                chc::RawCommand {command: raw_command}
             );
-            let raw_command = parser.parse_raw_command(ts).unwrap();
-            self.ctx.system.borrow_mut().push_raw_command(raw_command);
         }
     }
 
