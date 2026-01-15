@@ -590,15 +590,15 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
         }
         writeln!(f)?;
-        for (p, cmd) in self.inner.pred_vars.iter_enumerated() {
-            if !cmd.debug_info.is_empty() {
-                writeln!(f, "{}", cmd.debug_info.display("; "))?;
+        for (p, def) in self.inner.pred_vars.iter_enumerated() {
+            if !def.debug_info.is_empty() {
+                writeln!(f, "{}", def.debug_info.display("; "))?;
             }
             writeln!(
                 f,
                 "(declare-fun {} {} Bool)\n",
                 p,
-                List::closed(cmd.sig.iter().map(|s| self.ctx.fmt_sort(s)))
+                List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
             )?;
         }
         for (id, clause) in self.inner.clauses.iter_enumerated() {
