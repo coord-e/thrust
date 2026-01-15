@@ -486,7 +486,7 @@ where
                             let args = args.clone();
                             self.consume();
 
-                            let pred_symbol = chc::UserDefinedPredSymbol::new(ident.name.to_string());
+                            let pred_symbol = chc::UserDefinedPred::new(ident.name.to_string());
                             let pred = chc::Pred::UserDefined(pred_symbol);
 
                             let mut parser = Parser {

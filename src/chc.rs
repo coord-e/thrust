@@ -903,17 +903,17 @@ impl MatcherPred {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct UserDefinedPredSymbol {
+pub struct UserDefinedPred {
     inner: String,
 }
 
-impl std::fmt::Display for UserDefinedPredSymbol {
+impl std::fmt::Display for UserDefinedPred {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         self.inner.fmt(f)
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UserDefinedPredSymbol
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UserDefinedPred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -922,56 +922,9 @@ where
     }
 }
 
-impl UserDefinedPredSymbol {
+impl UserDefinedPred {
     pub fn new(inner: String) -> Self {
         Self { inner }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct UserDefinedPred {
-    symbol: UserDefinedPredSymbol,
-    args: Vec<Sort>,
-}
-
-impl<'a> std::fmt::Display for UserDefinedPred {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.symbol.inner)
-    }
-}
-
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UserDefinedPred
-where
-    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-    D::Doc: Clone,
-{
-    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let args = allocator.intersperse(
-            self.args.iter().map(|a| a.pretty(allocator)),
-            allocator.text(", "),
-        );
-        allocator
-            .text("user_defined_pred")
-            .append(
-                allocator
-                    .text(self.symbol.inner.clone())
-                    .append(args.angles())
-                    .angles(),
-            )
-            .group()
-    }
-}
-
-impl UserDefinedPred {
-    pub fn new(symbol: UserDefinedPredSymbol, args: Vec<Sort>) -> Self {
-        Self {
-            symbol,
-            args,
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        &self.symbol.inner
     }
 }
 
@@ -981,7 +934,7 @@ pub enum Pred {
     Known(KnownPred),
     Var(PredVarId),
     Matcher(MatcherPred),
-    UserDefined(UserDefinedPredSymbol),
+    UserDefined(UserDefinedPred),
 }
 
 impl std::fmt::Display for Pred {
