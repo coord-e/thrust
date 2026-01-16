@@ -39,14 +39,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let tt = ts.trees().next().expect("string literal");
 
             let raw_command = match tt {
-                TokenTree::Token(Token{ kind: TokenKind::Literal(lit), .. }, _)
-                    if lit.kind == LitKind::Str => Some(lit.symbol.to_string()),
+                TokenTree::Token(
+                    Token {
+                        kind: TokenKind::Literal(lit),
+                        ..
+                    },
+                    _,
+                ) if lit.kind == LitKind::Str => Some(lit.symbol.to_string()),
                 _ => None,
-            }.expect("invalid raw_command annotation");
+            }
+            .expect("invalid raw_command annotation");
 
-            self.ctx.system.borrow_mut().push_raw_command(
-                chc::RawCommand {command: raw_command}
-            );
+            self.ctx
+                .system
+                .borrow_mut()
+                .push_raw_command(chc::RawCommand {
+                    command: raw_command,
+                });
         }
     }
 
