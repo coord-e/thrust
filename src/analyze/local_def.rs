@@ -135,7 +135,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .next()
             .is_some()
     }
-    
+
     // TODO: unify this logic with extraction functions above
     pub fn is_fully_annotated(&self) -> bool {
         let has_require = self

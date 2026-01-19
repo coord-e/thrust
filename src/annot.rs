@@ -482,7 +482,9 @@ where
                         // parse them as user-defined predicate calls.
                         let next_tt = self.look_ahead_token_tree(0);
 
-                        if let Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, args)) = next_tt {
+                        if let Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, args)) =
+                            next_tt
+                        {
                             let args = args.clone();
                             self.consume();
 
