@@ -45,10 +45,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         ..
                     },
                     _,
-                ) if lit.kind == LitKind::Str => Some(lit.symbol.to_string()),
-                _ => None,
-            }
-            .expect("invalid raw_command annotation");
+                ) if lit.kind == LitKind::Str => lit.symbol.to_string(),
+                _ => panic!("invalid raw_command annotation"),
+            };
 
             self.ctx
                 .system
