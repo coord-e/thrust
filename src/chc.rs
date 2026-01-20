@@ -1606,7 +1606,7 @@ impl Clause {
     }
 }
 
-/// A command specified using #![thrust::define_raw()]
+/// A command specified using `thrust::raw_command` attribute
 ///
 /// Those will be directly inserted into the generated SMT-LIB2 file.
 #[derive(Debug, Clone)]
