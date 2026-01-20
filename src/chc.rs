@@ -981,6 +981,12 @@ impl From<MatcherPred> for Pred {
     }
 }
 
+impl From<UserDefinedPred> for Pred {
+    fn from(p: UserDefinedPred) -> Pred {
+        Pred::UserDefined(p)
+    }
+}
+
 impl Pred {
     pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
