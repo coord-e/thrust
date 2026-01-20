@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
@@ -26,6 +27,37 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    fn analyze_raw_command_annot(&mut self) {
+        for attrs in self.tcx.get_attrs_by_path(
+            CRATE_DEF_ID.to_def_id(),
+            &analyze::annot::raw_command_path(),
+        ) {
+            use rustc_ast::token::{LitKind, Token, TokenKind};
+            use rustc_ast::tokenstream::TokenTree;
+
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let tt = ts.trees().next().expect("string literal");
+
+            let raw_command = match tt {
+                TokenTree::Token(
+                    Token {
+                        kind: TokenKind::Literal(lit),
+                        ..
+                    },
+                    _,
+                ) if lit.kind == LitKind::Str => lit.symbol.to_string(),
+                _ => panic!("invalid raw_command annotation"),
+            };
+
+            self.ctx
+                .system
+                .borrow_mut()
+                .push_raw_command(chc::RawCommand {
+                    command: raw_command,
+                });
+        }
+    }
+
     fn refine_local_defs(&mut self) {
         for local_def_id in self.tcx.mir_keys(()) {
             if self.tcx.def_kind(*local_def_id).is_fn_like() {
@@ -187,6 +219,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let span = tracing::debug_span!("crate", krate = %self.tcx.crate_name(rustc_span::def_id::LOCAL_CRATE));
         let _guard = span.enter();
 
+        self.analyze_raw_command_annot();
         self.refine_local_defs();
         self.analyze_local_defs();
         self.assert_callable_entry();

@@ -370,6 +370,24 @@ impl<'ctx, 'a> Clause<'ctx, 'a> {
     }
 }
 
+/// A wrapper around a [`chc::RawCommand`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
+#[derive(Debug, Clone)]
+pub struct RawCommand<'a> {
+    inner: &'a chc::RawCommand,
+}
+
+impl<'a> std::fmt::Display for RawCommand<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner.command,)
+    }
+}
+
+impl<'a> RawCommand<'a> {
+    pub fn new(inner: &'a chc::RawCommand) -> Self {
+        Self { inner }
+    }
+}
+
 /// A wrapper around a [`chc::DatatypeSelector`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct DatatypeSelector<'ctx, 'a> {
@@ -554,6 +572,11 @@ pub struct System<'a> {
 impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
+
+        // insert command from #![thrust::raw_command()] here
+        for raw_command in &self.inner.raw_commands {
+            writeln!(f, "{}\n", RawCommand::new(raw_command))?;
+        }
 
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {

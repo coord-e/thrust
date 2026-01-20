@@ -1606,6 +1606,14 @@ impl Clause {
     }
 }
 
+/// A command specified using `thrust::raw_command` attribute
+///
+/// Those will be directly inserted into the generated SMT-LIB2 file.
+#[derive(Debug, Clone)]
+pub struct RawCommand {
+    pub command: String,
+}
+
 /// A selector for a datatype constructor.
 ///
 /// A selector is a function that extracts a field from a datatype value.
@@ -1655,6 +1663,7 @@ pub struct PredVarDef {
 /// A CHC system.
 #[derive(Debug, Clone, Default)]
 pub struct System {
+    pub raw_commands: Vec<RawCommand>,
     pub datatypes: Vec<Datatype>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
@@ -1663,6 +1672,10 @@ pub struct System {
 impl System {
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
+    }
+
+    pub fn push_raw_command(&mut self, raw_command: RawCommand) {
+        self.raw_commands.push(raw_command)
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
