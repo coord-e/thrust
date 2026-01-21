@@ -420,7 +420,7 @@ where
         Ok(AnnotPath { segments })
     }
 
-    fn parse_datatype_ctor_args(&mut self) -> Result<Vec<chc::Term<T::Output>>> {
+    fn parse_arg_terms(&mut self) -> Result<Vec<chc::Term<T::Output>>> {
         if self.look_ahead_token(0).is_none() {
             return Ok(Vec::new());
         }
@@ -478,6 +478,30 @@ where
                         FormulaOrTerm::Term(var, sort.clone())
                     }
                     _ => {
+                        // If the single-segment identifier is followed by parethesized arguments,
+                        // parse them as user-defined predicate calls.
+                        let next_tt = self.look_ahead_token_tree(0);
+
+                        if let Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, args)) =
+                            next_tt
+                        {
+                            let args = args.clone();
+                            self.consume();
+
+                            let pred_symbol = chc::UserDefinedPred::new(ident.name.to_string());
+                            let pred = chc::Pred::UserDefined(pred_symbol);
+
+                            let mut parser = Parser {
+                                resolver: self.boxed_resolver(),
+                                cursor: args.trees(),
+                                formula_existentials: self.formula_existentials.clone(),
+                            };
+                            let args = parser.parse_arg_terms()?;
+
+                            let atom = chc::Atom::new(pred, args);
+                            let formula = chc::Formula::Atom(atom);
+                            return Ok(FormulaOrTerm::Formula(formula));
+                        }
                         let (v, sort) = self.resolve(*ident)?;
                         FormulaOrTerm::Term(chc::Term::var(v), sort)
                     }
@@ -497,7 +521,7 @@ where
                     cursor: s.trees(),
                     formula_existentials: self.formula_existentials.clone(),
                 };
-                let args = parser.parse_datatype_ctor_args()?;
+                let args = parser.parse_arg_terms()?;
                 parser.end_of_input()?;
                 let (term, sort) = path.to_datatype_ctor(args);
                 FormulaOrTerm::Term(term, sort)

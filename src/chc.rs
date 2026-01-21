@@ -902,12 +902,39 @@ impl MatcherPred {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UserDefinedPred {
+    inner: String,
+}
+
+impl std::fmt::Display for UserDefinedPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UserDefinedPred
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator.text(self.inner.clone())
+    }
+}
+
+impl UserDefinedPred {
+    pub fn new(inner: String) -> Self {
+        Self { inner }
+    }
+}
+
 /// A predicate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pred {
     Known(KnownPred),
     Var(PredVarId),
     Matcher(MatcherPred),
+    UserDefined(UserDefinedPred),
 }
 
 impl std::fmt::Display for Pred {
@@ -916,6 +943,7 @@ impl std::fmt::Display for Pred {
             Pred::Known(p) => p.fmt(f),
             Pred::Var(p) => p.fmt(f),
             Pred::Matcher(p) => p.fmt(f),
+            Pred::UserDefined(p) => p.fmt(f),
         }
     }
 }
@@ -930,6 +958,7 @@ where
             Pred::Known(p) => p.pretty(allocator),
             Pred::Var(p) => p.pretty(allocator),
             Pred::Matcher(p) => p.pretty(allocator),
+            Pred::UserDefined(p) => p.pretty(allocator),
         }
     }
 }
@@ -952,12 +981,19 @@ impl From<MatcherPred> for Pred {
     }
 }
 
+impl From<UserDefinedPred> for Pred {
+    fn from(p: UserDefinedPred) -> Pred {
+        Pred::UserDefined(p)
+    }
+}
+
 impl Pred {
     pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
             Pred::Known(p) => p.name().into(),
             Pred::Var(p) => p.to_string().into(),
             Pred::Matcher(p) => p.name().into(),
+            Pred::UserDefined(p) => p.to_string().into(),
         }
     }
 
@@ -966,6 +1002,7 @@ impl Pred {
             Pred::Known(p) => p.is_negative(),
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
+            Pred::UserDefined(_) => false,
         }
     }
 
@@ -974,6 +1011,7 @@ impl Pred {
             Pred::Known(p) => p.is_infix(),
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
+            Pred::UserDefined(_) => false,
         }
     }
 
@@ -982,6 +1020,7 @@ impl Pred {
             Pred::Known(p) => p.is_top(),
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
+            Pred::UserDefined(_) => false,
         }
     }
 
@@ -990,6 +1029,7 @@ impl Pred {
             Pred::Known(p) => p.is_bottom(),
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
+            Pred::UserDefined(_) => false,
         }
     }
 }
