@@ -16,6 +16,27 @@ use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{BasicBlockType, TypeBuilder};
 use crate::rty;
 
+fn stmt_str_literal(stmt: &rustc_hir::Stmt) -> Option<String> {
+    use rustc_ast::LitKind;
+    use rustc_hir::{Expr, ExprKind, Stmt, StmtKind};
+
+    match stmt {
+        Stmt {
+            kind:
+                StmtKind::Semi(Expr {
+                    kind:
+                        ExprKind::Lit(rustc_hir::Lit {
+                            node: LitKind::Str(symbol, _),
+                            ..
+                        }),
+                    ..
+                }),
+            ..
+        } => Some(symbol.to_string()),
+        _ => None,
+    }
+}
+
 /// An implementation of the typing of local definitions.
 ///
 /// The current implementation only applies to function definitions. The entry point is
@@ -106,6 +127,49 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ret_annot
     }
 
+    pub fn analyze_predicate_definition(&self, local_def_id: LocalDefId) {
+        let pred_name = self.tcx.item_name(local_def_id.to_def_id()).to_string();
+
+        // function's body
+        use rustc_hir::{Block, Expr, ExprKind};
+
+        let hir_map = self.tcx.hir();
+        let body_id = hir_map.maybe_body_owned_by(local_def_id).unwrap();
+        let hir_body = hir_map.body(body_id);
+
+        let command = match hir_body.value {
+            Expr {
+                kind: ExprKind::Block(Block { stmts, .. }, _),
+                ..
+            } => stmts
+                .iter()
+                .find_map(stmt_str_literal)
+                .expect("invalid predicate definition: no string literal was found."),
+            _ => panic!("expected function body, got: {hir_body:?}"),
+        };
+
+        // names and sorts of arguments
+        let arg_names = self
+            .tcx
+            .fn_arg_names(local_def_id.to_def_id())
+            .iter()
+            .map(|ident| ident.to_string());
+
+        let sig = self.ctx.local_fn_sig(local_def_id);
+        let arg_sorts = sig
+            .inputs()
+            .iter()
+            .map(|input_ty| self.type_builder.build(*input_ty).to_sort());
+
+        let arg_name_and_sorts = arg_names.into_iter().zip(arg_sorts).collect::<Vec<_>>();
+
+        self.ctx.system.borrow_mut().push_pred_define(
+            chc::UserDefinedPred::new(pred_name),
+            chc::UserDefinedPredSig::from(arg_name_and_sorts),
+            chc::RawCommand { command },
+        );
+    }
+
     pub fn is_annotated_as_trusted(&self) -> bool {
         self.tcx
             .get_attrs_by_path(
@@ -135,7 +199,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .next()
             .is_some()
     }
-    
+
     pub fn is_annotated_as_predicate(&self) -> bool {
         self.tcx
             .get_attrs_by_path(

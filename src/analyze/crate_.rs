@@ -85,6 +85,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         if analyzer.is_annotated_as_predicate() {
             self.predicates.insert(local_def_id.to_def_id());
+            analyzer.analyze_predicate_definition(local_def_id);
         }
 
         use mir_ty::TypeVisitableExt as _;
@@ -110,9 +111,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::info!(?local_def_id, "trusted");
                 continue;
             }
-            if self.predicates.contains_key(&local_def_id.to_def_id()) {
-                let sig = self.predicates.get(&local_def_id.to_def_id()).unwrap();
-                tracing::info!(?local_def_id, ?sig, "predicate");
+            if self.predicates.contains(&local_def_id.to_def_id()) {
+                tracing::info!(?local_def_id, "predicate");
                 continue;
             }
             let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
@@ -223,7 +223,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let trusted = HashSet::default();
         let predicates = HashSet::default();
-        Self { ctx, tcx, trusted, predicates }
+        Self {
+            ctx,
+            tcx,
+            trusted,
+            predicates,
+        }
     }
 
     pub fn run(&mut self) {
