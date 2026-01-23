@@ -152,6 +152,15 @@ fn unbox_datatype(datatype: Datatype) -> Datatype {
     }
 }
 
+fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> UserDefinedPredDef {
+    let UserDefinedPredDef { symbol, sig, body } = user_defined_pred_def;
+    let sig = sig
+        .into_iter()
+        .map(|(name, sort)| (name, unbox_sort(sort)))
+        .collect();
+    UserDefinedPredDef { symbol, sig, body }
+}
+
 /// Remove all `Box` sorts and `Box`/`BoxCurrent` terms from the system.
 ///
 /// The box values in Thrust represent an owned pointer, but are logically equivalent to the inner type.
@@ -159,18 +168,24 @@ fn unbox_datatype(datatype: Datatype) -> Datatype {
 /// This function traverses a [`System`] and removes all `Box` related constructs.
 pub fn unbox(system: System) -> System {
     let System {
+        raw_commands,
+        datatypes,
+        user_defined_pred_defs,
         clauses,
         pred_vars,
-        datatypes,
-        raw_commands,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
     let pred_vars = pred_vars.into_iter().map(unbox_pred_var_def).collect();
+    let user_defined_pred_defs = user_defined_pred_defs
+        .into_iter()
+        .map(unbox_user_defined_pred_def)
+        .collect();
     System {
+        raw_commands,
+        datatypes,
+        user_defined_pred_defs,
         clauses,
         pred_vars,
-        datatypes,
-        raw_commands,
     }
 }
