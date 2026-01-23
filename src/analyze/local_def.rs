@@ -135,6 +135,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .next()
             .is_some()
     }
+    
+    pub fn is_annotated_as_predicate(&self) -> bool {
+        self.tcx
+            .get_attrs_by_path(
+                self.local_def_id.to_def_id(),
+                &analyze::annot::predicate_path(),
+            )
+            .next()
+            .is_some()
+    }
 
     // TODO: unify this logic with extraction functions above
     pub fn is_fully_annotated(&self) -> bool {
