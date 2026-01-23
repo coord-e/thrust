@@ -137,7 +137,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let body_id = hir_map.maybe_body_owned_by(local_def_id).unwrap();
         let hir_body = hir_map.body(body_id);
 
-        let command = match hir_body.value {
+        let predicate_body = match hir_body.value {
             Expr {
                 kind: ExprKind::Block(Block { stmts, .. }, _),
                 ..
@@ -166,7 +166,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.ctx.system.borrow_mut().push_pred_define(
             chc::UserDefinedPred::new(pred_name),
             chc::UserDefinedPredSig::from(arg_name_and_sorts),
-            chc::RawCommand { command },
+            predicate_body,
         );
     }
 

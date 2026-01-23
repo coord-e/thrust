@@ -1706,7 +1706,7 @@ pub type UserDefinedPredSig = Vec<(String, Sort)>;
 pub struct UserDefinedPredDef {
     symbol: UserDefinedPred,
     sig: UserDefinedPredSig,
-    body: RawCommand,
+    body: String,
 }
 
 /// A CHC system.
@@ -1732,7 +1732,7 @@ impl System {
         &mut self,
         symbol: UserDefinedPred,
         sig: UserDefinedPredSig,
-        body: RawCommand,
+        body: String,
     ) {
         self.user_defined_pred_defs
             .push(UserDefinedPredDef { symbol, sig, body })

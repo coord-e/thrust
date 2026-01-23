@@ -579,7 +579,7 @@ impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
             f,
             "(define-fun {name} {params} Bool {body})",
             name = self.inner.symbol,
-            body = RawCommand::new(&self.inner.body),
+            body = &self.inner.body,
         )
     }
 }
