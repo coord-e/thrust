@@ -600,6 +600,12 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
 
+        writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
+        for datatype in self.ctx.datatypes() {
+            writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
+            writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
+        }
+
         // insert command from #![thrust::raw_command()] here
         for raw_command in &self.inner.raw_commands {
             writeln!(f, "{}\n", RawCommand::new(raw_command))?;
@@ -613,11 +619,6 @@ impl<'a> std::fmt::Display for System<'a> {
             )?;
         }
 
-        writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
-        for datatype in self.ctx.datatypes() {
-            writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
-            writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
-        }
         writeln!(f)?;
         for (p, def) in self.inner.pred_vars.iter_enumerated() {
             if !def.debug_info.is_empty() {
