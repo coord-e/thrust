@@ -1254,6 +1254,13 @@ impl<FV> Refinement<FV> {
             refinement: self,
         }
     }
+
+    pub fn subst_ty_params_in_sorts<T>(&mut self, subst: &TypeParamSubst<T>) {
+        for sort in &mut self.existentials {
+            subst_ty_params_in_sort(sort, subst);
+        }
+        subst_ty_params_in_body(&mut self.body, subst);
+    }
 }
 
 /// A helper type to map logical variables in a refinement at once.
@@ -1445,6 +1452,7 @@ impl<FV> RefinedType<FV> {
     where
         FV: chc::Var,
     {
+        self.refinement.subst_ty_params_in_sorts(subst);
         match &mut self.ty {
             Type::Int | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
@@ -1510,6 +1518,108 @@ impl<FV> RefinedType<FV> {
 impl RefinedType<Closed> {
     pub fn vacuous<FV>(self) -> RefinedType<FV> {
         self.map_var(|v| match v {})
+    }
+}
+
+/// Substitutes type parameters in a sort.
+fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
+    match sort {
+        chc::Sort::Null | chc::Sort::Int | chc::Sort::Bool | chc::Sort::String => {}
+        chc::Sort::Param(idx) => {
+            let type_param_idx = TypeParamIdx::from_usize(*idx);
+            if let Some(rty) = subst.get(type_param_idx) {
+                *sort = rty.ty.to_sort();
+            }
+        }
+        chc::Sort::Box(s) | chc::Sort::Mut(s) => {
+            subst_ty_params_in_sort(s, subst);
+        }
+        chc::Sort::Tuple(sorts) => {
+            for s in sorts {
+                subst_ty_params_in_sort(s, subst);
+            }
+        }
+        chc::Sort::Datatype(dt_sort) => {
+            for s in dt_sort.args_mut() {
+                subst_ty_params_in_sort(s, subst);
+            }
+        }
+    }
+}
+
+/// Substitutes type parameters in all sorts appearing in a body.
+fn subst_ty_params_in_body<T, V>(body: &mut chc::Body<V>, subst: &TypeParamSubst<T>) {
+    for atom in &mut body.atoms {
+        subst_ty_params_in_atom(atom, subst);
+    }
+    subst_ty_params_in_formula(&mut body.formula, subst);
+}
+
+/// Substitutes type parameters in all sorts appearing in an atom.
+fn subst_ty_params_in_atom<T, V>(atom: &mut chc::Atom<V>, subst: &TypeParamSubst<T>) {
+    if let Some(guard) = &mut atom.guard {
+        subst_ty_params_in_formula(guard, subst);
+    }
+    for term in &mut atom.args {
+        subst_ty_params_in_term(term, subst);
+    }
+}
+
+/// Substitutes type parameters in all sorts appearing in a formula.
+fn subst_ty_params_in_formula<T, V>(formula: &mut chc::Formula<V>, subst: &TypeParamSubst<T>) {
+    match formula {
+        chc::Formula::Atom(atom) => subst_ty_params_in_atom(atom, subst),
+        chc::Formula::Not(f) => subst_ty_params_in_formula(f, subst),
+        chc::Formula::And(fs) | chc::Formula::Or(fs) => {
+            for f in fs {
+                subst_ty_params_in_formula(f, subst);
+            }
+        }
+        chc::Formula::Exists(vars, f) => {
+            for (_, sort) in vars {
+                subst_ty_params_in_sort(sort, subst);
+            }
+            subst_ty_params_in_formula(f, subst);
+        }
+    }
+}
+
+/// Substitutes type parameters in all sorts appearing in a term.
+fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst<T>) {
+    match term {
+        chc::Term::Null
+        | chc::Term::Var(_)
+        | chc::Term::Bool(_)
+        | chc::Term::Int(_)
+        | chc::Term::String(_) => {}
+        chc::Term::Box(t)
+        | chc::Term::BoxCurrent(t)
+        | chc::Term::MutCurrent(t)
+        | chc::Term::MutFinal(t)
+        | chc::Term::TupleProj(t, _)
+        | chc::Term::DatatypeDiscr(_, t) => {
+            subst_ty_params_in_term(t, subst);
+        }
+        chc::Term::Mut(t1, t2) => {
+            subst_ty_params_in_term(t1, subst);
+            subst_ty_params_in_term(t2, subst);
+        }
+        chc::Term::App(_, args) | chc::Term::Tuple(args) => {
+            for arg in args {
+                subst_ty_params_in_term(arg, subst);
+            }
+        }
+        chc::Term::DatatypeCtor(s, _, args) => {
+            for arg in s.args_mut() {
+                subst_ty_params_in_sort(arg, subst);
+            }
+            for arg in args {
+                subst_ty_params_in_term(arg, subst);
+            }
+        }
+        chc::Term::FormulaExistentialVar(sort, _) => {
+            subst_ty_params_in_sort(sort, subst);
+        }
     }
 }
 
