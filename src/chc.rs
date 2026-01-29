@@ -1704,11 +1704,21 @@ pub struct PredVarDef {
     pub debug_info: DebugInfo,
 }
 
+pub type UserDefinedPredSig = Vec<(String, Sort)>;
+
+#[derive(Debug, Clone)]
+pub struct UserDefinedPredDef {
+    symbol: UserDefinedPred,
+    sig: UserDefinedPredSig,
+    body: String,
+}
+
 /// A CHC system.
 #[derive(Debug, Clone, Default)]
 pub struct System {
     pub raw_commands: Vec<RawCommand>,
     pub datatypes: Vec<Datatype>,
+    pub user_defined_pred_defs: Vec<UserDefinedPredDef>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
 }
@@ -1720,6 +1730,16 @@ impl System {
 
     pub fn push_raw_command(&mut self, raw_command: RawCommand) {
         self.raw_commands.push(raw_command)
+    }
+
+    pub fn push_pred_define(
+        &mut self,
+        symbol: UserDefinedPred,
+        sig: UserDefinedPredSig,
+        body: String,
+    ) {
+        self.user_defined_pred_defs
+            .push(UserDefinedPredDef { symbol, sig, body })
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {

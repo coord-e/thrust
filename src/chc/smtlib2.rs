@@ -562,6 +562,33 @@ impl<'ctx, 'a> MatcherPredFun<'ctx, 'a> {
     }
 }
 
+pub struct UserDefinedPredDef<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    inner: &'a chc::UserDefinedPredDef,
+}
+
+impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params = List::closed(
+            self.inner
+                .sig
+                .iter()
+                .map(|(name, sort)| format!("({} {})", name, self.ctx.fmt_sort(sort))),
+        );
+        write!(
+            f,
+            "(define-fun {name} {params} Bool {body})",
+            name = self.inner.symbol,
+            body = &self.inner.body,
+        )
+    }
+}
+
+impl<'ctx, 'a> UserDefinedPredDef<'ctx, 'a> {
+    pub fn new(ctx: &'ctx FormatContext, inner: &'a chc::UserDefinedPredDef) -> Self {
+        Self { ctx, inner }
+    }
+}
 /// A wrapper around a [`chc::System`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct System<'a> {
@@ -573,16 +600,25 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
 
-        // insert command from #![thrust::raw_command()] here
-        for raw_command in &self.inner.raw_commands {
-            writeln!(f, "{}\n", RawCommand::new(raw_command))?;
-        }
-
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
         }
+
+        // insert command from #![thrust::raw_command()] here
+        for raw_command in &self.inner.raw_commands {
+            writeln!(f, "{}\n", RawCommand::new(raw_command))?;
+        }
+
+        for user_defined_pred_def in &self.inner.user_defined_pred_defs {
+            writeln!(
+                f,
+                "{}\n",
+                UserDefinedPredDef::new(&self.ctx, user_defined_pred_def)
+            )?;
+        }
+
         writeln!(f)?;
         for (p, def) in self.inner.pred_vars.iter_enumerated() {
             if !def.debug_info.is_empty() {
