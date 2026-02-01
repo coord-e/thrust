@@ -53,15 +53,19 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    fn extract_require_annot<T>(&self, resolver: T) -> Option<AnnotFormula<T::Output>>
+    fn extract_require_annot<T>(
+        &self,
+        def_id: DefId,
+        resolver: T,
+    ) -> Option<AnnotFormula<T::Output>>
     where
         T: annot::Resolver,
     {
         let mut require_annot = None;
-        for attrs in self.tcx.get_attrs_by_path(
-            self.local_def_id.to_def_id(),
-            &analyze::annot::requires_path(),
-        ) {
+        for attrs in self
+            .tcx
+            .get_attrs_by_path(def_id, &analyze::annot::requires_path())
+        {
             if require_annot.is_some() {
                 unimplemented!();
             }
@@ -72,15 +76,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         require_annot
     }
 
-    fn extract_ensure_annot<T>(&self, resolver: T) -> Option<AnnotFormula<T::Output>>
+    fn extract_ensure_annot<T>(&self, def_id: DefId, resolver: T) -> Option<AnnotFormula<T::Output>>
     where
         T: annot::Resolver,
     {
         let mut ensure_annot = None;
-        for attrs in self.tcx.get_attrs_by_path(
-            self.local_def_id.to_def_id(),
-            &analyze::annot::ensures_path(),
-        ) {
+        for attrs in self
+            .tcx
+            .get_attrs_by_path(def_id, &analyze::annot::ensures_path())
+        {
             if ensure_annot.is_some() {
                 unimplemented!();
             }
@@ -252,6 +256,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             || (all_params_annotated && has_ret)
     }
 
+    pub fn trait_item_id(&mut self) -> Option<LocalDefId> {
+        let impl_item_assoc = self
+            .tcx
+            .opt_associated_item(self.local_def_id.to_def_id())?;
+        let trait_item_id = impl_item_assoc
+            .trait_item_def_id
+            .and_then(|id| id.as_local())?;
+
+        Some(trait_item_id)
+    }
+
     pub fn expected_ty(&mut self) -> rty::RefinedType {
         let sig = self
             .ctx
@@ -268,14 +283,33 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
-        let mut require_annot = self.extract_require_annot(&param_resolver);
-        let mut ensure_annot = {
-            let output_ty = self.type_builder.build(sig.output());
-            let resolver = annot::StackedResolver::default()
-                .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
-                .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
-            self.extract_ensure_annot(resolver)
-        };
+        let mut require_annot =
+            self.extract_require_annot(self.local_def_id.to_def_id(), &param_resolver);
+
+        let output_ty = self.type_builder.build(sig.output());
+        let result_param_resolver = annot::StackedResolver::default()
+            .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
+            .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
+        let mut ensure_annot =
+            self.extract_ensure_annot(self.local_def_id.to_def_id(), &result_param_resolver);
+
+        if let Some(trait_item_id) = self.trait_item_id() {
+            tracing::info!(
+                "trait item fonud: {:?}",
+                trait_item_id,
+            );
+            let trait_require_annot =
+                self.extract_require_annot(trait_item_id.into(), &param_resolver);
+            let trait_ensure_annot =
+                self.extract_ensure_annot(trait_item_id.into(), &result_param_resolver);
+
+            assert!(require_annot.is_none() || trait_require_annot.is_none());
+            require_annot = require_annot.or(trait_require_annot);
+
+            assert!(ensure_annot.is_none() || trait_ensure_annot.is_none());
+            ensure_annot = ensure_annot.or(trait_ensure_annot);
+        }
+
         let param_annots = self.extract_param_annots(&param_resolver);
         let ret_annot = self.extract_ret_annot(&param_resolver);
 
