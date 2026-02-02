@@ -10,7 +10,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup component add rustfmt
       - run: cargo fmt --all -- --check
   clippy:
@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: rustup component add clippy
       - run: cargo clippy -- -D warnings
   test:
@@ -29,7 +29,7 @@ jobs:
       # see tests/thrust-pcsat-wrapper
       COAR_IMAGE: ghcr.io/hiroshi-unno/coar@sha256:73144ed27a02b163d1a71b41b58f3b5414f12e91326015600cfdca64ff19f011
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-z3
       - run: docker pull "$COAR_IMAGE"
       - run: rustup show

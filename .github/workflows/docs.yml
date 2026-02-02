@@ -19,7 +19,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: cargo doc --no-deps --document-private-items
       - run: echo '<meta http-equiv="refresh" content="0;url=thrust">' > target/doc/index.html
       - uses: actions/configure-pages@v5
