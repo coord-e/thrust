@@ -19,7 +19,7 @@ harness = false
 
 [dependencies]
 anyhow = "1.0.100"
-pretty = { version = "0.12.1", features = ["termcolor"] }
+pretty = { version = "0.12.5", features = ["termcolor"] }
 tempfile = "3.24.0"
 thiserror = "2.0.18"
 tracing = "0.1.40"
