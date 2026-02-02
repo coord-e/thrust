@@ -1,0 +1,14 @@
+#!/bin/bash
+
+COAR_IMAGE=${COAR_IMAGE:-ghcr.io/hiroshi-unno/coar:main}
+
+smt2=$(mktemp -p . --suffix .smt2)
+trap "rm -f $smt2" EXIT
+cp "$1" "$smt2"
+out=$(
+docker run --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
+    main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2"
+)
+exit_code=$?
+echo "${out%,*}"
+exit "$exit_code"
