@@ -18,7 +18,7 @@ name = "ui"
 harness = false
 
 [dependencies]
-anyhow = "1.0.80"
+anyhow = "1.0.100"
 pretty = { version = "0.12.1", features = ["termcolor"] }
 tempfile = "3.10.1"
 thiserror = "1.0.57"
