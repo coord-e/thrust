@@ -53,48 +53,6 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    fn extract_require_annot<T>(
-        &self,
-        def_id: DefId,
-        resolver: T,
-    ) -> Option<AnnotFormula<T::Output>>
-    where
-        T: annot::Resolver,
-    {
-        let mut require_annot = None;
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::requires_path())
-        {
-            if require_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let require = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
-            require_annot = Some(require);
-        }
-        require_annot
-    }
-
-    fn extract_ensure_annot<T>(&self, def_id: DefId, resolver: T) -> Option<AnnotFormula<T::Output>>
-    where
-        T: annot::Resolver,
-    {
-        let mut ensure_annot = None;
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::ensures_path())
-        {
-            if ensure_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ensure = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
-            ensure_annot = Some(ensure);
-        }
-        ensure_annot
-    }
-
     fn extract_param_annots<T>(&self, resolver: T) -> Vec<(Ident, rty::RefinedType<T::Output>)>
     where
         T: annot::Resolver,
@@ -283,25 +241,26 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
-        let mut require_annot =
-            self.extract_require_annot(self.local_def_id.to_def_id(), &param_resolver);
+        let mut require_annot = self
+            .ctx
+            .extract_require_annot(self.local_def_id.to_def_id(), &param_resolver);
 
         let output_ty = self.type_builder.build(sig.output());
         let result_param_resolver = annot::StackedResolver::default()
             .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
             .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
-        let mut ensure_annot =
-            self.extract_ensure_annot(self.local_def_id.to_def_id(), &result_param_resolver);
+        let mut ensure_annot = self
+            .ctx
+            .extract_ensure_annot(self.local_def_id.to_def_id(), &result_param_resolver);
 
         if let Some(trait_item_id) = self.trait_item_id() {
-            tracing::info!(
-                "trait item fonud: {:?}",
-                trait_item_id,
-            );
-            let trait_require_annot =
-                self.extract_require_annot(trait_item_id.into(), &param_resolver);
-            let trait_ensure_annot =
-                self.extract_ensure_annot(trait_item_id.into(), &result_param_resolver);
+            tracing::info!("trait item fonud: {:?}", trait_item_id);
+            let trait_require_annot = self
+                .ctx
+                .extract_require_annot(trait_item_id.into(), &param_resolver);
+            let trait_ensure_annot = self
+                .ctx
+                .extract_ensure_annot(trait_item_id.into(), &result_param_resolver);
 
             assert!(require_annot.is_none() || trait_require_annot.is_none());
             require_annot = require_annot.or(trait_require_annot);

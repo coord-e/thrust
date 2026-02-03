@@ -16,6 +16,8 @@ use rustc_middle::mir::{self, BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
+use crate::analyze;
+use crate::annot::{AnnotFormula, AnnotParser, Resolver};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{self, BasicBlockType, TypeBuilder};
@@ -434,5 +436,47 @@ impl<'tcx> Analyzer<'tcx> {
     pub fn local_fn_sig(&self, local_def_id: LocalDefId) -> mir_ty::FnSig<'tcx> {
         let body = self.tcx.optimized_mir(local_def_id);
         self.local_fn_sig_with_body(local_def_id, body)
+    }
+
+    fn extract_require_annot<T>(
+        &self,
+        def_id: DefId,
+        resolver: T,
+    ) -> Option<AnnotFormula<T::Output>>
+    where
+        T: Resolver,
+    {
+        let mut require_annot = None;
+        for attrs in self
+            .tcx
+            .get_attrs_by_path(def_id, &analyze::annot::requires_path())
+        {
+            if require_annot.is_some() {
+                unimplemented!();
+            }
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let require = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
+            require_annot = Some(require);
+        }
+        require_annot
+    }
+
+    fn extract_ensure_annot<T>(&self, def_id: DefId, resolver: T) -> Option<AnnotFormula<T::Output>>
+    where
+        T: Resolver,
+    {
+        let mut ensure_annot = None;
+        for attrs in self
+            .tcx
+            .get_attrs_by_path(def_id, &analyze::annot::ensures_path())
+        {
+            if ensure_annot.is_some() {
+                unimplemented!();
+            }
+            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let ensure = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
+            ensure_annot = Some(ensure);
+        }
+        ensure_annot
     }
 }
