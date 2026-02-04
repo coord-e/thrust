@@ -89,8 +89,36 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ret_annot
     }
 
+    fn impl_type(&self) -> Option<rustc_middle::ty::Ty<'tcx>> {
+        use rustc_hir::def::DefKind;
+
+        let parent_def_id = self
+            .tcx
+            .parent(self.local_def_id.to_def_id());
+
+        if !matches!(self.tcx.def_kind(parent_def_id), DefKind::Impl { .. }) {
+            return None;
+        }
+
+        let self_ty = self
+            .tcx
+            .type_of(parent_def_id)
+            .instantiate_identity();
+        
+        Some(self_ty)
+    }
+
     pub fn analyze_predicate_definition(&self, local_def_id: LocalDefId) {
-        let pred_name = self.tcx.item_name(local_def_id.to_def_id()).to_string();
+        // predicate's name
+        let impl_type = self.impl_type();
+        let pred_item_name = self
+            .tcx
+            .item_name(local_def_id.to_def_id())
+            .to_string();
+        let pred_name = match impl_type {
+            Some(t) => t.to_string() + "_" + &pred_item_name,
+            None => pred_item_name,
+        };
 
         // function's body
         use rustc_hir::{Block, Expr, ExprKind};
@@ -214,7 +242,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             || (all_params_annotated && has_ret)
     }
 
-    pub fn trait_item_id(&mut self) -> Option<LocalDefId> {
+    pub fn trait_item_id(&self) -> Option<LocalDefId> {
         let impl_item_assoc = self
             .tcx
             .opt_associated_item(self.local_def_id.to_def_id())?;
