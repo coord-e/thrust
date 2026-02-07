@@ -720,8 +720,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut subst = HashMap::new();
         for (param_idx, param_ty) in bb_ty.as_ref().params.iter_enumerated() {
             if let Some(param_local) = bb_ty.local_of_param(param_idx) {
-                // unit return may use _0 without preceeding def
-                if param_local == mir::RETURN_PLACE {
+                // BBs may use locals without preceding def when they're ZST
+                if param_local == mir::RETURN_PLACE || param_local > self.body.arg_count.into() {
                     subst.extend(
                         bb_ty
                             .as_ref()
@@ -730,7 +730,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             .skip_while(|idx| idx.index() <= param_idx.index())
                             .map(|idx| (idx, idx + 1)),
                     );
-                    if bb_ty.as_ref().params.len() == 1 {
+                    if bb_ty.as_ref().params.len() - 1 == param_idx.index() {
                         params.push(rty::RefinedType::new(
                             rty::Type::unit(),
                             param_ty.refinement.clone(),
