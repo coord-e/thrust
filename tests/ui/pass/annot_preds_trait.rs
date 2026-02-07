@@ -13,7 +13,7 @@ trait Double {
 
     // This annotations are applied to all implementors of the `Double` trait.
     #[thrust::requires(true)]
-    #[thrust::ensures(is_double(*self, ^self))]
+    #[thrust::ensures(Self::is_double(*self, ^self))]
     fn double(&mut self);
 }
 
