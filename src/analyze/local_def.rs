@@ -53,28 +53,38 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    fn extract_param_annots<T>(&self, resolver: T) -> Vec<(Ident, rty::RefinedType<T::Output>)>
+    fn extract_param_annots<T>(
+        &self,
+        resolver: T,
+        self_type_name: Option<String>,
+    ) -> Vec<(Ident, rty::RefinedType<T::Output>)>
     where
         T: annot::Resolver,
     {
         let mut param_annots = Vec::new();
+        let parser = AnnotParser::new(&resolver, self_type_name);
         for attrs in self
             .tcx
             .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::param_path())
         {
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
             let (ident, ts) = analyze::annot::split_param(&ts);
-            let param = AnnotParser::new(&resolver).parse_rty(ts).unwrap();
+            let param = parser.parse_rty(ts).unwrap();
             param_annots.push((ident, param));
         }
         param_annots
     }
 
-    fn extract_ret_annot<T>(&self, resolver: T) -> Option<rty::RefinedType<T::Output>>
+    fn extract_ret_annot<T>(
+        &self,
+        resolver: T,
+        self_type_name: Option<String>,
+    ) -> Option<rty::RefinedType<T::Output>>
     where
         T: annot::Resolver,
     {
         let mut ret_annot = None;
+        let parser = AnnotParser::new(&resolver, self_type_name);
         for attrs in self
             .tcx
             .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::ret_path())
@@ -83,7 +93,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 unimplemented!();
             }
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ret = AnnotParser::new(&resolver).parse_rty(ts).unwrap();
+            let ret = parser.parse_rty(ts).unwrap();
             ret_annot = Some(ret);
         }
         ret_annot
@@ -92,29 +102,21 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn impl_type(&self) -> Option<rustc_middle::ty::Ty<'tcx>> {
         use rustc_hir::def::DefKind;
 
-        let parent_def_id = self
-            .tcx
-            .parent(self.local_def_id.to_def_id());
+        let parent_def_id = self.tcx.parent(self.local_def_id.to_def_id());
 
         if !matches!(self.tcx.def_kind(parent_def_id), DefKind::Impl { .. }) {
             return None;
         }
 
-        let self_ty = self
-            .tcx
-            .type_of(parent_def_id)
-            .instantiate_identity();
-        
+        let self_ty = self.tcx.type_of(parent_def_id).instantiate_identity();
+
         Some(self_ty)
     }
 
     pub fn analyze_predicate_definition(&self, local_def_id: LocalDefId) {
         // predicate's name
         let impl_type = self.impl_type();
-        let pred_item_name = self
-            .tcx
-            .item_name(local_def_id.to_def_id())
-            .to_string();
+        let pred_item_name = self.tcx.item_name(local_def_id.to_def_id()).to_string();
         let pred_name = match impl_type {
             Some(t) => t.to_string() + "_" + &pred_item_name,
             None => pred_item_name,
@@ -269,26 +271,37 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             param_resolver.push_param(input_ident.name, input_ty.to_sort());
         }
 
-        let mut require_annot = self
-            .ctx
-            .extract_require_annot(self.local_def_id.to_def_id(), &param_resolver);
-
         let output_ty = self.type_builder.build(sig.output());
         let result_param_resolver = annot::StackedResolver::default()
             .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
             .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
-        let mut ensure_annot = self
-            .ctx
-            .extract_ensure_annot(self.local_def_id.to_def_id(), &result_param_resolver);
+
+        let self_type_name = self.impl_type().map(|ty| ty.to_string());
+
+        let mut require_annot = self.ctx.extract_require_annot(
+            self.local_def_id.to_def_id(),
+            &param_resolver,
+            self_type_name.clone(),
+        );
+
+        let mut ensure_annot = self.ctx.extract_ensure_annot(
+            self.local_def_id.to_def_id(),
+            &result_param_resolver,
+            self_type_name.clone(),
+        );
 
         if let Some(trait_item_id) = self.trait_item_id() {
             tracing::info!("trait item fonud: {:?}", trait_item_id);
-            let trait_require_annot = self
-                .ctx
-                .extract_require_annot(trait_item_id.into(), &param_resolver);
-            let trait_ensure_annot = self
-                .ctx
-                .extract_ensure_annot(trait_item_id.into(), &result_param_resolver);
+            let trait_require_annot = self.ctx.extract_require_annot(
+                trait_item_id.into(),
+                &param_resolver,
+                self_type_name.clone(),
+            );
+            let trait_ensure_annot = self.ctx.extract_ensure_annot(
+                trait_item_id.into(),
+                &result_param_resolver,
+                self_type_name.clone(),
+            );
 
             assert!(require_annot.is_none() || trait_require_annot.is_none());
             require_annot = require_annot.or(trait_require_annot);
@@ -297,8 +310,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             ensure_annot = ensure_annot.or(trait_ensure_annot);
         }
 
-        let param_annots = self.extract_param_annots(&param_resolver);
-        let ret_annot = self.extract_ret_annot(&param_resolver);
+        let param_annots = self.extract_param_annots(&param_resolver, self_type_name.clone());
+        let ret_annot = self.extract_ret_annot(&param_resolver, self_type_name);
 
         if self.is_annotated_as_callable() {
             if require_annot.is_some() || ensure_annot.is_some() {

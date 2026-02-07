@@ -442,11 +442,13 @@ impl<'tcx> Analyzer<'tcx> {
         &self,
         def_id: DefId,
         resolver: T,
+        self_type_name: Option<String>,
     ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver,
     {
         let mut require_annot = None;
+        let parser = AnnotParser::new(&resolver, self_type_name);
         for attrs in self
             .tcx
             .get_attrs_by_path(def_id, &analyze::annot::requires_path())
@@ -455,17 +457,23 @@ impl<'tcx> Analyzer<'tcx> {
                 unimplemented!();
             }
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let require = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
+            let require = parser.parse_formula(ts).unwrap();
             require_annot = Some(require);
         }
         require_annot
     }
 
-    fn extract_ensure_annot<T>(&self, def_id: DefId, resolver: T) -> Option<AnnotFormula<T::Output>>
+    fn extract_ensure_annot<T>(
+        &self,
+        def_id: DefId,
+        resolver: T,
+        self_type_name: Option<String>,
+    ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver,
     {
         let mut ensure_annot = None;
+        let parser = AnnotParser::new(&resolver, self_type_name);
         for attrs in self
             .tcx
             .get_attrs_by_path(def_id, &analyze::annot::ensures_path())
@@ -474,7 +482,7 @@ impl<'tcx> Analyzer<'tcx> {
                 unimplemented!();
             }
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ensure = AnnotParser::new(&resolver).parse_formula(ts).unwrap();
+            let ensure = parser.parse_formula(ts).unwrap();
             ensure_annot = Some(ensure);
         }
         ensure_annot
