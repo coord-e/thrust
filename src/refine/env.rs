@@ -887,14 +887,13 @@ where
         // TODO: consider cloning here again
         self.locals
             .iter()
-            .map(|(local, rty)| (Var::Local(*local), &rty.ty))
-            .chain(
-                self.temp_vars
-                    .iter_enumerated()
-                    .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), &rty.ty))),
-            )
-            .map(|(v, ty)| (v, ty.to_sort()))
+            .map(|(local, rty)| (Var::Local(*local), rty.ty.to_sort()))
             .filter(|(_, s)| !s.is_singleton())
+            .chain(
+                self.temp_vars.iter_enumerated().filter_map(|(idx, b)| {
+                    b.as_type().map(|rty| (Var::Temp(idx), rty.ty.to_sort()))
+                }),
+            )
     }
 
     fn vars(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
