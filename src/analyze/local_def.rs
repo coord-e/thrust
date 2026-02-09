@@ -575,6 +575,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         .iterate_to_fixpoint()
         .into_results_cursor(&tmp_body);
 
+        let mut zst_locals = BitSet::new_empty(self.body.local_decls.len());
+        for (local, local_decl) in self.body.local_decls.iter_enumerated() {
+            let ty = local_decl.ty;
+            if self
+                .tcx
+                .layout_of(mir_ty::ParamEnv::reveal_all().and(ty))
+                .map(|l| l.is_zst())
+                .unwrap_or(false)
+            {
+                zst_locals.insert(local);
+            }
+        }
+
         for (block, data) in mir::traversal::preorder(&tmp_body) {
             for statement_index in 0..=data.statements.len() {
                 let loc = mir::Location {
@@ -590,9 +603,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .map(|p| results.analysis().move_data().move_paths[p].place.local)
                     .collect();
                 let mut_locals = self.mut_locals(data.visitable(statement_index));
-                tracing::info!(?init_locals, ?mut_locals, ?statement_index, ?block, stmt = ?data.statements.get(statement_index));
+                tracing::info!(
+                    ?init_locals,
+                    ?mut_locals,
+                    ?zst_locals,
+                    ?statement_index,
+                    ?block,
+                    stmt = ?data.statements.get(statement_index),
+                );
                 for mut_local in mut_locals.iter() {
-                    if init_locals.contains(&mut_local) {
+                    if init_locals.contains(&mut_local) || zst_locals.contains(mut_local) {
                         self.body.local_decls[mut_local].mutability = mir::Mutability::Mut;
                         tracing::info!(?mut_local, ?statement_index, ?block, "marking mut");
                     }
