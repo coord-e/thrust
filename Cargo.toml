@@ -22,7 +22,7 @@ anyhow = "1.0.100"
 pretty = { version = "0.12.5", features = ["termcolor"] }
 tempfile = "3.24.0"
 thiserror = "2.0.18"
-tracing = "0.1.40"
+tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 process_control = "5.0.0"
 
