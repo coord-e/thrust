@@ -250,6 +250,7 @@ impl<T> FormulaOrTerm<T> {
 /// A parser for refinement type annotations and formula annotations.
 struct Parser<'a, T> {
     resolver: T,
+    self_type_name: Option<String>,
     cursor: RefTokenTreeCursor<'a>,
     formula_existentials: HashMap<String, chc::Sort>,
 }
@@ -453,6 +454,7 @@ where
             TokenTree::Delimited(_, _, Delimiter::Parenthesis, s) => {
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
+                    self_type_name: self.self_type_name.clone(),
                     cursor: s.trees(),
                     formula_existentials: self.formula_existentials.clone(),
                 };
@@ -493,6 +495,7 @@ where
 
                             let mut parser = Parser {
                                 resolver: self.boxed_resolver(),
+                                self_type_name: self.self_type_name.clone(),
                                 cursor: args.trees(),
                                 formula_existentials: self.formula_existentials.clone(),
                             };
@@ -518,11 +521,40 @@ where
                 };
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
+                    self_type_name: self.self_type_name.clone(),
                     cursor: s.trees(),
                     formula_existentials: self.formula_existentials.clone(),
                 };
                 let args = parser.parse_arg_terms()?;
                 parser.end_of_input()?;
+
+                // Identify struct-bound predicates call such as `Self::pred()`
+                match path.segments.first() {
+                    Some(AnnotPathSegment {
+                        ident: Ident { name: symbol, .. },
+                        generic_args,
+                    }) if symbol.as_str() == "Self" && generic_args.is_empty() => {
+                        if path.segments.len() != 2 {
+                            unimplemented!("long path beginning with `Self::`");
+                        }
+
+                        let func_name = path.segments.get(1).unwrap().ident.name.as_str();
+                        let pred_name = if let Some(self_type_name) = &self.self_type_name {
+                            self_type_name.clone() + "_" + func_name
+                        } else {
+                            func_name.to_string()
+                        };
+
+                        let pred_symbol = chc::UserDefinedPred::new(pred_name);
+                        let pred = chc::Pred::UserDefined(pred_symbol);
+
+                        let atom = chc::Atom::new(pred, args);
+                        let formula = chc::Formula::Atom(atom);
+                        return Ok(FormulaOrTerm::Formula(formula));
+                    }
+                    _ => {}
+                }
+
                 let (term, sort) = path.to_datatype_ctor(args);
                 FormulaOrTerm::Term(term, sort)
             }
@@ -908,6 +940,7 @@ where
             TokenTree::Delimited(_, _, Delimiter::Parenthesis, ts) => {
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
+                    self_type_name: self.self_type_name.clone(),
                     cursor: ts.trees(),
                     formula_existentials: self.formula_existentials.clone(),
                 };
@@ -1014,6 +1047,7 @@ where
             TokenTree::Delimited(_, _, Delimiter::Parenthesis, ts) => {
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
+                    self_type_name: self.self_type_name.clone(),
                     cursor: ts.trees(),
                     formula_existentials: self.formula_existentials.clone(),
                 };
@@ -1050,6 +1084,7 @@ where
 
         let mut parser = Parser {
             resolver: self.boxed_resolver(),
+            self_type_name: self.self_type_name.clone(),
             cursor: ts.trees(),
             formula_existentials: self.formula_existentials.clone(),
         };
@@ -1074,6 +1109,7 @@ where
 
         let mut parser = Parser {
             resolver: RefinementResolver::new(self.boxed_resolver()),
+            self_type_name: self.self_type_name.clone(),
             cursor: parser.cursor,
             formula_existentials: self.formula_existentials.clone(),
         };
@@ -1199,11 +1235,15 @@ impl<'a, T> StackedResolver<'a, T> {
 #[derive(Debug, Clone)]
 pub struct AnnotParser<T> {
     resolver: T,
+    self_type_name: Option<String>,
 }
 
 impl<T> AnnotParser<T> {
-    pub fn new(resolver: T) -> Self {
-        Self { resolver }
+    pub fn new(resolver: T, self_type_name: Option<String>) -> Self {
+        Self {
+            resolver,
+            self_type_name,
+        }
     }
 }
 
@@ -1214,6 +1254,7 @@ where
     pub fn parse_rty(&self, ts: TokenStream) -> Result<rty::RefinedType<T::Output>> {
         let mut parser = Parser {
             resolver: &self.resolver,
+            self_type_name: self.self_type_name.clone(),
             cursor: ts.trees(),
             formula_existentials: Default::default(),
         };
@@ -1225,6 +1266,7 @@ where
     pub fn parse_formula(&self, ts: TokenStream) -> Result<AnnotFormula<T::Output>> {
         let mut parser = Parser {
             resolver: &self.resolver,
+            self_type_name: self.self_type_name.clone(),
             cursor: ts.trees(),
             formula_existentials: Default::default(),
         };
