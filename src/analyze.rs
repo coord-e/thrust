@@ -487,4 +487,12 @@ impl<'tcx> Analyzer<'tcx> {
         }
         ensure_annot
     }
+
+    /// Whether the given `def_id` corresponds to a method of one of the `Fn` traits.
+    fn is_fn_trait_method(&self, def_id: DefId) -> bool {
+        self.tcx
+            .trait_of_item(def_id)
+            .and_then(|trait_did| self.tcx.fn_trait_kind_from_def_id(trait_did))
+            .is_some()
+    }
 }
