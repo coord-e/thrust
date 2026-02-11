@@ -41,6 +41,10 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    fn ctx(&self) -> &analyze::Analyzer<'tcx> {
+        &*self.ctx
+    }
+
     fn is_defined(&self, local: Local) -> bool {
         self.env.contains_local(local)
     }
@@ -51,6 +55,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn reborrow_visitor<'a>(&'a mut self) -> visitor::ReborrowVisitor<'a, 'tcx, 'ctx> {
         visitor::ReborrowVisitor::new(self)
+    }
+
+    fn rust_call_visitor<'a>(&'a mut self) -> visitor::RustCallVisitor<'a, 'tcx, 'ctx> {
+        visitor::RustCallVisitor::new(self)
     }
 
     fn basic_block_ty(&self, bb: BasicBlock) -> &BasicBlockType {
@@ -687,6 +695,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.borrow_place(place, prophecy).into()
     }
 
+    fn immut_borrow_place(&self, referent: mir::Place<'tcx>) -> rty::RefinedType<Var> {
+        let place = self.elaborate_place(&referent);
+        self.env.place_type(place).immut().into()
+    }
+
     #[tracing::instrument(skip(self, lhs, rvalue))]
     fn analyze_assignment(
         &mut self,
@@ -770,6 +783,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 source_info: term.source_info,
             };
         }
+        self.rust_call_visitor().visit_terminator(&mut term);
         self.reborrow_visitor().visit_terminator(&mut term);
         tracing::debug!(term = ?term.kind);
         term
