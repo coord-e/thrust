@@ -95,6 +95,7 @@ pub enum Sort {
     Box(Box<Sort>),
     Mut(Box<Sort>),
     Tuple(Vec<Sort>),
+    Array(Box<Sort>, Box<Sort>),
     Datatype(DatatypeSort),
 }
 
@@ -137,6 +138,21 @@ where
                         .group()
                 }
             }
+            Sort::Array(s1, s2) => {
+                if matches!(**s1, Sort::Int) {
+                    s2.pretty(allocator).brackets()
+                } else {
+                    allocator.text("array").append(
+                        allocator
+                            .line()
+                            .append(s1.pretty_atom(allocator))
+                            .append(allocator.text("->"))
+                            .append(allocator.line())
+                            .append(s2.pretty_atom(allocator))
+                            .parens(),
+                    )
+                }
+            }
             Sort::Datatype(sort) => sort.pretty(allocator),
         }
     }
@@ -164,18 +180,22 @@ impl Sort {
     fn walk_impl<'a, 'b>(&'a self, mut f: Box<dyn FnMut(&'a Sort) + 'b>) {
         f(self);
         match self {
+            Sort::Null | Sort::Int | Sort::Bool | Sort::String | Sort::Param(_) => {}
             Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
             Sort::Tuple(ss) => {
                 for s in ss {
                     s.walk(Box::new(&mut f));
                 }
             }
+            Sort::Array(s1, s2) => {
+                s1.walk(Box::new(&mut f));
+                s2.walk(Box::new(&mut f));
+            }
             Sort::Datatype(sort) => {
                 for s in &sort.args {
                     s.walk(Box::new(&mut f));
                 }
             }
-            _ => {}
         }
     }
 
@@ -233,6 +253,10 @@ impl Sort {
         Sort::Tuple(sorts)
     }
 
+    pub fn array(from: Sort, to: Sort) -> Self {
+        Sort::Array(Box::new(from), Box::new(to))
+    }
+
     pub fn datatype(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
         Sort::Datatype(DatatypeSort { symbol, args })
     }
@@ -257,6 +281,7 @@ impl Sort {
             Sort::Tuple(ts) => ts.iter().all(Sort::is_singleton),
             Sort::Box(s) => s.is_singleton(),
             Sort::Mut(s) => s.is_singleton(),
+            Sort::Array(_, s) => s.is_singleton(),
             _ => false,
         }
     }
@@ -270,6 +295,10 @@ impl Sort {
                 for s in ss {
                     s.instantiate_params(args);
                 }
+            }
+            Sort::Array(s1, s2) => {
+                s1.instantiate_params(args);
+                s2.instantiate_params(args);
             }
             Sort::Datatype(sort) => {
                 for s in &mut sort.args {

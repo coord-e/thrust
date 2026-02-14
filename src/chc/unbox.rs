@@ -70,6 +70,7 @@ fn unbox_sort(sort: Sort) -> Sort {
         Sort::Box(inner) => unbox_sort(*inner),
         Sort::Mut(inner) => Sort::Mut(Box::new(unbox_sort(*inner))),
         Sort::Tuple(sorts) => Sort::Tuple(sorts.into_iter().map(unbox_sort).collect()),
+        Sort::Array(s1, s2) => Sort::Array(Box::new(unbox_sort(*s1)), Box::new(unbox_sort(*s2))),
         Sort::Datatype(sort) => Sort::Datatype(unbox_datatype_sort(sort)),
     }
 }

@@ -1539,6 +1539,10 @@ fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
                 subst_ty_params_in_sort(s, subst);
             }
         }
+        chc::Sort::Array(s1, s2) => {
+            subst_ty_params_in_sort(s1, subst);
+            subst_ty_params_in_sort(s2, subst);
+        }
         chc::Sort::Datatype(dt_sort) => {
             for s in dt_sort.args_mut() {
                 subst_ty_params_in_sort(s, subst);

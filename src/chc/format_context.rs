@@ -68,11 +68,11 @@ fn atom_sorts(clause: &chc::Clause, a: &chc::Atom, sorts: &mut BTreeSet<chc::Sor
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct Sort<'a> {
+pub(super) struct SortSymbol<'a> {
     inner: &'a chc::Sort,
 }
 
-impl<'a> std::fmt::Display for Sort<'a> {
+impl<'a> std::fmt::Display for SortSymbol<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.inner {
             chc::Sort::Null => write!(f, "Null"),
@@ -80,15 +80,18 @@ impl<'a> std::fmt::Display for Sort<'a> {
             chc::Sort::Bool => write!(f, "Bool"),
             chc::Sort::String => write!(f, "String"),
             chc::Sort::Param(i) => write!(f, "T{}", i),
-            chc::Sort::Box(s) => write!(f, "Box{}", Sort::new(s).sorts()),
-            chc::Sort::Mut(s) => write!(f, "Mut{}", Sort::new(s).sorts()),
-            chc::Sort::Tuple(ss) => write!(f, "Tuple{}", Sorts::new(ss)),
-            chc::Sort::Datatype(s) => write!(f, "{}{}", s.symbol, Sorts::new(&s.args)),
+            chc::Sort::Box(s) => write!(f, "Box{}", SortSymbol::new(s).sorts()),
+            chc::Sort::Mut(s) => write!(f, "Mut{}", SortSymbol::new(s).sorts()),
+            chc::Sort::Tuple(ss) => write!(f, "Tuple{}", SortSymbols::new(ss)),
+            chc::Sort::Array(s1, s2) => {
+                write!(f, "Array{}", SortSymbols::new(&[*s1.clone(), *s2.clone()]))
+            }
+            chc::Sort::Datatype(s) => write!(f, "{}{}", s.symbol, SortSymbols::new(&s.args)),
         }
     }
 }
 
-impl<'a> Sort<'a> {
+impl<'a> SortSymbol<'a> {
     pub fn new(inner: &'a chc::Sort) -> Self {
         Self { inner }
     }
@@ -103,11 +106,11 @@ impl<'a> Sort<'a> {
 }
 
 #[derive(Debug, Clone)]
-struct Sorts<'a> {
+struct SortSymbols<'a> {
     inner: &'a [chc::Sort],
 }
 
-impl<'a> std::fmt::Display for Sorts<'a> {
+impl<'a> std::fmt::Display for SortSymbols<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.inner.is_empty() {
             return Ok(());
@@ -117,21 +120,21 @@ impl<'a> std::fmt::Display for Sorts<'a> {
             if i != 0 {
                 write!(f, "-")?;
             }
-            write!(f, "{}", Sort::new(s))?;
+            write!(f, "{}", SortSymbol::new(s))?;
         }
         write!(f, ">")?;
         Ok(())
     }
 }
 
-impl<'a> Sorts<'a> {
+impl<'a> SortSymbols<'a> {
     pub fn new(inner: &'a [chc::Sort]) -> Self {
         Self { inner }
     }
 }
 
 fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
-    let symbol = Sort::new(&s).to_symbol();
+    let symbol = SortSymbol::new(&s).to_symbol();
     let d = match s {
         chc::Sort::Null => chc::Datatype {
             symbol,
@@ -143,7 +146,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
             }],
         },
         chc::Sort::Box(inner) => {
-            let ss = Sort::new(&inner).sorts();
+            let ss = SortSymbol::new(&inner).sorts();
             chc::Datatype {
                 symbol,
                 params: 0,
@@ -158,7 +161,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
             }
         }
         chc::Sort::Mut(inner) => {
-            let ss = Sort::new(&inner).sorts();
+            let ss = SortSymbol::new(&inner).sorts();
             chc::Datatype {
                 symbol,
                 params: 0,
@@ -179,7 +182,7 @@ fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
             }
         }
         chc::Sort::Tuple(elems) => {
-            let ss = Sorts::new(&elems);
+            let ss = SortSymbols::new(&elems);
             let selectors = elems
                 .iter()
                 .enumerate()
@@ -229,7 +232,7 @@ fn monomorphize_datatype(
     if datatype.params == 0 {
         return None;
     }
-    let ss = Sorts::new(&sort.args);
+    let ss = SortSymbols::new(&sort.args);
     let mono_datatype = chc::Datatype {
         symbol: chc::DatatypeSymbol::new(format!("{}{}", datatype.symbol, ss)),
         params: 0,
@@ -281,37 +284,37 @@ impl FormatContext {
     }
 
     pub fn box_ctor(&self, sort: &chc::Sort) -> impl std::fmt::Display {
-        let ss = Sort::new(sort).sorts();
+        let ss = SortSymbol::new(sort).sorts();
         format!("box{ss}")
     }
 
     pub fn box_current(&self, sort: &chc::Sort) -> impl std::fmt::Display {
-        let ss = Sort::new(sort).sorts();
+        let ss = SortSymbol::new(sort).sorts();
         format!("box_current{ss}")
     }
 
     pub fn mut_ctor(&self, sort: &chc::Sort) -> impl std::fmt::Display {
-        let ss = Sort::new(sort).sorts();
+        let ss = SortSymbol::new(sort).sorts();
         format!("mut{ss}")
     }
 
     pub fn mut_current(&self, sort: &chc::Sort) -> impl std::fmt::Display {
-        let ss = Sort::new(sort).sorts();
+        let ss = SortSymbol::new(sort).sorts();
         format!("mut_current{ss}")
     }
 
     pub fn mut_final(&self, sort: &chc::Sort) -> impl std::fmt::Display {
-        let ss = Sort::new(sort).sorts();
+        let ss = SortSymbol::new(sort).sorts();
         format!("mut_final{ss}")
     }
 
     pub fn tuple_ctor(&self, sorts: &[chc::Sort]) -> impl std::fmt::Display {
-        let ss = Sorts::new(sorts);
+        let ss = SortSymbols::new(sorts);
         format!("tuple{ss}")
     }
 
     pub fn tuple_proj(&self, sorts: &[chc::Sort], idx: usize) -> impl std::fmt::Display {
-        let ss = Sorts::new(sorts);
+        let ss = SortSymbols::new(sorts);
         format!("tuple_proj{ss}.{idx}")
     }
 
@@ -320,12 +323,12 @@ impl FormatContext {
         sort: &chc::DatatypeSort,
         ctor_sym: &chc::DatatypeSymbol,
     ) -> impl std::fmt::Display {
-        let ss = Sorts::new(&sort.args);
+        let ss = SortSymbols::new(&sort.args);
         format!("{}{}", ctor_sym, ss)
     }
 
     pub fn datatype_discr(&self, sort: &chc::DatatypeSort) -> impl std::fmt::Display {
-        let ss = Sorts::new(&sort.args);
+        let ss = SortSymbols::new(&sort.args);
         let sym = chc::DatatypeSymbol::new(format!("{}{}", sort.symbol, ss));
         self.datatype_discr_def(&sym)
     }
@@ -335,7 +338,7 @@ impl FormatContext {
     }
 
     pub fn matcher_pred(&self, p: &chc::MatcherPred) -> impl std::fmt::Display {
-        let ss = Sorts::new(&p.datatype_args);
+        let ss = SortSymbols::new(&p.datatype_args);
         let sym = chc::DatatypeSymbol::new(format!("{}{}", p.datatype_symbol, ss));
         self.matcher_pred_def(&sym)
     }
@@ -344,9 +347,22 @@ impl FormatContext {
         format!("matcher_pred<{}>", self.fmt_datatype_symbol(sym))
     }
 
+    fn fmt_sort_impl(&self, sort: &chc::Sort) -> Box<dyn std::fmt::Display> {
+        match sort {
+            chc::Sort::Array(s1, s2) => {
+                let s1 = self.fmt_sort(s1);
+                let s2 = self.fmt_sort(s2);
+                Box::new(format!("(Array {} {})", s1, s2))
+            }
+            _ => {
+                let sym = SortSymbol::new(sort).to_symbol();
+                Box::new(self.fmt_datatype_symbol(&sym))
+            }
+        }
+    }
+
     pub fn fmt_sort(&self, sort: &chc::Sort) -> impl std::fmt::Display {
-        let sym = Sort::new(sort).to_symbol();
-        self.fmt_datatype_symbol(&sym)
+        self.fmt_sort_impl(sort)
     }
 
     pub fn fmt_datatype_symbol(&self, sym: &chc::DatatypeSymbol) -> impl std::fmt::Display {
