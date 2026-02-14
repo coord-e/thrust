@@ -141,6 +141,13 @@ impl<'tcx> TypeBuilder<'tcx> {
             mir_ty::TyKind::Adt(def, params) if def.is_box() => {
                 rty::PointerType::own(self.build(params.type_at(0))).into()
             }
+            // TODO: Declare this in std.rs
+            mir_ty::TyKind::Adt(def, params)
+                if self.tcx.is_diagnostic_item(rustc_span::sym::Vec, def.did()) =>
+            {
+                let content = rty::ArrayType::new(rty::Type::Int, self.build(params.type_at(0)));
+                rty::TupleType::new(vec![content.into(), rty::Type::Int]).into()
+            }
             mir_ty::TyKind::Adt(def, params) => {
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx, def.did());
@@ -268,6 +275,15 @@ where
             }
             mir_ty::TyKind::Adt(def, params) if def.is_box() => {
                 rty::PointerType::own(self.build(params.type_at(0))).into()
+            }
+            mir_ty::TyKind::Adt(def, params)
+                if self
+                    .inner
+                    .tcx
+                    .is_diagnostic_item(rustc_span::sym::Vec, def.did()) =>
+            {
+                let content = rty::ArrayType::new(rty::Type::Int, self.build(params.type_at(0)));
+                rty::TupleType::new(vec![content.into(), rty::Type::Int]).into()
             }
             mir_ty::TyKind::Adt(def, params) => {
                 if def.is_enum() {
