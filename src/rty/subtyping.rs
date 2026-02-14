@@ -114,6 +114,12 @@ where
                 let cs = builder.relate_sub_refined_type(&got.ret, &expected.ret);
                 clauses.extend(cs);
             }
+            (Type::Array(got), Type::Array(expected)) => {
+                let cs1 = self.relate_sub_refined_type(&got.index, &expected.index);
+                clauses.extend(cs1);
+                let cs2 = self.relate_sub_refined_type(&got.elem, &expected.elem);
+                clauses.extend(cs2);
+            }
             _ => panic!(
                 "inconsistent types: got={}, expected={}",
                 got.display(),
