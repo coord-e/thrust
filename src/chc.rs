@@ -390,7 +390,7 @@ impl Function {
         self.is_infix
     }
 
-    fn sort<I>(&self, _args: I) -> Sort
+    fn sort<I>(&self, args: I) -> Sort
     where
         I: IntoIterator<Item = Sort>,
     {
@@ -405,6 +405,13 @@ impl Function {
             Self::LT => Sort::bool(),
             Self::NOT => Sort::bool(),
             Self::NEG => Sort::int(),
+            Self::STORE => args.into_iter().next().unwrap(),
+            Self::SELECT => {
+                let Sort::Array(_, elem) = args.into_iter().next().unwrap() else {
+                    panic!("invalid SELECT sort");
+                };
+                *elem
+            }
             _ => unimplemented!(),
         }
     }
@@ -419,6 +426,8 @@ impl Function {
     pub const LT: Function = Function::infix("<");
     pub const NOT: Function = Function::new("not");
     pub const NEG: Function = Function::new("-");
+    pub const STORE: Function = Function::new("store");
+    pub const SELECT: Function = Function::new("select");
 }
 
 /// A logical term.
@@ -590,7 +599,11 @@ impl<V> Term<V> {
             Term::BoxCurrent(t) => t.sort(var_sort).deref(),
             Term::MutCurrent(t) => t.sort(var_sort).deref(),
             Term::MutFinal(t) => t.sort(var_sort).deref(),
-            Term::App(fun, args) => fun.sort(args.iter().map(|t| t.sort(&mut var_sort))),
+            Term::App(fun, args) => {
+                // TODO: remove this
+                let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
+                fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
+            }
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -717,6 +730,14 @@ impl<V> Term<V> {
 
     pub fn neg(self) -> Self {
         Term::App(Function::NEG, vec![self])
+    }
+
+    pub fn select(self, index: Self) -> Self {
+        Term::App(Function::SELECT, vec![self, index])
+    }
+
+    pub fn store(self, index: Self, elem: Self) -> Self {
+        Term::App(Function::STORE, vec![self, index, elem])
     }
 
     pub fn tuple(ts: Vec<Term<V>>) -> Self {
