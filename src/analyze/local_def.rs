@@ -147,7 +147,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iter()
             .map(|ident| ident.to_string());
 
-        let sig = self.ctx.local_fn_sig(local_def_id);
+        let sig = self.ctx.fn_sig(local_def_id.to_def_id());
         let arg_sorts = sig
             .inputs()
             .iter()
@@ -258,7 +258,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn expected_ty(&mut self) -> rty::RefinedType {
         let sig = self
             .ctx
-            .local_fn_sig_with_body(self.local_def_id, &self.body);
+            .fn_sig_with_body(self.local_def_id.to_def_id(), &self.body);
 
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self

@@ -402,17 +402,13 @@ impl<'tcx> Analyzer<'tcx> {
         }
     }
 
-    /// Computes the signature of the local function.
+    /// Computes the signature of the function using the given `body`.
     ///
-    /// This works like `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
+    /// This works like `self.tcx.fn_sig(def_id).instantiate_identity().skip_binder()`,
     /// but extracts parameter and return types directly from the given `body` to obtain a signature that
     /// reflects potential type instantiations happened after `optimized_mir`.
-    pub fn local_fn_sig_with_body(
-        &self,
-        local_def_id: LocalDefId,
-        body: &mir::Body<'tcx>,
-    ) -> mir_ty::FnSig<'tcx> {
-        let ty = self.tcx.type_of(local_def_id).instantiate_identity();
+    pub fn fn_sig_with_body(&self, def_id: DefId, body: &mir::Body<'tcx>) -> mir_ty::FnSig<'tcx> {
+        let ty = self.tcx.type_of(def_id).instantiate_identity();
         let sig = if let mir_ty::TyKind::Closure(_, substs) = ty.kind() {
             substs.as_closure().sig().skip_binder()
         } else {
@@ -428,14 +424,14 @@ impl<'tcx> Analyzer<'tcx> {
         )
     }
 
-    /// Computes the signature of the local function.
+    /// Computes the signature of the function.
     ///
-    /// This works like `self.tcx.fn_sig(local_def_id).instantiate_identity().skip_binder()`,
+    /// This works like `self.tcx.fn_sig(def_id).instantiate_identity().skip_binder()`,
     /// but extracts parameter and return types directly from [`mir::Body`] to obtain a signature that
     /// reflects the actual type of lifted closure functions.
-    pub fn local_fn_sig(&self, local_def_id: LocalDefId) -> mir_ty::FnSig<'tcx> {
-        let body = self.tcx.optimized_mir(local_def_id);
-        self.local_fn_sig_with_body(local_def_id, body)
+    pub fn fn_sig(&self, def_id: DefId) -> mir_ty::FnSig<'tcx> {
+        let body = self.tcx.optimized_mir(def_id);
+        self.fn_sig_with_body(def_id, body)
     }
 
     fn extract_require_annot<T>(
