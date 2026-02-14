@@ -579,7 +579,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     {
         // TODO: handle const_fn_def on Env side
         let func_ty = if let Some((def_id, args)) = func.const_fn_def() {
-            let resolved_def_id = if self.ctx.is_fn_trait_method(def_id) {
+            let (resolved_def_id, resolved_args) = if self.ctx.is_fn_trait_method(def_id) {
                 // When calling a closure via `Fn`/`FnMut`/`FnOnce` trait,
                 // we simply replace the def_id with the closure's function def_id.
                 // This skips shims, and makes self arguments mismatch. visitor::RustCallVisitor
@@ -588,7 +588,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     panic!("expected closure arg for fn trait");
                 };
                 tracing::debug!(?closure_def_id, "closure instance");
-                *closure_def_id
+                (*closure_def_id, args)
             } else {
                 let param_env = self
                     .tcx
@@ -597,17 +597,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let instance =
                     mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
                 if let Some(instance) = instance {
-                    instance.def_id()
+                    (instance.def_id(), instance.args)
                 } else {
-                    def_id
+                    (def_id, args)
                 }
             };
             if def_id != resolved_def_id {
-                tracing::info!(?def_id, ?resolved_def_id, "resolve",);
+                tracing::info!(?def_id, ?resolved_def_id, ?resolved_args, "resolved");
             }
 
             self.ctx
-                .def_ty_with_args(resolved_def_id, args)
+                .def_ty_with_args(resolved_def_id, resolved_args)
                 .expect("unknown def")
                 .ty
                 .vacuous()
