@@ -41,6 +41,10 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
+    fn ctx(&self) -> &analyze::Analyzer<'tcx> {
+        &*self.ctx
+    }
+
     fn is_defined(&self, local: Local) -> bool {
         self.env.contains_local(local)
     }
@@ -51,6 +55,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn reborrow_visitor<'a>(&'a mut self) -> visitor::ReborrowVisitor<'a, 'tcx, 'ctx> {
         visitor::ReborrowVisitor::new(self)
+    }
+
+    fn rust_call_visitor<'a>(&'a mut self) -> visitor::RustCallVisitor<'a, 'tcx, 'ctx> {
+        visitor::RustCallVisitor::new(self)
     }
 
     fn basic_block_ty(&self, bb: BasicBlock) -> &BasicBlockType {
@@ -568,12 +576,28 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     {
         // TODO: handle const_fn_def on Env side
         let func_ty = if let Some((def_id, args)) = func.const_fn_def() {
-            let param_env = self.tcx.param_env(self.local_def_id);
-            let instance = mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
-            let resolved_def_id = if let Some(instance) = instance {
-                instance.def_id()
+            let resolved_def_id = if self.ctx.is_fn_trait_method(def_id) {
+                // When calling a closure via `Fn`/`FnMut`/`FnOnce` trait,
+                // we simply replace the def_id with the closure's function def_id.
+                // This skips shims, and makes self arguments mismatch. visitor::RustCallVisitor
+                // adjusts the arguments accordingly.
+                let mir_ty::TyKind::Closure(closure_def_id, _) = args.type_at(0).kind() else {
+                    panic!("expected closure arg for fn trait");
+                };
+                tracing::debug!(?closure_def_id, "closure instance");
+                *closure_def_id
             } else {
-                def_id
+                let param_env = self
+                    .tcx
+                    .param_env(self.local_def_id)
+                    .with_reveal_all_normalized(self.tcx);
+                let instance =
+                    mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+                if let Some(instance) = instance {
+                    instance.def_id()
+                } else {
+                    def_id
+                }
             };
             if def_id != resolved_def_id {
                 tracing::info!(?def_id, ?resolved_def_id, "resolve",);
@@ -671,6 +695,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.borrow_place(place, prophecy).into()
     }
 
+    fn immut_borrow_place(&self, referent: mir::Place<'tcx>) -> rty::RefinedType<Var> {
+        let place = self.elaborate_place(&referent);
+        self.env.place_type(place).immut().into()
+    }
+
     #[tracing::instrument(skip(self, lhs, rvalue))]
     fn analyze_assignment(
         &mut self,
@@ -754,6 +783,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 source_info: term.source_info,
             };
         }
+        self.rust_call_visitor().visit_terminator(&mut term);
         self.reborrow_visitor().visit_terminator(&mut term);
         tracing::debug!(term = ?term.kind);
         term
