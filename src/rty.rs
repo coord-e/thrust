@@ -635,6 +635,89 @@ impl ParamType {
     }
 }
 
+/// An array type.
+#[derive(Debug, Clone)]
+pub struct ArrayType<T> {
+    pub index: Box<RefinedType<T>>,
+    pub elem: Box<RefinedType<T>>,
+}
+
+impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b ArrayType<T>
+where
+    T: chc::Var,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator.text("Array").append(
+            self.index
+                .pretty(allocator)
+                .append(allocator.text(", "))
+                .append(self.elem.pretty(allocator))
+                .angles(),
+        )
+    }
+}
+
+impl<T> ArrayType<T> {
+    pub fn new(index: Type<T>, elem: Type<T>) -> Self {
+        ArrayType {
+            index: Box::new(RefinedType::unrefined(index)),
+            elem: Box::new(RefinedType::unrefined(elem)),
+        }
+    }
+
+    pub fn subst_var<F, U>(self, mut f: F) -> ArrayType<U>
+    where
+        F: FnMut(T) -> chc::Term<U>,
+    {
+        ArrayType {
+            index: Box::new(self.index.subst_var(&mut f)),
+            elem: Box::new(self.elem.subst_var(&mut f)),
+        }
+    }
+
+    pub fn map_var<F, U>(self, mut f: F) -> ArrayType<U>
+    where
+        F: FnMut(T) -> U,
+    {
+        ArrayType {
+            index: Box::new(self.index.map_var(&mut f)),
+            elem: Box::new(self.elem.map_var(&mut f)),
+        }
+    }
+
+    pub fn strip_refinement(self) -> ArrayType<Closed> {
+        ArrayType {
+            index: Box::new(RefinedType::unrefined(self.index.strip_refinement())),
+            elem: Box::new(RefinedType::unrefined(self.elem.strip_refinement())),
+        }
+    }
+
+    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
+        self.index
+            .free_ty_params()
+            .into_iter()
+            .chain(self.elem.free_ty_params())
+            .collect()
+    }
+
+    pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
+    where
+        T: chc::Var,
+    {
+        self.index.subst_ty_params(subst);
+        self.elem.subst_ty_params(subst);
+    }
+
+    pub fn unify_ty_params(self, other: ArrayType<T>) -> TypeParamSubst<T>
+    where
+        T: chc::Var,
+    {
+        unify_tys_params([*self.index, *self.elem], [*other.index, *other.elem])
+    }
+}
+
 /// An underlying type of a refinement type.
 #[derive(Debug, Clone)]
 pub enum Type<T> {
@@ -646,6 +729,7 @@ pub enum Type<T> {
     Pointer(PointerType<T>),
     Function(FunctionType),
     Tuple(TupleType<T>),
+    Array(ArrayType<T>),
     Enum(EnumType<T>),
 }
 
@@ -673,6 +757,12 @@ impl<T> From<TupleType<T>> for Type<T> {
     }
 }
 
+impl<T> From<ArrayType<T>> for Type<T> {
+    fn from(t: ArrayType<T>) -> Type<T> {
+        Type::Array(t)
+    }
+}
+
 impl<T> From<EnumType<T>> for Type<T> {
     fn from(t: EnumType<T>) -> Type<T> {
         Type::Enum(t)
@@ -695,6 +785,7 @@ where
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
             Type::Tuple(ty) => ty.pretty(allocator),
+            Type::Array(ty) => ty.pretty(allocator),
             Type::Enum(ty) => ty.pretty(allocator),
         }
     }
@@ -839,6 +930,11 @@ impl<T> Type<T> {
                 let elem_sorts = ty.elems.iter().map(|ty| ty.ty.to_sort()).collect();
                 chc::Sort::tuple(elem_sorts)
             }
+            Type::Array(ty) => {
+                let index_sort = ty.index.ty.to_sort();
+                let elem_sort = ty.elem.ty.to_sort();
+                chc::Sort::array(index_sort, elem_sort)
+            }
             Type::Enum(ty) => {
                 let arg_sorts = ty.args.iter().map(|ty| ty.ty.to_sort()).collect();
                 chc::Sort::datatype(ty.symbol.clone(), arg_sorts)
@@ -859,6 +955,7 @@ impl<T> Type<T> {
             Type::Pointer(ty) => Type::Pointer(ty.subst_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.subst_var(f)),
+            Type::Array(ty) => Type::Array(ty.subst_var(f)),
             Type::Enum(ty) => Type::Enum(ty.subst_var(f)),
         }
     }
@@ -876,6 +973,7 @@ impl<T> Type<T> {
             Type::Pointer(ty) => Type::Pointer(ty.map_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.map_var(f)),
+            Type::Array(ty) => Type::Array(ty.map_var(f)),
             Type::Enum(ty) => Type::Enum(ty.map_var(f)),
         }
     }
@@ -894,6 +992,7 @@ impl<T> Type<T> {
             Type::Pointer(ty) => Type::Pointer(ty.strip_refinement()),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
+            Type::Array(ty) => Type::Array(ty.strip_refinement()),
             Type::Enum(ty) => Type::Enum(ty.strip_refinement()),
         }
     }
@@ -905,6 +1004,7 @@ impl<T> Type<T> {
             Type::Pointer(ty) => ty.free_ty_params(),
             Type::Function(ty) => ty.free_ty_params(),
             Type::Tuple(ty) => ty.free_ty_params(),
+            Type::Array(ty) => ty.free_ty_params(),
             Type::Enum(ty) => ty.free_ty_params(),
         }
     }
@@ -1471,6 +1571,7 @@ impl<FV> RefinedType<FV> {
                 ty.subst_ty_params(&subst)
             }
             Type::Tuple(ty) => ty.subst_ty_params(subst),
+            Type::Array(ty) => ty.subst_ty_params(subst),
             Type::Enum(ty) => ty.subst_ty_params(subst),
         }
     }
@@ -1509,6 +1610,7 @@ impl<FV> RefinedType<FV> {
                 ty1.unify_ty_params(ty2).strip_refinement().vacuous()
             }
             (Type::Tuple(ty1), Type::Tuple(ty2)) => ty1.unify_ty_params(ty2),
+            (Type::Array(ty1), Type::Array(ty2)) => ty1.unify_ty_params(ty2),
             (Type::Enum(ty1), Type::Enum(ty2)) => ty1.unify_ty_params(ty2),
             (t1, t2) => panic!("unify_ty_params: mismatched types t1={:?}, t2={:?}", t1, t2),
         }
@@ -1538,6 +1640,10 @@ fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
             for s in sorts {
                 subst_ty_params_in_sort(s, subst);
             }
+        }
+        chc::Sort::Array(s1, s2) => {
+            subst_ty_params_in_sort(s1, subst);
+            subst_ty_params_in_sort(s2, subst);
         }
         chc::Sort::Datatype(dt_sort) => {
             for s in dt_sort.args_mut() {

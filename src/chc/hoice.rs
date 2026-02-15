@@ -16,8 +16,8 @@ fn symbol_references(ty: &chc::Datatype) -> Vec<chc::DatatypeSymbol> {
     for ctor in &ty.ctors {
         for selector in &ctor.selectors {
             selector.sort.walk(|s| {
-                // TODO: stop using format_context::Sort directly
-                res.push(chc::format_context::Sort::new(s).to_symbol());
+                // TODO: stop using format_context::SortSymbol directly
+                res.push(chc::format_context::SortSymbol::new(s).to_symbol());
             });
         }
     }

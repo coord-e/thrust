@@ -145,6 +145,8 @@ pub enum ParseAttrError {
     UnexpectedTerm { context: &'static str },
     #[error("unexpected formula {context}")]
     UnexpectedFormula { context: &'static str },
+    #[error("unknown method {ident:?} with {arg_count} arguments")]
+    UnknownMethod { ident: Ident, arg_count: usize },
 }
 
 impl ParseAttrError {
@@ -175,6 +177,10 @@ impl ParseAttrError {
 
     fn unexpected_formula(context: &'static str) -> Self {
         ParseAttrError::UnexpectedFormula { context }
+    }
+
+    fn unknown_method(ident: Ident, arg_count: usize) -> Self {
+        ParseAttrError::UnknownMethod { ident, arg_count }
     }
 }
 
@@ -422,7 +428,7 @@ where
     }
 
     fn parse_arg_terms(&mut self) -> Result<Vec<chc::Term<T::Output>>> {
-        if self.look_ahead_token(0).is_none() {
+        if self.look_ahead_token_tree(0).is_none() {
             return Ok(Vec::new());
         }
 
@@ -607,23 +613,60 @@ where
     fn parse_postfix(&mut self) -> Result<FormulaOrTerm<T::Output>> {
         let formula_or_term = self.parse_atom()?;
 
-        let mut fields = Vec::new();
+        enum Field<V> {
+            Select(chc::Term<V>),
+            Store(chc::Term<V>, chc::Term<V>),
+            Index(usize),
+        }
+
+        let mut fields: Vec<Field<T::Output>> = Vec::new();
         while let Some(Token {
             kind: TokenKind::Dot,
             ..
         }) = self.look_ahead_token(0)
         {
             self.consume();
-            match self.next_token("field")? {
-                Token {
-                    kind: TokenKind::Literal(lit),
-                    ..
-                } if matches!(lit.kind, LitKind::Integer) => {
+            let t = self.next_token("field")?.clone();
+            if let Token {
+                kind: TokenKind::Literal(lit),
+                ..
+            } = t
+            {
+                if matches!(lit.kind, LitKind::Integer) {
                     let idx = lit.symbol.as_str().parse().unwrap();
-                    fields.push(idx);
+                    fields.push(Field::Index(idx));
+                    continue;
                 }
-                t => return Err(ParseAttrError::unexpected_token("field", t.clone())),
             }
+            if let Some((ident, _)) = t.ident() {
+                let next_tt = self.look_ahead_token_tree(0);
+                if let Some(TokenTree::Delimited(_, _, Delimiter::Parenthesis, args)) = next_tt {
+                    let args = args.clone();
+                    self.consume();
+                    let mut parser = Parser {
+                        resolver: self.boxed_resolver(),
+                        self_type_name: self.self_type_name.clone(),
+                        cursor: args.trees(),
+                        formula_existentials: self.formula_existentials.clone(),
+                    };
+                    let args = parser.parse_arg_terms()?;
+                    match ident.as_str() {
+                        "select" if args.len() == 1 => {
+                            fields.push(Field::Select(args.into_iter().next().unwrap()));
+                            continue;
+                        }
+                        "store" if args.len() == 2 => {
+                            let mut args = args.into_iter();
+                            let idx = args.next().unwrap();
+                            let val = args.next().unwrap();
+                            fields.push(Field::Store(idx, val));
+                            continue;
+                        }
+                        _ => return Err(ParseAttrError::unknown_method(ident, args.len())),
+                    }
+                }
+            }
+            return Err(ParseAttrError::unexpected_token("field", t.clone()));
         }
 
         if fields.is_empty() {
@@ -633,8 +676,19 @@ where
         let (term, sort) = formula_or_term
             .into_term()
             .ok_or_else(|| ParseAttrError::unexpected_formula("before projection"))?;
-        let term = fields.iter().fold(term, |acc, idx| acc.tuple_proj(*idx));
-        let sort = fields.iter().fold(sort, |acc, idx| acc.tuple_elem(*idx));
+        let sort = fields
+            .iter()
+            .try_fold(sort, |acc, field| match (acc, field) {
+                (acc, Field::Index(idx)) => Ok(acc.tuple_elem(*idx)),
+                (acc, Field::Store(_, _)) => Ok(acc),
+                (chc::Sort::Array(_, elem), Field::Select(_)) => Ok(*elem),
+                (acc, _) => Err(ParseAttrError::unsorted_op("select", acc.clone())),
+            })?;
+        let term = fields.into_iter().fold(term, |acc, field| match field {
+            Field::Index(idx) => acc.tuple_proj(idx),
+            Field::Store(idx, val) => acc.store(idx, val),
+            Field::Select(idx) => acc.select(idx),
+        });
         Ok(FormulaOrTerm::Term(term, sort))
     }
 

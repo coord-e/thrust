@@ -387,7 +387,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
                     ) {
                         assert!(self.inner_def_id.is_none(), "invalid extern_spec_fn");
-                        self.inner_def_id = Some(def_id);
+
+                        let args = typeck_result.node_args(hir_id);
+                        let param_env = self.tcx.param_env(self.outer_def_id);
+                        let instance =
+                            mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+                        if let Some(instance) = instance {
+                            self.inner_def_id = Some(instance.def_id());
+                        } else {
+                            self.inner_def_id = Some(def_id);
+                        }
                     }
                 }
             }

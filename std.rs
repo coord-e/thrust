@@ -201,3 +201,90 @@ fn _extern_spec_i32_is_positive(x: i32) -> bool {
 fn _extern_spec_i32_is_negative(x: i32) -> bool {
     i32::is_negative(x)
 }
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(result.1 == 0)]
+fn _extern_spec_vec_new<T>() -> Vec<T> {
+    Vec::<T>::new()
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(^vec == ((*vec).0.store((*vec).1, elem), (*vec).1 + 1))]
+fn _extern_spec_vec_push<T>(vec: &mut Vec<T>, elem: T) {
+    Vec::push(vec, elem)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(result == (*vec).1)]
+fn _extern_spec_vec_len<T>(vec: &Vec<T>) -> usize {
+    Vec::len(vec)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(index < (*vec).1)]
+#[thrust::ensures(*result == (*vec).0.select(index))]
+fn _extern_spec_vec_index<T>(vec: &Vec<T>, index: usize) -> &T {
+    <Vec<T> as std::ops::Index<usize>>::index(vec, index)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(index < (*vec).1)]
+#[thrust::ensures(
+    *result == (*vec).0.select(index) &&
+    ^result == (^vec).0.select(index) &&
+    ^vec == ((*vec).0.store(index, ^result), (*vec).1)
+)]
+fn _extern_spec_vec_index_mut<T>(vec: &mut Vec<T>, index: usize) -> &mut T {
+    <Vec<T> as std::ops::IndexMut<usize>>::index_mut(vec, index)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures((^vec).1 == 0)]
+fn _extern_spec_vec_clear<T>(vec: &mut Vec<T>) {
+    Vec::clear(vec)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(
+    (^vec).0 == (*vec).0 && (
+        (
+            (*vec).1 > 0 &&
+            (^vec).1 == (*vec).1 - 1 &&
+            result == std::option::Option::<T0>::Some((*vec).0.select((*vec).1 - 1))
+        ) || (
+            (*vec).1 == 0 &&
+            (^vec).1 == 0 &&
+            result == std::option::Option::<T0>::None()
+        )
+    )
+)]
+fn _extern_spec_vec_pop<T>(vec: &mut Vec<T>) -> Option<T> {
+    Vec::pop(vec)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(result == ((*vec).1 == 0))]
+fn _extern_spec_vec_is_empty<T>(vec: &Vec<T>) -> bool {
+    Vec::is_empty(vec)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(
+    (
+        (*vec).1 > len &&
+        ^vec == ((*vec).0, len)
+    ) || (
+        (*vec).1 <= len &&
+        ^vec == *vec
+    )
+)]
+fn _extern_spec_vec_truncate<T>(vec: &mut Vec<T>, len: usize) {
+    Vec::truncate(vec, len)
+}
