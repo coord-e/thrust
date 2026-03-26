@@ -53,6 +53,14 @@ pub fn formula_fn_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("formula_fn")]
 }
 
+pub fn requires_path_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("requires_path")]
+}
+
+pub fn ensures_path_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("ensures_path")]
+}
+
 pub fn model_ty_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

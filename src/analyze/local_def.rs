@@ -224,22 +224,30 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     // TODO: unify this logic with extraction functions above
     pub fn is_fully_annotated(&self) -> bool {
-        let has_require = self
+        let has_requires = self
             .tcx
             .get_attrs_by_path(
                 self.local_def_id.to_def_id(),
                 &analyze::annot::requires_path(),
             )
             .next()
-            .is_some();
-        let has_ensure = self
+            .is_some()
+            || self
+                .ctx
+                .extract_path_with_attr(self.local_def_id, &analyze::annot::requires_path_path())
+                .is_some();
+        let has_ensures = self
             .tcx
             .get_attrs_by_path(
                 self.local_def_id.to_def_id(),
                 &analyze::annot::ensures_path(),
             )
             .next()
-            .is_some();
+            .is_some()
+            || self
+                .ctx
+                .extract_path_with_attr(self.local_def_id, &analyze::annot::ensures_path_path())
+                .is_some();
         let annotated_params: Vec<_> = self
             .tcx
             .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::param_path())
@@ -260,7 +268,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iter()
             .all(|ident| annotated_params.contains(ident));
         self.is_annotated_as_callable()
-            || (has_require && has_ensure)
+            || (has_requires && has_ensures)
             || (all_params_annotated && has_ret)
     }
 
@@ -299,13 +307,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let self_type_name = self.impl_type().map(|ty| ty.to_string());
 
         let mut require_annot = self.ctx.extract_require_annot(
-            self.local_def_id.to_def_id(),
+            self.local_def_id,
             &param_resolver,
             self_type_name.clone(),
         );
 
         let mut ensure_annot = self.ctx.extract_ensure_annot(
-            self.local_def_id.to_def_id(),
+            self.local_def_id,
             &result_param_resolver,
             self_type_name.clone(),
         );
@@ -313,12 +321,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if let Some(trait_item_id) = self.trait_item_id() {
             tracing::info!("trait item fonud: {:?}", trait_item_id);
             let trait_require_annot = self.ctx.extract_require_annot(
-                trait_item_id.into(),
+                trait_item_id,
                 &param_resolver,
                 self_type_name.clone(),
             );
             let trait_ensure_annot = self.ctx.extract_ensure_annot(
-                trait_item_id.into(),
+                trait_item_id,
                 &result_param_resolver,
                 self_type_name.clone(),
             );

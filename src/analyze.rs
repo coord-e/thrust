@@ -15,6 +15,7 @@ use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
+use rustc_span::Symbol;
 
 use crate::analyze;
 use crate::annot::{AnnotFormula, AnnotParser, Resolver};
@@ -535,20 +536,73 @@ impl<'tcx> Analyzer<'tcx> {
         self.fn_sig_with_body(def_id, body)
     }
 
+    fn extract_path_with_attr(
+        &self,
+        local_def_id: LocalDefId,
+        attr_path: &[Symbol],
+    ) -> Option<DefId> {
+        let map = self.tcx.hir();
+        let body_id = map.maybe_body_owned_by(local_def_id)?;
+        let body = map.body(body_id);
+
+        let rustc_hir::ExprKind::Block(block, _) = body.value.kind else {
+            return None;
+        };
+        for stmt in block.stmts {
+            if map
+                .attrs(stmt.hir_id)
+                .iter()
+                .all(|attr| !attr.path_matches(attr_path))
+            {
+                continue;
+            }
+            let rustc_hir::StmtKind::Semi(expr) = stmt.kind else {
+                self.tcx.dcx().span_err(
+                    stmt.span,
+                    "annotated path is expected to be a semi statement",
+                );
+                continue;
+            };
+            let rustc_hir::ExprKind::Path(qpath) = expr.kind else {
+                self.tcx.dcx().span_err(
+                    expr.span,
+                    "annotated path is expected to be a path expression",
+                );
+                continue;
+            };
+            let rustc_hir::QPath::Resolved(_, path) = qpath else {
+                self.tcx.dcx().span_err(
+                    expr.span,
+                    "annotated path is expected to be a resolved path",
+                );
+                continue;
+            };
+            let rustc_hir::def::Res::Def(_, def_id) = path.res else {
+                self.tcx.dcx().span_err(
+                    path.span,
+                    "annotated path is expected to refer to a definition",
+                );
+                continue;
+            };
+            return Some(def_id);
+        }
+        None
+    }
+
     fn extract_require_annot<T>(
         &self,
-        def_id: DefId,
+        local_def_id: LocalDefId,
         resolver: T,
         self_type_name: Option<String>,
     ) -> Option<AnnotFormula<T::Output>>
     where
-        T: Resolver,
+        T: Resolver<Output = rty::FunctionParamIdx>,
     {
         let mut require_annot = None;
         let parser = AnnotParser::new(&resolver, self_type_name);
         for attrs in self
             .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::requires_path())
+            .get_attrs_by_path(local_def_id.to_def_id(), &analyze::annot::requires_path())
         {
             if require_annot.is_some() {
                 unimplemented!();
@@ -557,23 +611,40 @@ impl<'tcx> Analyzer<'tcx> {
             let require = parser.parse_formula(ts).unwrap();
             require_annot = Some(require);
         }
+
+        if let Some(formula_def_id) =
+            self.extract_path_with_attr(local_def_id, &analyze::annot::requires_path_path())
+        {
+            if require_annot.is_some() {
+                unimplemented!();
+            }
+            let Some(formula_fn) = self.formula_fns.get(&formula_def_id) else {
+                panic!(
+                    "require annotation {:?} is not a formula function",
+                    formula_def_id
+                );
+            };
+            require_annot = Some(formula_fn.to_require_annot());
+        }
+
         require_annot
     }
 
     fn extract_ensure_annot<T>(
         &self,
-        def_id: DefId,
+        local_def_id: LocalDefId,
         resolver: T,
         self_type_name: Option<String>,
     ) -> Option<AnnotFormula<T::Output>>
     where
-        T: Resolver,
+        T: Resolver<Output = rty::RefinedTypeVar<rty::FunctionParamIdx>>,
     {
         let mut ensure_annot = None;
+
         let parser = AnnotParser::new(&resolver, self_type_name);
         for attrs in self
             .tcx
-            .get_attrs_by_path(def_id, &analyze::annot::ensures_path())
+            .get_attrs_by_path(local_def_id.to_def_id(), &analyze::annot::ensures_path())
         {
             if ensure_annot.is_some() {
                 unimplemented!();
@@ -582,6 +653,22 @@ impl<'tcx> Analyzer<'tcx> {
             let ensure = parser.parse_formula(ts).unwrap();
             ensure_annot = Some(ensure);
         }
+
+        if let Some(formula_def_id) =
+            self.extract_path_with_attr(local_def_id, &analyze::annot::ensures_path_path())
+        {
+            if ensure_annot.is_some() {
+                unimplemented!();
+            }
+            let Some(formula_fn) = self.formula_fns.get(&formula_def_id) else {
+                panic!(
+                    "ensure annotation {:?} is not a formula function",
+                    formula_def_id
+                );
+            };
+            ensure_annot = Some(formula_fn.to_ensure_annot());
+        }
+
         ensure_annot
     }
 

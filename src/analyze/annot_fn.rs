@@ -38,33 +38,18 @@ where
 }
 
 impl<'tcx> FormulaFn<'tcx> {
-    pub fn to_require_annot(
-        &self,
-        sig: mir_ty::FnSig<'tcx>,
-    ) -> Option<AnnotFormula<rty::FunctionParamIdx>> {
-        if &self.params.raw != sig.inputs() {
-            return None;
-        }
-        Some(AnnotFormula::Formula(self.formula.clone()))
+    pub fn to_require_annot(&self) -> AnnotFormula<rty::FunctionParamIdx> {
+        AnnotFormula::Formula(self.formula.clone())
     }
 
-    pub fn to_ensure_annot(
-        &self,
-        sig: mir_ty::FnSig<'tcx>,
-    ) -> Option<AnnotFormula<rty::RefinedTypeVar<rty::FunctionParamIdx>>> {
-        if &self.params.raw[1..] != sig.inputs() {
-            return None;
-        }
-        if self.params.raw[0] != sig.output() {
-            return None;
-        }
-        Some(AnnotFormula::Formula(self.formula.clone().map_var(|v| {
+    pub fn to_ensure_annot(&self) -> AnnotFormula<rty::RefinedTypeVar<rty::FunctionParamIdx>> {
+        AnnotFormula::Formula(self.formula.clone().map_var(|v| {
             if v.as_usize() == 0 {
                 rty::RefinedTypeVar::Value
             } else {
                 rty::RefinedTypeVar::Free(rty::FunctionParamIdx::from(v.as_usize() - 1))
             }
-        })))
+        }))
     }
 }
 
