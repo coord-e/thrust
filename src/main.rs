@@ -18,6 +18,10 @@ impl Callbacks for CompilerCalls {
         let attrs = &mut config.opts.unstable_opts.crate_attr;
         attrs.push("feature(register_tool)".to_owned());
         attrs.push("register_tool(thrust)".to_owned());
+
+        config.override_queries = Some(|_sess, providers| {
+            providers.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
+        });
     }
 
     fn after_crate_root_parsing<'tcx>(

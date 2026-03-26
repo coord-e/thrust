@@ -49,6 +49,10 @@ pub fn ignored_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("ignored")]
 }
 
+pub fn formula_fn_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("formula_fn")]
+}
+
 pub fn model_ty_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

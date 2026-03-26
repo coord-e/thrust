@@ -24,6 +24,7 @@ use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
 
 mod annot;
+mod annot_fn;
 mod basic_block;
 mod crate_;
 mod did_cache;
@@ -31,6 +32,32 @@ mod local_def;
 
 // TODO: organize structure and remove cross dependency between refine
 pub use did_cache::DefIdCache;
+
+pub fn mir_borrowck_skip_formula_fn(
+    tcx: rustc_middle::ty::TyCtxt<'_>,
+    local_def_id: rustc_span::def_id::LocalDefId,
+) -> rustc_middle::query::queries::mir_borrowck::ProvidedValue {
+    // TODO: unify impl with local_def::Analyzer
+    let is_annotated_as_formula_fn = tcx
+        .get_attrs_by_path(local_def_id.to_def_id(), &analyze::annot::formula_fn_path())
+        .next()
+        .is_some();
+
+    if is_annotated_as_formula_fn {
+        tracing::debug!(?local_def_id, "skipping borrow check for formula fn");
+        let dummy_result = rustc_middle::mir::BorrowCheckResult {
+            concrete_opaque_types: Default::default(),
+            closure_requirements: None,
+            used_mut_upvars: Default::default(),
+            tainted_by_errors: None,
+        };
+        return tcx.arena.alloc(dummy_result);
+    }
+
+    (rustc_interface::DEFAULT_QUERY_PROVIDERS
+        .queries
+        .mir_borrowck)(tcx, local_def_id)
+}
 
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
@@ -173,6 +200,9 @@ pub struct Analyzer<'tcx> {
     /// (at least for every defs referenced by local def bodies)
     defs: HashMap<DefId, DefTy<'tcx>>,
 
+    /// Collection of functions with `#[thrust::formula_fn]` attribute.
+    formula_fns: HashMap<DefId, annot_fn::FormulaFn<'tcx>>,
+
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
 
@@ -199,12 +229,14 @@ impl<'tcx> Analyzer<'tcx> {
 impl<'tcx> Analyzer<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         let defs = Default::default();
+        let formula_fns = Default::default();
         let system = Default::default();
         let basic_blocks = Default::default();
         let enum_defs = Default::default();
         Self {
             tcx,
             defs,
+            formula_fns,
             system,
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
@@ -408,6 +440,11 @@ impl<'tcx> Analyzer<'tcx> {
             analyzer.run(&expected);
         }
         Some(expected)
+    }
+
+    pub fn register_formula_fn(&mut self, def_id: DefId, formula_fn: annot_fn::FormulaFn<'tcx>) {
+        tracing::info!(def_id = ?def_id, formula_fn = %formula_fn.display(), "register_formula_fn");
+        self.formula_fns.insert(def_id, formula_fn);
     }
 
     pub fn register_basic_block_ty(

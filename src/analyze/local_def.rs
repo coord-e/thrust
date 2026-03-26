@@ -212,6 +212,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .is_some()
     }
 
+    pub fn is_annotated_as_formula_fn(&self) -> bool {
+        self.tcx
+            .get_attrs_by_path(
+                self.local_def_id.to_def_id(),
+                &analyze::annot::formula_fn_path(),
+            )
+            .next()
+            .is_some()
+    }
+
     // TODO: unify this logic with extraction functions above
     pub fn is_fully_annotated(&self) -> bool {
         let has_require = self
