@@ -7,6 +7,10 @@ enum List {
   Nil,
 }
 
+impl thrust_models::Model for List {
+  type Ty = Self;
+}
+
 fn sum(la: &List) -> i32 {
   match la {
     List::Cons(x, lb) => sum(lb) + *x,

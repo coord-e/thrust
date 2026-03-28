@@ -6,6 +6,10 @@ struct Range {
     end: i64,
 }
 
+impl thrust_models::Model for Range {
+    type Ty = Range;
+}
+
 impl Iterator for Range {
     type Item = i64;
 
@@ -22,6 +26,10 @@ impl Iterator for Range {
 
 struct FixedFilter {
     iter: Range,
+}
+
+impl thrust_models::Model for FixedFilter {
+    type Ty = FixedFilter;
 }
 
 impl Iterator for FixedFilter {

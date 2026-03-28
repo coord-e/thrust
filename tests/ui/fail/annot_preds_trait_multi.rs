@@ -17,6 +17,10 @@ struct A {
     x: i64,
 }
 
+impl thrust_models::Model for A {
+    type Ty = Self;
+}
+
 impl Double for A {
     #[thrust::predicate]
     fn is_double(self, doubled: Self) -> bool {
@@ -36,6 +40,10 @@ impl Double for A {
 struct B {
     x: i64,
     y: i64,
+}
+
+impl thrust_models::Model for B {
+    type Ty = Self;
 }
 
 impl Double for B {

@@ -6,6 +6,10 @@ struct A {
     x: i64,
 }
 
+impl thrust_models::Model for A {
+    type Ty = Self;
+}
+
 trait Double {
     // Support annotations in trait definitions
     #[thrust::predicate]

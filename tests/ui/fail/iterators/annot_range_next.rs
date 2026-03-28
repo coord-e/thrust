@@ -23,6 +23,10 @@ struct Range {
     end: i64,
 }
 
+impl thrust_models::Model for Range {
+    type Ty = Range;
+}
+
 impl Iterator for Range {
     type Item = i64;
 
