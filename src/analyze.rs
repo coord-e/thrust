@@ -106,9 +106,24 @@ impl<'tcx> ReplacePlacesVisitor<'tcx> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeferredDefMode {
+    Analyze,
+    NoAnalyze,
+}
+
+impl DeferredDefMode {
+    fn should_analyze(&self) -> bool {
+        matches!(self, DeferredDefMode::Analyze)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DeferredDefTy<'tcx> {
+    // this is different from a key in defs when the def is extern_spec_fn
+    local_def_id: LocalDefId,
     cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
+    mode: DeferredDefMode,
 }
 
 #[derive(Debug, Clone)]
@@ -290,12 +305,40 @@ impl<'tcx> Analyzer<'tcx> {
         self.defs.insert(def_id, DefTy::Concrete(rty));
     }
 
-    pub fn register_deferred_def(&mut self, def_id: DefId) {
-        tracing::info!(def_id = ?def_id, "register_deferred_def");
+    pub fn register_deferred_def(&mut self, local_def_id: LocalDefId) {
+        self.register_deferred_def_impl(
+            local_def_id.to_def_id(),
+            local_def_id,
+            DeferredDefMode::Analyze,
+        );
+    }
+
+    pub fn register_deferred_def_without_analysis(
+        &mut self,
+        target_def_id: DefId,
+        local_def_id: LocalDefId,
+    ) {
+        self.register_deferred_def_impl(target_def_id, local_def_id, DeferredDefMode::NoAnalyze);
+    }
+
+    fn register_deferred_def_impl(
+        &mut self,
+        target_def_id: DefId,
+        local_def_id: LocalDefId,
+        mode: DeferredDefMode,
+    ) {
+        tracing::info!(
+            ?target_def_id,
+            ?local_def_id,
+            ?mode,
+            "register_deferred_def"
+        );
         self.defs.insert(
-            def_id,
+            target_def_id,
             DefTy::Deferred(DeferredDefTy {
+                local_def_id,
                 cache: Rc::new(RefCell::new(HashMap::new())),
+                mode,
             }),
         );
     }
@@ -312,10 +355,10 @@ impl<'tcx> Analyzer<'tcx> {
         def_id: DefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<rty::RefinedType> {
+        let type_builder = TypeBuilder::new(self.tcx, def_id);
+
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
-                let type_builder = TypeBuilder::new(self.tcx, def_id);
-
                 let mut def_ty = rty.clone();
                 def_ty.instantiate_ty_params(
                     generic_args
@@ -333,16 +376,29 @@ impl<'tcx> Analyzer<'tcx> {
         if let Some(rty) = deferred_ty_cache.borrow().get(&generic_args) {
             return Some(rty.clone());
         }
+        let deferred_ty_mode = deferred_ty.mode;
 
-        let mut analyzer = self.local_def_analyzer(def_id.as_local()?);
+        let mut analyzer = self.local_def_analyzer(deferred_ty.local_def_id);
         analyzer.generic_args(generic_args);
 
-        let expected = analyzer.expected_ty();
+        let mut expected = analyzer.expected_ty();
+        // parameters in annotations are left as params
+        // TODO: remove this after annotation V2
+        expected.instantiate_ty_params(
+            generic_args
+                .types()
+                .map(|ty| type_builder.build(ty))
+                .map(rty::RefinedType::unrefined)
+                .collect(),
+        );
         deferred_ty_cache
             .borrow_mut()
             .insert(generic_args, expected.clone());
+        tracing::info!(?def_id, rty = %expected.display(), ?generic_args, "deferred def");
 
-        analyzer.run(&expected);
+        if deferred_ty_mode.should_analyze() {
+            analyzer.run(&expected);
+        }
         Some(expected)
     }
 
