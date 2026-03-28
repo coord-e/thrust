@@ -45,6 +45,10 @@ pub fn predicate_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("predicate")]
 }
 
+pub fn ignored_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("ignored")]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via
