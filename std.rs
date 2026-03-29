@@ -21,6 +21,9 @@ mod thrust_models {
         #[thrust::def::array_model]
         pub struct Array<I, T>(PhantomData<I>, PhantomData<T>);
 
+        #[thrust::def::closure_model]
+        pub struct Closure<T>(PhantomData<T>);
+
         pub struct Vec<T>(pub Array<Int, T>, pub usize);
     }
 
@@ -54,6 +57,10 @@ mod thrust_models {
 
     impl Model for () {
         type Ty = ();
+    }
+
+    impl<T> Model for model::Closure<T> {
+        type Ty = model::Closure<T>;
     }
 
     impl<T0> Model for (T0,) where T0: Model {

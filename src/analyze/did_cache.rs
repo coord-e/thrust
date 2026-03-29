@@ -18,6 +18,7 @@ struct DefIds {
     mut_model: OnceCell<Option<DefId>>,
     box_model: OnceCell<Option<DefId>>,
     array_model: OnceCell<Option<DefId>>,
+    closure_model: OnceCell<Option<DefId>>,
 }
 
 /// Retrieves and caches well-known [`DefId`]s.
@@ -126,5 +127,12 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .array_model
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::array_model_path()))
+    }
+
+    pub fn closure_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .closure_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_model_path()))
     }
 }

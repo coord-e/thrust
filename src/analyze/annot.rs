@@ -89,6 +89,14 @@ pub fn array_model_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn closure_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("closure_model"),
+    ]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via
