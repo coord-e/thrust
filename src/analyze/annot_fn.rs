@@ -8,6 +8,7 @@ use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use crate::analyze::did_cache::DefIdCache;
 use crate::annot::AnnotFormula;
 use crate::chc;
+use crate::refine::TypeBuilder;
 use crate::rty;
 
 #[derive(Debug, Clone)]
@@ -127,6 +128,7 @@ pub struct AnnotFnTranslator<'tcx> {
     generic_args: mir_ty::GenericArgsRef<'tcx>,
 
     def_ids: DefIdCache<'tcx>,
+    type_builder: TypeBuilder<'tcx>,
     env: HashMap<HirId, chc::Term<rty::FunctionParamIdx>>,
 }
 
@@ -138,6 +140,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
         let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
         let def_ids = DefIdCache::new(tcx);
+        let type_builder = TypeBuilder::new(tcx, def_ids.clone(), local_def_id.to_def_id());
         let mut translator = Self {
             tcx,
             local_def_id,
@@ -145,6 +148,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
             body,
             generic_args,
             def_ids,
+            type_builder,
             env: HashMap::default(),
         };
         translator.build_env_from_params();
@@ -158,6 +162,11 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
 
     pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>) -> Self {
         self.def_ids = def_ids;
+        self.type_builder = TypeBuilder::new(
+            self.tcx,
+            self.def_ids.clone(),
+            self.local_def_id.to_def_id(),
+        );
         self
     }
 
@@ -222,6 +231,28 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
         self.to_formula_or_term(hir)
             .into_term()
             .expect("expected a term")
+    }
+
+    fn variant_ctor_term(
+        &self,
+        ctor_did: rustc_span::def_id::DefId,
+        result_ty: mir_ty::Ty<'tcx>,
+        field_terms: Vec<chc::Term<rty::FunctionParamIdx>>,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        let variant_did = self.tcx.parent(ctor_did);
+        let adt_did = self.tcx.parent(variant_did);
+        let d_sym = crate::refine::datatype_symbol(self.tcx, adt_did);
+        let variant_name = self.tcx.item_name(variant_did);
+        let v_sym = chc::DatatypeSymbol::new(format!("{}.{}", d_sym, variant_name));
+        let sort_args = if let mir_ty::TyKind::Adt(_, generic_args) = result_ty.kind() {
+            generic_args
+                .types()
+                .map(|ty| self.type_builder.build(ty).to_sort())
+                .collect()
+        } else {
+            panic!("expected an ADT type for variant constructor")
+        };
+        chc::Term::datatype_ctor(d_sym, sort_args, v_sym, field_terms)
     }
 
     fn to_formula_or_term(
@@ -319,20 +350,21 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 rustc_ast::LitKind::Bool(b) => FormulaOrTerm::Literal(b),
                 _ => unimplemented!("unsupported literal in formula: {:?}", lit),
             },
-            ExprKind::Path(qpath) => {
-                if let rustc_hir::def::Res::Local(hir_id) =
-                    self.typeck.qpath_res(&qpath, hir.hir_id)
-                {
-                    FormulaOrTerm::Term(
-                        self.env
-                            .get(&hir_id)
-                            .expect("unbound variable in formula")
-                            .clone(),
-                    )
-                } else {
-                    unimplemented!("unsupported path in formula: {:?}", qpath);
+            ExprKind::Path(qpath) => match self.typeck.qpath_res(&qpath, hir.hir_id) {
+                rustc_hir::def::Res::Local(hir_id) => FormulaOrTerm::Term(
+                    self.env
+                        .get(&hir_id)
+                        .expect("unbound variable in formula")
+                        .clone(),
+                ),
+                rustc_hir::def::Res::Def(
+                    rustc_hir::def::DefKind::Ctor(rustc_hir::def::CtorOf::Variant, _),
+                    ctor_did,
+                ) => {
+                    FormulaOrTerm::Term(self.variant_ctor_term(ctor_did, self.expr_ty(hir), vec![]))
                 }
-            }
+                _ => unimplemented!("unsupported path in formula: {:?}", qpath),
+            },
             ExprKind::Tup(exprs) => {
                 let terms = exprs.iter().map(|e| self.to_term(e)).collect();
                 FormulaOrTerm::Term(chc::Term::tuple(terms))
@@ -349,7 +381,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
             ExprKind::Call(func_expr, args) => {
                 if let ExprKind::Path(qpath) = &func_expr.kind {
                     let res = self.typeck.qpath_res(qpath, func_expr.hir_id);
-                    if let rustc_hir::def::Res::Def(_, def_id) = res {
+                    if let rustc_hir::def::Res::Def(def_kind, def_id) = res {
                         if Some(def_id) == self.def_ids.mut_model_new() {
                             assert_eq!(args.len(), 2, "Mut::new takes exactly 2 arguments");
                             let t1 = self.to_term(&args[0]);
@@ -360,6 +392,17 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                             assert_eq!(args.len(), 1, "Box::new takes exactly 1 argument");
                             let t = self.to_term(&args[0]);
                             return FormulaOrTerm::Term(chc::Term::box_(t));
+                        }
+                        if matches!(
+                            def_kind,
+                            rustc_hir::def::DefKind::Ctor(rustc_hir::def::CtorOf::Variant, _)
+                        ) {
+                            let field_terms = args.iter().map(|arg| self.to_term(arg)).collect();
+                            return FormulaOrTerm::Term(self.variant_ctor_term(
+                                def_id,
+                                self.expr_ty(hir),
+                                field_terms,
+                            ));
                         }
                     }
                 }
