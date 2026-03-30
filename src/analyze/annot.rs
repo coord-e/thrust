@@ -125,6 +125,14 @@ pub fn box_model_new_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn exists_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("exists"),
+    ]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via

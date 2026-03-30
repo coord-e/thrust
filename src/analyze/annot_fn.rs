@@ -119,6 +119,7 @@ impl<T> FormulaOrTerm<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct AnnotFnTranslator<'tcx> {
     tcx: TyCtxt<'tcx>,
     local_def_id: LocalDefId,
@@ -201,6 +202,13 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
 
     fn expr_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.expr_ty(expr);
+        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
+        let param_env = mir_ty::ParamEnv::reveal_all();
+        self.tcx.normalize_erasing_regions(param_env, instantiated)
+    }
+
+    fn pat_ty(&self, pat: &'tcx rustc_hir::Pat<'tcx>) -> mir_ty::Ty<'tcx> {
+        let ty = self.typeck.pat_ty(pat);
         let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
         let param_env = mir_ty::ParamEnv::reveal_all();
         self.tcx.normalize_erasing_regions(param_env, instantiated)
@@ -382,6 +390,39 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 if let ExprKind::Path(qpath) = &func_expr.kind {
                     let res = self.typeck.qpath_res(qpath, func_expr.hir_id);
                     if let rustc_hir::def::Res::Def(def_kind, def_id) = res {
+                        if Some(def_id) == self.def_ids.exists() {
+                            assert_eq!(args.len(), 1, "exists takes exactly 1 argument");
+                            let ExprKind::Closure(closure) = args[0].kind else {
+                                panic!("exists argument must be a closure");
+                            };
+                            let closure_body = self.tcx.hir().body(closure.body);
+
+                            let mut inner_translator = self.clone();
+                            let mut vars = Vec::new();
+                            for param in closure_body.params {
+                                let rustc_hir::PatKind::Binding(_, hir_id, ident, None) =
+                                    param.pat.kind
+                                else {
+                                    panic!(
+                                        "exists closure parameter must be a simple binding: {:?}",
+                                        param.pat
+                                    );
+                                };
+                                let param_ty = self.pat_ty(param.pat);
+                                let sort = self.type_builder.build(param_ty).to_sort();
+                                let var_term = chc::Term::FormulaExistentialVar(
+                                    sort.clone(),
+                                    ident.name.to_string(),
+                                );
+                                inner_translator.env.insert(hir_id, var_term);
+                                vars.push((ident.name.to_string(), sort));
+                            }
+                            let body_formula = inner_translator.to_formula(closure_body.value);
+                            return FormulaOrTerm::Formula(chc::Formula::exists(
+                                vars,
+                                body_formula,
+                            ));
+                        }
                         if Some(def_id) == self.def_ids.mut_model_new() {
                             assert_eq!(args.len(), 2, "Mut::new takes exactly 2 arguments");
                             let t1 = self.to_term(&args[0]);

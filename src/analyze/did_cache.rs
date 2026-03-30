@@ -22,6 +22,8 @@ struct DefIds {
 
     mut_model_new: OnceCell<Option<DefId>>,
     box_model_new: OnceCell<Option<DefId>>,
+
+    exists: OnceCell<Option<DefId>>,
 }
 
 /// Retrieves and caches well-known [`DefId`]s.
@@ -159,5 +161,12 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .box_model_new
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::box_model_new_path()))
+    }
+
+    pub fn exists(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .exists
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::exists_path()))
     }
 }
