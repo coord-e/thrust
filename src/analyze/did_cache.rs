@@ -1,15 +1,24 @@
 //! Retrieves and caches well-known [`DefId`]s.
 
 use std::cell::OnceCell;
+use std::rc::Rc;
 
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
+use rustc_span::symbol::Symbol;
 use rustc_target::abi::FieldIdx;
 
 #[derive(Debug, Clone, Default)]
 struct DefIds {
     unique: OnceCell<Option<DefId>>,
     nonnull: OnceCell<Option<DefId>>,
+
+    model_ty: OnceCell<Option<DefId>>,
+    int_model: OnceCell<Option<DefId>>,
+    mut_model: OnceCell<Option<DefId>>,
+    box_model: OnceCell<Option<DefId>>,
+    array_model: OnceCell<Option<DefId>>,
+    closure_model: OnceCell<Option<DefId>>,
 }
 
 /// Retrieves and caches well-known [`DefId`]s.
@@ -19,14 +28,14 @@ struct DefIds {
 #[derive(Clone)]
 pub struct DefIdCache<'tcx> {
     tcx: TyCtxt<'tcx>,
-    def_ids: DefIds,
+    def_ids: Rc<DefIds>,
 }
 
 impl<'tcx> DefIdCache<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         Self {
             tcx,
-            def_ids: DefIds::default(),
+            def_ids: Rc::new(DefIds::default()),
         }
     }
 
@@ -62,5 +71,68 @@ impl<'tcx> DefIdCache<'tcx> {
                 .expect("expected Unique to contain NonNull");
             Some(nonnull_def.did())
         })
+    }
+
+    fn annotated_def(&self, path: &[Symbol]) -> Option<DefId> {
+        let map = self.tcx.hir();
+        for item_id in map.items() {
+            let def_id = item_id.owner_id.to_def_id();
+            if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
+                return Some(def_id);
+            }
+
+            let item = map.item(item_id);
+            if let rustc_hir::ItemKind::Trait(_, _, _, _, trait_item_refs) = item.kind {
+                for trait_item_ref in trait_item_refs {
+                    let def_id = trait_item_ref.id.owner_id.to_def_id();
+                    if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
+                        return Some(def_id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn model_ty(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .model_ty
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::model_ty_path()))
+    }
+
+    pub fn int_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .int_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::int_model_path()))
+    }
+
+    pub fn mut_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .mut_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::mut_model_path()))
+    }
+
+    pub fn box_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .box_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::box_model_path()))
+    }
+
+    pub fn array_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .array_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::array_model_path()))
+    }
+
+    pub fn closure_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .closure_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_model_path()))
     }
 }

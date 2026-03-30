@@ -7,6 +7,10 @@ enum List {
   Nil,
 }
 
+impl thrust_models::Model for List {
+  type Ty = Self;
+}
+
 fn length(la: &List) -> i32 {
   match la {
     List::Cons(_, lb) => length(lb) + 1,

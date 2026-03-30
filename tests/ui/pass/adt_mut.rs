@@ -6,6 +6,10 @@ pub enum X {
     B(bool),
 }
 
+impl thrust_models::Model for X {
+  type Ty = Self;
+}
+
 #[thrust::trusted]
 #[thrust::requires(true)]
 #[thrust::ensures(true)]

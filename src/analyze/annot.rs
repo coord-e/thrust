@@ -49,6 +49,54 @@ pub fn ignored_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("ignored")]
 }
 
+pub fn model_ty_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("model_ty"),
+    ]
+}
+
+pub fn int_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("int_model"),
+    ]
+}
+
+pub fn mut_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("mut_model"),
+    ]
+}
+
+pub fn box_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("box_model"),
+    ]
+}
+
+pub fn array_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("array_model"),
+    ]
+}
+
+pub fn closure_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("closure_model"),
+    ]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via

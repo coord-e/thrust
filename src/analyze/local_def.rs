@@ -842,7 +842,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let body = tcx.optimized_mir(local_def_id.to_def_id()).clone();
         let drop_points = Default::default();
-        let type_builder = TypeBuilder::new(tcx, local_def_id.to_def_id());
+        let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
         Self {
             ctx,
             tcx,

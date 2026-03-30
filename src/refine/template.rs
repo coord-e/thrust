@@ -6,6 +6,7 @@ use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
 use super::basic_block::BasicBlockType;
+use crate::analyze::DefIdCache;
 use crate::chc;
 use crate::refine;
 use crate::rty;
@@ -69,6 +70,8 @@ where
 #[derive(Clone)]
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
+    def_ids: DefIdCache<'tcx>,
+    param_env: mir_ty::ParamEnv<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
     /// These indices may differ because we skip lifetime parameters and they always need to be
     /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
@@ -77,7 +80,7 @@ pub struct TypeBuilder<'tcx> {
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
-    pub fn new(tcx: mir_ty::TyCtxt<'tcx>, def_id: DefId) -> Self {
+    pub fn new(tcx: mir_ty::TyCtxt<'tcx>, def_ids: DefIdCache<'tcx>, def_id: DefId) -> Self {
         let generics = tcx.generics_of(def_id);
         let mut param_idx_mapping: HashMap<u32, rty::TypeParamIdx> = Default::default();
         for i in 0..generics.count() {
@@ -90,8 +93,11 @@ impl<'tcx> TypeBuilder<'tcx> {
                 mir_ty::GenericParamDefKind::Const { .. } => {}
             }
         }
+        let param_env = tcx.param_env_reveal_all_normalized(def_id);
         Self {
             tcx,
+            def_ids,
+            param_env,
             param_idx_mapping,
         }
     }
@@ -104,18 +110,107 @@ impl<'tcx> TypeBuilder<'tcx> {
         rty::ParamType::new(index).into()
     }
 
+    /// Replaces {closure} types with thrust_models::Closure<{closure}>.
+    ///
+    /// Ideally, we want to have `impl<F> Model for F where F: Fn` instead of this and let
+    /// normalization do the work. However, it doesn't work:
+    /// 1. it simply conflicts with other blanket impls
+    /// 2. attempts to fake the impl via override_queries have failed so far
+    fn replace_closure_model(&self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        let Some(closure_model_id) = self.def_ids.closure_model() else {
+            return ty;
+        };
+
+        struct ReplaceClosureModel<'tcx> {
+            tcx: mir_ty::TyCtxt<'tcx>,
+            closure_model_id: DefId,
+        }
+
+        use mir_ty::fold::TypeFoldable;
+        impl<'tcx> mir_ty::fold::TypeFolder<mir_ty::TyCtxt<'tcx>> for ReplaceClosureModel<'tcx> {
+            fn interner(&self) -> mir_ty::TyCtxt<'tcx> {
+                self.tcx
+            }
+
+            fn fold_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+                use mir_ty::fold::TypeSuperFoldable;
+                if let mir_ty::TyKind::Closure(_, args) = ty.kind() {
+                    let args = self
+                        .tcx
+                        .mk_args(&[args.as_closure().tupled_upvars_ty().into()]);
+                    let adt_def = self.tcx.adt_def(self.closure_model_id);
+                    return mir_ty::Ty::new_adt(self.tcx, adt_def, args);
+                }
+                ty.super_fold_with(self)
+            }
+        }
+
+        ty.fold_with(&mut ReplaceClosureModel {
+            tcx: self.tcx,
+            closure_model_id,
+        })
+    }
+
+    fn resolve_model_ty(&self, orig_ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        let ty = self.replace_closure_model(orig_ty);
+
+        let Some(model_ty_def_id) = self.def_ids.model_ty() else {
+            return ty;
+        };
+        let args = self.tcx.mk_args(&[ty.into()]);
+        let projection_ty = mir_ty::Ty::new_projection(self.tcx, model_ty_def_id, args);
+        if let Ok(normalized_ty) = self
+            .tcx
+            .try_normalize_erasing_regions(self.param_env, projection_ty)
+        {
+            return normalized_ty;
+        }
+        ty
+    }
+
+    // TODO: consolidate two impls
+    fn model_adt(
+        &self,
+        adt: &mir_ty::AdtDef<'tcx>,
+        args: &'tcx mir_ty::List<mir_ty::GenericArg<'tcx>>,
+    ) -> Option<rty::Type<rty::Closed>> {
+        if Some(adt.did()) == self.def_ids.int_model() {
+            return Some(rty::Type::int());
+        }
+
+        if Some(adt.did()) == self.def_ids.mut_model() {
+            let elem_ty = self.build(args.type_at(0));
+            return Some(rty::PointerType::mut_to(elem_ty).into());
+        }
+
+        if Some(adt.did()) == self.def_ids.box_model() {
+            let elem_ty = self.build(args.type_at(0));
+            return Some(rty::PointerType::own(elem_ty).into());
+        }
+
+        if Some(adt.did()) == self.def_ids.array_model() {
+            let idx_ty = self.build(args.type_at(0));
+            let elem_ty = self.build(args.type_at(1));
+            return Some(rty::ArrayType::new(idx_ty, elem_ty).into());
+        }
+
+        if Some(adt.did()) == self.def_ids.closure_model() {
+            let tupled_upvars_ty = args.type_at(0);
+            return Some(self.build(tupled_upvars_ty));
+        }
+
+        None
+    }
+
     // TODO: consolidate two impls
     pub fn build(&self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
+        let ty = self.resolve_model_ty(ty);
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
-            mir_ty::TyKind::Uint(_) | mir_ty::TyKind::Int(_) => rty::Type::int(),
             mir_ty::TyKind::Str => rty::Type::string(),
-            mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Not) => {
                 let elem_ty = self.build(*elem_ty);
-                match mutbl {
-                    mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
-                    mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
-                }
+                rty::PointerType::immut_to(elem_ty).into()
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
@@ -138,17 +233,10 @@ impl<'tcx> TypeBuilder<'tcx> {
                 let ret = rty::RefinedType::unrefined(self.build(sig.output()));
                 rty::FunctionType::new(params, ret.vacuous()).into()
             }
-            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
-                rty::PointerType::own(self.build(params.type_at(0))).into()
-            }
-            // TODO: Declare this in std.rs
-            mir_ty::TyKind::Adt(def, params)
-                if self.tcx.is_diagnostic_item(rustc_span::sym::Vec, def.did()) =>
-            {
-                let content = rty::ArrayType::new(rty::Type::Int, self.build(params.type_at(0)));
-                rty::TupleType::new(vec![content.into(), rty::Type::Int]).into()
-            }
             mir_ty::TyKind::Adt(def, params) => {
+                if let Some(model_ty) = self.model_adt(def, params) {
+                    return model_ty;
+                }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx, def.did());
                     let args: IndexVec<_, _> = params
@@ -170,7 +258,6 @@ impl<'tcx> TypeBuilder<'tcx> {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
-            mir_ty::TyKind::Closure(_, args) => self.build(args.as_closure().tupled_upvars_ty()),
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
     }
@@ -245,17 +332,47 @@ where
     R: TemplateRegistry,
     S: TemplateScope,
 {
+    fn model_adt(
+        &mut self,
+        adt: &mir_ty::AdtDef<'tcx>,
+        args: &'tcx mir_ty::List<mir_ty::GenericArg<'tcx>>,
+    ) -> Option<rty::Type<S::Var>> {
+        if Some(adt.did()) == self.inner.def_ids.int_model() {
+            return Some(rty::Type::int());
+        }
+
+        if Some(adt.did()) == self.inner.def_ids.mut_model() {
+            let elem_ty = self.build(args.type_at(0));
+            return Some(rty::PointerType::mut_to(elem_ty).into());
+        }
+
+        if Some(adt.did()) == self.inner.def_ids.box_model() {
+            let elem_ty = self.build(args.type_at(0));
+            return Some(rty::PointerType::own(elem_ty).into());
+        }
+
+        if Some(adt.did()) == self.inner.def_ids.array_model() {
+            let idx_ty = self.build(args.type_at(0));
+            let elem_ty = self.build(args.type_at(1));
+            return Some(rty::ArrayType::new(idx_ty, elem_ty).into());
+        }
+
+        if Some(adt.did()) == self.inner.def_ids.closure_model() {
+            let tupled_upvars_ty = args.type_at(0);
+            return Some(self.build(tupled_upvars_ty));
+        }
+
+        None
+    }
+
     pub fn build(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<S::Var> {
+        let ty = self.inner.resolve_model_ty(ty);
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
-            mir_ty::TyKind::Uint(_) | mir_ty::TyKind::Int(_) => rty::Type::int(),
             mir_ty::TyKind::Str => rty::Type::string(),
-            mir_ty::TyKind::Ref(_, elem_ty, mutbl) => {
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Not) => {
                 let elem_ty = self.build(*elem_ty);
-                match mutbl {
-                    mir_ty::Mutability::Mut => rty::PointerType::mut_to(elem_ty).into(),
-                    mir_ty::Mutability::Not => rty::PointerType::immut_to(elem_ty).into(),
-                }
+                rty::PointerType::immut_to(elem_ty).into()
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
@@ -273,19 +390,10 @@ where
                 let ty = self.inner.for_function_template(self.registry, sig).build();
                 rty::Type::function(ty)
             }
-            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
-                rty::PointerType::own(self.build(params.type_at(0))).into()
-            }
-            mir_ty::TyKind::Adt(def, params)
-                if self
-                    .inner
-                    .tcx
-                    .is_diagnostic_item(rustc_span::sym::Vec, def.did()) =>
-            {
-                let content = rty::ArrayType::new(rty::Type::Int, self.build(params.type_at(0)));
-                rty::TupleType::new(vec![content.into(), rty::Type::Int]).into()
-            }
             mir_ty::TyKind::Adt(def, params) => {
+                if let Some(model_ty) = self.model_adt(def, params) {
+                    return model_ty;
+                }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.inner.tcx, def.did());
                     let args: IndexVec<_, _> =
@@ -305,7 +413,6 @@ where
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
-            mir_ty::TyKind::Closure(_, args) => self.build(args.as_closure().tupled_upvars_ty()),
             kind => unimplemented!("ty: {:?}", kind),
         }
     }

@@ -29,6 +29,9 @@ mod crate_;
 mod did_cache;
 mod local_def;
 
+// TODO: organize structure and remove cross dependency between refine
+pub use did_cache::DefIdCache;
+
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
 }
@@ -209,6 +212,11 @@ impl<'tcx> Analyzer<'tcx> {
         }
     }
 
+    pub fn def_ids(&self) -> did_cache::DefIdCache<'tcx> {
+        // DefIdCache is backed by Rc
+        self.def_ids.clone()
+    }
+
     pub fn add_clause(&mut self, clause: chc::Clause) {
         self.system.borrow_mut().push_clause(clause);
     }
@@ -234,7 +242,7 @@ impl<'tcx> Analyzer<'tcx> {
                     .iter()
                     .map(|field| {
                         let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                        TypeBuilder::new(self.tcx, def_id).build(field_ty)
+                        TypeBuilder::new(self.tcx, self.def_ids(), def_id).build(field_ty)
                     })
                     .collect();
                 rty::EnumVariantDef {
@@ -355,7 +363,7 @@ impl<'tcx> Analyzer<'tcx> {
         def_id: DefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<rty::RefinedType> {
-        let type_builder = TypeBuilder::new(self.tcx, def_id);
+        let type_builder = TypeBuilder::new(self.tcx, self.def_ids(), def_id);
 
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
