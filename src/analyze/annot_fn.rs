@@ -5,6 +5,7 @@ use rustc_hir::{def_id::LocalDefId, HirId};
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
+use crate::analyze::did_cache::DefIdCache;
 use crate::annot::AnnotFormula;
 use crate::chc;
 use crate::rty;
@@ -124,11 +125,12 @@ pub struct AnnotFnTranslator<'tcx> {
     typeck: &'tcx mir_ty::TypeckResults<'tcx>,
     body: &'tcx rustc_hir::Body<'tcx>,
 
+    def_ids: DefIdCache<'tcx>,
     env: HashMap<HirId, chc::Term<rty::FunctionParamIdx>>,
 }
 
 impl<'tcx> AnnotFnTranslator<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, local_def_id: LocalDefId) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, def_ids: DefIdCache<'tcx>, local_def_id: LocalDefId) -> Self {
         let map = tcx.hir();
         let body_id = map.body_owned_by(local_def_id);
         let body = map.body(body_id);
@@ -139,6 +141,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
             local_def_id,
             typeck,
             body,
+            def_ids,
             env: HashMap::default(),
         };
         translator.build_env_from_params();
@@ -166,7 +169,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
             }
             PatKind::TupleStruct(_, subpats, _) | PatKind::Tuple(subpats, _) => {
                 for (idx, subpat) in subpats.iter().enumerate() {
-                    let field_term = param.clone().tuple_proj(idx.into());
+                    let field_term = param.clone().tuple_proj(idx);
                     self.build_env_from_pat(field_term, subpat);
                 }
             }
@@ -220,6 +223,21 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                         let rhs = self.to_formula(rhs);
                         return FormulaOrTerm::Formula(lhs.and(rhs));
                     }
+                    rustc_hir::BinOpKind::Add => {
+                        let lhs = self.to_term(lhs);
+                        let rhs = self.to_term(rhs);
+                        return FormulaOrTerm::Term(lhs.add(rhs));
+                    }
+                    rustc_hir::BinOpKind::Sub => {
+                        let lhs = self.to_term(lhs);
+                        let rhs = self.to_term(rhs);
+                        return FormulaOrTerm::Term(lhs.sub(rhs));
+                    }
+                    rustc_hir::BinOpKind::Mul => {
+                        let lhs = self.to_term(lhs);
+                        let rhs = self.to_term(rhs);
+                        return FormulaOrTerm::Term(lhs.mul(rhs));
+                    }
                     _ => {}
                 }
 
@@ -244,7 +262,23 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 rustc_hir::UnOp::Not => {
                     FormulaOrTerm::Not(Box::new(self.to_formula_or_term(operand)))
                 }
-                _ => unimplemented!("unsupported unary operator in formula: {:?}", op),
+                rustc_hir::UnOp::Deref => {
+                    let operand_ty = self.typeck.expr_ty(operand);
+                    let adt = operand_ty
+                        .ty_adt_def()
+                        .expect("deref operand must be a model type");
+                    let term = self.to_term(operand);
+                    if Some(adt.did()) == self.def_ids.mut_model() {
+                        FormulaOrTerm::Term(term.mut_current())
+                    } else if Some(adt.did()) == self.def_ids.box_model() {
+                        FormulaOrTerm::Term(term.box_current())
+                    } else {
+                        unimplemented!(
+                            "unsupported deref operand type in formula: {:?}",
+                            operand_ty
+                        )
+                    }
+                }
             },
             ExprKind::Lit(lit) => match lit.node {
                 rustc_ast::LitKind::Int(i, _) => {
@@ -268,6 +302,38 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 } else {
                     unimplemented!("unsupported path in formula: {:?}", qpath);
                 }
+            }
+            ExprKind::Tup(exprs) => {
+                let terms = exprs.iter().map(|e| self.to_term(e)).collect();
+                FormulaOrTerm::Term(chc::Term::tuple(terms))
+            }
+            ExprKind::Field(expr, field) => {
+                let index = field
+                    .name
+                    .as_str()
+                    .parse::<usize>()
+                    .expect("tuple field index must be a non-negative integer");
+                let term = self.to_term(expr);
+                FormulaOrTerm::Term(term.tuple_proj(index))
+            }
+            ExprKind::Call(func_expr, args) => {
+                if let ExprKind::Path(qpath) = &func_expr.kind {
+                    let res = self.typeck.qpath_res(qpath, func_expr.hir_id);
+                    if let rustc_hir::def::Res::Def(_, def_id) = res {
+                        if Some(def_id) == self.def_ids.mut_model_new() {
+                            assert_eq!(args.len(), 2, "Mut::new takes exactly 2 arguments");
+                            let t1 = self.to_term(&args[0]);
+                            let t2 = self.to_term(&args[1]);
+                            return FormulaOrTerm::Term(chc::Term::mut_(t1, t2));
+                        }
+                        if Some(def_id) == self.def_ids.box_model_new() {
+                            assert_eq!(args.len(), 1, "Box::new takes exactly 1 argument");
+                            let t = self.to_term(&args[0]);
+                            return FormulaOrTerm::Term(chc::Term::box_(t));
+                        }
+                    }
+                }
+                unimplemented!("unsupported call in formula: {:?}", func_expr)
             }
             ExprKind::Block(block, _) => {
                 if block.stmts.is_empty() {

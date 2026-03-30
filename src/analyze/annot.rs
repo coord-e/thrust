@@ -109,6 +109,22 @@ pub fn closure_model_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn mut_model_new_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("mut_new"),
+    ]
+}
+
+pub fn box_model_new_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("box_new"),
+    ]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via

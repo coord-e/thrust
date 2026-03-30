@@ -319,7 +319,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         );
 
         if let Some(trait_item_id) = self.trait_item_id() {
-            tracing::info!("trait item fonud: {:?}", trait_item_id);
+            tracing::info!("trait item found: {:?}", trait_item_id);
             let trait_require_annot = self.ctx.extract_require_annot(
                 trait_item_id,
                 &param_resolver,

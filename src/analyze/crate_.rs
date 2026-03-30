@@ -95,7 +95,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         if analyzer.is_annotated_as_formula_fn() {
-            let formula_fn = AnnotFnTranslator::new(self.tcx, local_def_id).to_formula_fn();
+            let formula_fn =
+                AnnotFnTranslator::new(self.tcx, self.ctx.def_ids(), local_def_id).to_formula_fn();
             self.ctx
                 .register_formula_fn(local_def_id.to_def_id(), formula_fn);
             self.skip_analysis.insert(local_def_id);
