@@ -260,7 +260,17 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                     FormulaOrTerm::Term(operand.neg())
                 }
                 rustc_hir::UnOp::Not => {
-                    FormulaOrTerm::Not(Box::new(self.to_formula_or_term(operand)))
+                    let operand_ty = self.typeck.expr_ty(operand);
+                    match operand_ty.ty_adt_def() {
+                        Some(adt) if Some(adt.did()) == self.def_ids.mut_model() => {
+                            let operand = self.to_term(operand);
+                            FormulaOrTerm::Term(operand.mut_final())
+                        }
+                        _ => {
+                            let operand = self.to_formula_or_term(operand);
+                            FormulaOrTerm::Not(Box::new(operand))
+                        }
+                    }
                 }
                 rustc_hir::UnOp::Deref => {
                     let operand_ty = self.typeck.expr_ty(operand);
