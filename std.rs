@@ -55,25 +55,29 @@ mod thrust_models {
         type Ty = bool;
     }
 
-    impl Model for () {
-        type Ty = ();
-    }
-
     impl<T> Model for model::Closure<T> {
         type Ty = model::Closure<T>;
     }
 
-    impl<T0> Model for (T0,) where T0: Model {
-        type Ty = (<T0 as Model>::Ty,);
+    macro_rules! impl_tuple_model {
+        ($($T:ident),*) => {
+            impl<$($T),*> Model for ($($T,)*) where $($T: Model),* {
+                type Ty = ($(<$T as Model>::Ty,)*);
+            }
+        };
     }
 
-    impl<T0, T1> Model for (T0, T1) where T0: Model, T1: Model {
-        type Ty = (<T0 as Model>::Ty, <T1 as Model>::Ty);
-    }
-
-    impl<T0, T1, T2> Model for (T0, T1, T2) where T0: Model, T1: Model, T2: Model {
-        type Ty = (<T0 as Model>::Ty, <T1 as Model>::Ty, <T2 as Model>::Ty);
-    }
+    impl_tuple_model!();
+    impl_tuple_model!(T0);
+    impl_tuple_model!(T0, T1);
+    impl_tuple_model!(T0, T1, T2);
+    impl_tuple_model!(T0, T1, T2, T3);
+    impl_tuple_model!(T0, T1, T2, T3, T4);
+    impl_tuple_model!(T0, T1, T2, T3, T4, T5);
+    impl_tuple_model!(T0, T1, T2, T3, T4, T5, T6);
+    impl_tuple_model!(T0, T1, T2, T3, T4, T5, T6, T7);
+    impl_tuple_model!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
+    impl_tuple_model!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9);
 
     impl<'a, T> Model for &'a mut T where T: Model {
         type Ty = model::Mut<<T as Model>::Ty>;
