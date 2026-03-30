@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
-use rustc_span::def_id::{DefId, LocalDefId};
+use rustc_span::def_id::LocalDefId;
 
 use crate::analyze;
 use crate::chc;
@@ -23,8 +23,8 @@ use crate::rty::{self, ClauseBuilderExt as _};
 pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
-    trusted: HashSet<DefId>,
-    predicates: HashSet<DefId>,
+
+    skip_analysis: HashSet<LocalDefId>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -75,17 +75,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         if analyzer.is_annotated_as_trusted() {
             assert!(analyzer.is_fully_annotated());
-            self.trusted.insert(local_def_id.to_def_id());
+            self.skip_analysis.insert(local_def_id);
         }
 
         if analyzer.is_annotated_as_extern_spec_fn() {
             assert!(analyzer.is_fully_annotated());
-            self.trusted.insert(local_def_id.to_def_id());
+            self.skip_analysis.insert(local_def_id);
+        }
+
+        if analyzer.is_annotated_as_ignored() {
+            self.skip_analysis.insert(local_def_id);
+            return;
         }
 
         if analyzer.is_annotated_as_predicate() {
-            self.predicates.insert(local_def_id.to_def_id());
             analyzer.analyze_predicate_definition(local_def_id);
+            self.skip_analysis.insert(local_def_id);
+            return;
         }
 
         use mir_ty::TypeVisitableExt as _;
@@ -107,14 +113,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if !self.tcx.def_kind(*local_def_id).is_fn_like() {
                 continue;
             };
-            if self.trusted.contains(&local_def_id.to_def_id()) {
-                tracing::info!(?local_def_id, "trusted");
+            if self.skip_analysis.contains(local_def_id) {
                 continue;
             }
-            if self.predicates.contains(&local_def_id.to_def_id()) {
-                tracing::info!(?local_def_id, "predicate");
-                continue;
-            }
+
             let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
                 // when the local_def_id is deferred it would be skipped
                 continue;
@@ -221,13 +223,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn new(ctx: &'ctx mut analyze::Analyzer<'tcx>) -> Self {
         let tcx = ctx.tcx;
-        let trusted = HashSet::default();
-        let predicates = HashSet::default();
+        let skip_analysis = HashSet::default();
         Self {
             ctx,
             tcx,
-            trusted,
-            predicates,
+            skip_analysis,
         }
     }
 
