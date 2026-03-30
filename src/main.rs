@@ -25,6 +25,10 @@ impl Callbacks for CompilerCalls {
         compiler: &Compiler,
         queries: &'tcx Queries<'tcx>,
     ) -> Compilation {
+        if matches!(std::env::var("THRUST_NO_INJECT_STD").as_deref(), Ok("1")) {
+            return Compilation::Continue;
+        }
+
         let mut result = queries.parse().unwrap();
         let krate = result.get_mut();
 
