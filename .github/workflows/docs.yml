@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v6
       - run: cargo doc --no-deps --document-private-items
       - run: echo '<meta http-equiv="refresh" content="0;url=thrust">' > target/doc/index.html
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v4
         with:
           path: 'target/doc'
