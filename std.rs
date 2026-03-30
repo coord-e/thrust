@@ -115,7 +115,7 @@ fn _extern_spec_box_new<T>(x: T) -> Box<T> where T: thrust_models::Model {
 #[thrust::requires(true)]
 #[thrust::ensures(*x == ^y && *y == ^x)]
 fn _extern_spec_std_mem_swap<T>(x: &mut T, y: &mut T) where T: thrust_models::Model {
-    std::mem::swap(x, y);
+    std::mem::swap(x, y)
 }
 
 #[thrust::extern_spec_fn]

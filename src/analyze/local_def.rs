@@ -379,59 +379,49 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     /// Extract the target DefId from `#[thrust::extern_spec_fn]` function.
+    ///
+    /// The target is identified as the tail call expression (last expression without
+    /// semicolon) in the function body block.
     pub fn extern_spec_fn_target_def_id(&self) -> DefId {
-        struct ExtractDefId<'tcx> {
-            tcx: TyCtxt<'tcx>,
-            outer_def_id: LocalDefId,
-            inner_def_id: Option<DefId>,
-        }
-
-        impl<'tcx> rustc_hir::intravisit::Visitor<'tcx> for ExtractDefId<'tcx> {
-            type NestedFilter = rustc_middle::hir::nested_filter::OnlyBodies;
-
-            fn nested_visit_map(&mut self) -> Self::Map {
-                self.tcx.hir()
-            }
-
-            fn visit_qpath(
-                &mut self,
-                qpath: &rustc_hir::QPath<'tcx>,
-                hir_id: rustc_hir::HirId,
-                _span: rustc_span::Span,
-            ) {
-                let typeck_result = self.tcx.typeck(self.outer_def_id);
-                if let rustc_hir::def::Res::Def(_, def_id) = typeck_result.qpath_res(qpath, hir_id)
-                {
-                    if matches!(
-                        self.tcx.def_kind(def_id),
-                        rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
-                    ) {
-                        assert!(self.inner_def_id.is_none(), "invalid extern_spec_fn");
-
-                        let args = typeck_result.node_args(hir_id);
-                        let param_env = self.tcx.param_env(self.outer_def_id);
-                        let instance =
-                            mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
-                        if let Some(instance) = instance {
-                            self.inner_def_id = Some(instance.def_id());
-                        } else {
-                            self.inner_def_id = Some(def_id);
-                        }
-                    }
-                }
-            }
-        }
-
-        use rustc_hir::intravisit::Visitor as _;
-        let mut visitor = ExtractDefId {
-            tcx: self.tcx,
-            outer_def_id: self.local_def_id,
-            inner_def_id: None,
+        let node = self.tcx.hir_node_by_def_id(self.local_def_id);
+        let rustc_hir::Node::Item(item) = node else {
+            panic!("extern_spec_fn must be a function item");
         };
-        if let rustc_hir::Node::Item(item) = self.tcx.hir_node_by_def_id(self.local_def_id) {
-            visitor.visit_item(item);
+        let rustc_hir::ItemKind::Fn(_, _, body_id) = item.kind else {
+            panic!("extern_spec_fn must be a function");
+        };
+
+        let body = self.tcx.hir().body(body_id);
+
+        // The body is a block; the tail expression is the function call to the target.
+        let rustc_hir::ExprKind::Block(block, _) = &body.value.kind else {
+            panic!("extern_spec_fn body must be a block");
+        };
+        let tail_expr = block
+            .expr
+            .expect("extern_spec_fn block must end with a tail call expression");
+
+        let rustc_hir::ExprKind::Call(func_expr, _) = &tail_expr.kind else {
+            panic!("extern_spec_fn tail expression must be a function call");
+        };
+        let rustc_hir::ExprKind::Path(qpath) = &func_expr.kind else {
+            panic!("extern_spec_fn call must be a path expression");
+        };
+
+        let typeck_result = self.tcx.typeck(self.local_def_id);
+        let hir_id = func_expr.hir_id;
+        let rustc_hir::def::Res::Def(_, def_id) = typeck_result.qpath_res(qpath, hir_id) else {
+            panic!("extern_spec_fn call must resolve to a definition");
+        };
+
+        let args = typeck_result.node_args(hir_id);
+        let param_env = self.tcx.param_env(self.local_def_id);
+        let instance = mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+        if let Some(instance) = instance {
+            instance.def_id()
+        } else {
+            def_id
         }
-        visitor.inner_def_id.expect("invalid extern_spec_fn")
     }
 
     fn is_mut_param(&self, param_idx: rty::FunctionParamIdx) -> bool {
