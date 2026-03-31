@@ -281,6 +281,13 @@ fn _extern_spec_box_new<T>(x: T) -> Box<T> where T: thrust_models::Model {
 
 #[thrust::extern_spec_fn]
 #[thrust::requires(true)]
+#[thrust::ensures(result == (x == y))]
+fn _extern_spec_box_partialeq_eq<T>(x: &Box<T>, y: &Box<T>) -> bool where T: thrust_models::Model + PartialEq {
+    <Box<T> as PartialEq>::eq(x, y)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
 #[thrust::ensures(*x == ^y && *y == ^x)]
 fn _extern_spec_std_mem_swap<T>(x: &mut T, y: &mut T) where T: thrust_models::Model {
     std::mem::swap(x, y)
@@ -291,6 +298,13 @@ fn _extern_spec_std_mem_swap<T>(x: &mut T, y: &mut T) where T: thrust_models::Mo
 #[thrust::ensures(^dest == src && result == *dest)]
 fn _extern_spec_std_mem_replace<T>(dest: &mut T, src: T) -> T where T: thrust_models::Model {
     std::mem::replace(dest, src)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(result == (x == y))]
+fn _extern_spec_option_partialeq_eq<T>(x: &Option<T>, y: &Option<T>) -> bool where T: thrust_models::Model + PartialEq {
+    <Option<T> as PartialEq>::eq(x, y)
 }
 
 #[thrust::extern_spec_fn]
@@ -380,6 +394,15 @@ fn _extern_spec_option_as_ref<T>(opt: &Option<T>) -> Option<&T> where T: thrust_
 )]
 fn _extern_spec_option_as_mut<T>(opt: &mut Option<T>) -> Option<&mut T> where T: thrust_models::Model {
     Option::as_mut(opt)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust::requires(true)]
+#[thrust::ensures(result == (x == y))]
+fn _extern_spec_result_partialeq_eq<T, E>(x: &Result<T, E>, y: &Result<T, E>) -> bool
+  where T: thrust_models::Model + PartialEq, E: thrust_models::Model + PartialEq
+{
+    <Result<T, E> as PartialEq>::eq(x, y)
 }
 
 #[thrust::extern_spec_fn]
