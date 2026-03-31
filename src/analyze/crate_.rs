@@ -94,6 +94,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return;
         }
 
+        if analyzer.is_annotated_as_formula_fn() {
+            self.ctx.register_formula_fn(local_def_id);
+            self.skip_analysis.insert(local_def_id);
+            return;
+        }
+
         let target_def_id = if analyzer.is_annotated_as_extern_spec_fn() {
             analyzer.extern_spec_fn_target_def_id()
         } else {

@@ -12,19 +12,139 @@ mod thrust_models {
         #[thrust::def::int_model]
         pub struct Int;
 
+        impl<T> PartialEq<T> for Int where T: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &T) -> bool {
+                unimplemented!()
+            }
+        }
+
+        impl<T> PartialOrd<T> for Int where T: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn partial_cmp(&self, _other: &T) -> Option<std::cmp::Ordering> {
+                unimplemented!()
+            }
+        }
+
+        impl<T> std::ops::Add<T> for Int where T: super::Model<Ty = Self> {
+            type Output = Self;
+
+            #[thrust::ignored]
+            fn add(self, _rhs: T) -> Self::Output {
+                unimplemented!()
+            }
+        }
+
+        impl<T> std::ops::Sub<T> for Int where T: super::Model<Ty = Self> {
+            type Output = Self;
+
+            #[thrust::ignored]
+            fn sub(self, _rhs: T) -> Self::Output {
+                unimplemented!()
+            }
+        }
+
+        impl<T> std::ops::Mul<T> for Int where T: super::Model<Ty = Self> {
+            type Output = Self;
+
+            #[thrust::ignored]
+            fn mul(self, _rhs: T) -> Self::Output {
+                unimplemented!()
+            }
+        }
+
+        impl std::ops::Neg for Int {
+            type Output = Self;
+
+            #[thrust::ignored]
+            fn neg(self) -> Self::Output {
+                unimplemented!()
+            }
+        }
+
         #[thrust::def::mut_model]
         pub struct Mut<T>(PhantomData<T>);
+
+        impl<T> Mut<T> {
+            #[allow(dead_code)]
+            #[thrust::def::mut_new]
+            #[thrust::ignored]
+            pub fn new(_a: T, _b: T) -> Self {
+                unimplemented!()
+            }
+        }
+
+        impl<T, U> PartialEq<U> for Mut<T> where U: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &U) -> bool {
+                unimplemented!()
+            }
+        }
+
+        impl<T> std::ops::Deref for Mut<T> {
+            type Target = T;
+
+            #[thrust::ignored]
+            fn deref(&self) -> &Self::Target {
+                unimplemented!()
+            }
+        }
+
+        impl<T> std::ops::Not for Mut<T> {
+            type Output = T;
+
+            #[thrust::ignored]
+            fn not(self) -> Self::Output {
+                unimplemented!()
+            }
+        }
 
         #[thrust::def::box_model]
         pub struct Box<T>(PhantomData<T>);
 
+        impl<T> Box<T> {
+            #[allow(dead_code)]
+            #[thrust::def::box_new]
+            #[thrust::ignored]
+            pub fn new(_x: T) -> Self {
+                unimplemented!()
+            }
+        }
+
+        impl<T, U> PartialEq<U> for Box<T> where U: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &U) -> bool {
+                unimplemented!()
+            }
+        }
+
+        impl<T> std::ops::Deref for Box<T> {
+            type Target = T;
+
+            #[thrust::ignored]
+            fn deref(&self) -> &Self::Target {
+                unimplemented!()
+            }
+        }
+
         #[thrust::def::array_model]
         pub struct Array<I, T>(PhantomData<I>, PhantomData<T>);
+
+        impl<I, T, U> PartialEq<U> for Array<I, T> where U: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &U) -> bool {
+                unimplemented!()
+            }
+        }
 
         #[thrust::def::closure_model]
         pub struct Closure<T>(PhantomData<T>);
 
         pub struct Vec<T>(pub Array<Int, T>, pub usize);
+    }
+
+    impl Model for model::Int {
+        type Ty = model::Int;
     }
 
     impl Model for isize {
@@ -83,6 +203,10 @@ mod thrust_models {
         type Ty = model::Mut<<T as Model>::Ty>;
     }
 
+    impl<T> Model for model::Mut<T> {
+        type Ty = model::Mut<T>;
+    }
+
     impl<'a, T> Model for &'a T where T: Model {
         type Ty = &'a <T as Model>::Ty;
     }
@@ -91,8 +215,16 @@ mod thrust_models {
         type Ty = model::Box<<T as Model>::Ty>;
     }
 
+    impl<T> Model for model::Box<T> {
+        type Ty = model::Box<T>;
+    }
+
     impl<T> Model for Vec<T> where T: Model {
         type Ty = model::Vec<<T as Model>::Ty>;
+    }
+
+    impl<T> Model for model::Vec<T> {
+        type Ty = model::Vec<T>;
     }
 
     impl<T> Model for Option<T> where T: Model {
@@ -115,7 +247,7 @@ fn _extern_spec_box_new<T>(x: T) -> Box<T> where T: thrust_models::Model {
 #[thrust::requires(true)]
 #[thrust::ensures(*x == ^y && *y == ^x)]
 fn _extern_spec_std_mem_swap<T>(x: &mut T, y: &mut T) where T: thrust_models::Model {
-    std::mem::swap(x, y);
+    std::mem::swap(x, y)
 }
 
 #[thrust::extern_spec_fn]

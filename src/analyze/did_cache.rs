@@ -19,6 +19,9 @@ struct DefIds {
     box_model: OnceCell<Option<DefId>>,
     array_model: OnceCell<Option<DefId>>,
     closure_model: OnceCell<Option<DefId>>,
+
+    mut_model_new: OnceCell<Option<DefId>>,
+    box_model_new: OnceCell<Option<DefId>>,
 }
 
 /// Retrieves and caches well-known [`DefId`]s.
@@ -90,6 +93,14 @@ impl<'tcx> DefIdCache<'tcx> {
                     }
                 }
             }
+            if let rustc_hir::ItemKind::Impl(impl_) = item.kind {
+                for impl_item_ref in impl_.items {
+                    let def_id = impl_item_ref.id.owner_id.to_def_id();
+                    if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
+                        return Some(def_id);
+                    }
+                }
+            }
         }
         None
     }
@@ -134,5 +145,19 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .closure_model
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_model_path()))
+    }
+
+    pub fn mut_model_new(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .mut_model_new
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::mut_model_new_path()))
+    }
+
+    pub fn box_model_new(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .box_model_new
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::box_model_new_path()))
     }
 }

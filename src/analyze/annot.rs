@@ -49,6 +49,18 @@ pub fn ignored_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("ignored")]
 }
 
+pub fn formula_fn_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("formula_fn")]
+}
+
+pub fn requires_path_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("requires_path")]
+}
+
+pub fn ensures_path_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("ensures_path")]
+}
+
 pub fn model_ty_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
@@ -94,6 +106,22 @@ pub fn closure_model_path() -> [Symbol; 3] {
         Symbol::intern("thrust"),
         Symbol::intern("def"),
         Symbol::intern("closure_model"),
+    ]
+}
+
+pub fn mut_model_new_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("mut_new"),
+    ]
+}
+
+pub fn box_model_new_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("box_new"),
     ]
 }
 
