@@ -190,6 +190,11 @@ impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
 
 pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
 
+#[derive(Debug, Clone)]
+struct DeferredFormulaFnDef<'tcx> {
+    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, annot_fn::FormulaFn<'tcx>>>>,
+}
+
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -202,7 +207,7 @@ pub struct Analyzer<'tcx> {
     defs: HashMap<DefId, DefTy<'tcx>>,
 
     /// Collection of functions with `#[thrust::formula_fn]` attribute.
-    formula_fns: HashMap<DefId, annot_fn::FormulaFn<'tcx>>,
+    formula_fns: HashMap<LocalDefId, DeferredFormulaFnDef<'tcx>>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -391,6 +396,30 @@ impl<'tcx> Analyzer<'tcx> {
         })
     }
 
+    pub fn formula_fn_with_args(
+        &self,
+        local_def_id: LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Option<annot_fn::FormulaFn<'tcx>> {
+        let deferred_formula_fn = self.formula_fns.get(&local_def_id)?;
+
+        let deferred_formula_fn_cache = Rc::clone(&deferred_formula_fn.cache);
+        if let Some(formula_fn) = deferred_formula_fn_cache.borrow().get(&generic_args) {
+            return Some(formula_fn.clone());
+        }
+
+        let translator = annot_fn::AnnotFnTranslator::new(self.tcx, local_def_id)
+            .with_generic_args(generic_args)
+            .with_def_id_cache(self.def_ids());
+        let formula_fn = translator.to_formula_fn();
+        deferred_formula_fn_cache
+            .borrow_mut()
+            .insert(generic_args, formula_fn.clone());
+
+        tracing::info!(?local_def_id, formula_fn = %formula_fn.display(), ?generic_args, "formula_fn_with_args");
+        Some(formula_fn)
+    }
+
     pub fn def_ty_with_args(
         &mut self,
         def_id: DefId,
@@ -443,9 +472,14 @@ impl<'tcx> Analyzer<'tcx> {
         Some(expected)
     }
 
-    pub fn register_formula_fn(&mut self, def_id: DefId, formula_fn: annot_fn::FormulaFn<'tcx>) {
-        tracing::info!(def_id = ?def_id, formula_fn = %formula_fn.display(), "register_formula_fn");
-        self.formula_fns.insert(def_id, formula_fn);
+    pub fn register_formula_fn(&mut self, local_def_id: LocalDefId) {
+        tracing::info!(?local_def_id, "register_formula_fn");
+        self.formula_fns.insert(
+            local_def_id,
+            DeferredFormulaFnDef {
+                cache: Rc::new(RefCell::new(HashMap::new())),
+            },
+        );
     }
 
     pub fn register_basic_block_ty(
@@ -589,11 +623,13 @@ impl<'tcx> Analyzer<'tcx> {
         None
     }
 
+    // TODO: reduce number of args
     fn extract_require_annot<T>(
         &self,
         local_def_id: LocalDefId,
         resolver: T,
         self_type_name: Option<String>,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver<Output = rty::FunctionParamIdx>,
@@ -615,10 +651,16 @@ impl<'tcx> Analyzer<'tcx> {
         if let Some(formula_def_id) =
             self.extract_path_with_attr(local_def_id, &analyze::annot::requires_path_path())
         {
+            let Some(formula_def_id) = formula_def_id.as_local() else {
+                panic!(
+                    "require annotation with path is expected to refer to a local def, but found: {:?}",
+                    formula_def_id
+                );
+            };
             if require_annot.is_some() {
                 unimplemented!();
             }
-            let Some(formula_fn) = self.formula_fns.get(&formula_def_id) else {
+            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
                 panic!(
                     "require annotation {:?} is not a formula function",
                     formula_def_id
@@ -630,11 +672,13 @@ impl<'tcx> Analyzer<'tcx> {
         require_annot
     }
 
+    // TODO: reduce number of args
     fn extract_ensure_annot<T>(
         &self,
         local_def_id: LocalDefId,
         resolver: T,
         self_type_name: Option<String>,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver<Output = rty::RefinedTypeVar<rty::FunctionParamIdx>>,
@@ -657,10 +701,16 @@ impl<'tcx> Analyzer<'tcx> {
         if let Some(formula_def_id) =
             self.extract_path_with_attr(local_def_id, &analyze::annot::ensures_path_path())
         {
+            let Some(formula_def_id) = formula_def_id.as_local() else {
+                panic!(
+                    "ensure annotation with path is expected to refer to a local def, but found: {:?}",
+                    formula_def_id
+                );
+            };
             if ensure_annot.is_some() {
                 unimplemented!();
             }
-            let Some(formula_fn) = self.formula_fns.get(&formula_def_id) else {
+            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
                 panic!(
                     "ensure annotation {:?} is not a formula function",
                     formula_def_id

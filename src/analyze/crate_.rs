@@ -6,7 +6,7 @@ use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::LocalDefId;
 
-use crate::analyze::{self, annot_fn::AnnotFnTranslator};
+use crate::analyze;
 use crate::chc;
 use crate::rty::{self, ClauseBuilderExt as _};
 
@@ -95,10 +95,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         if analyzer.is_annotated_as_formula_fn() {
-            let formula_fn =
-                AnnotFnTranslator::new(self.tcx, self.ctx.def_ids(), local_def_id).to_formula_fn();
-            self.ctx
-                .register_formula_fn(local_def_id.to_def_id(), formula_fn);
+            self.ctx.register_formula_fn(local_def_id);
             self.skip_analysis.insert(local_def_id);
             return;
         }

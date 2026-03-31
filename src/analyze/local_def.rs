@@ -48,6 +48,8 @@ pub struct Analyzer<'tcx, 'ctx> {
     local_def_id: LocalDefId,
 
     body: Body<'tcx>,
+    /// to substitute HIR types during translation in [`crate::analyze::annot_fn`]
+    generic_args: mir_ty::GenericArgsRef<'tcx>,
     drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints>,
     type_builder: TypeBuilder<'tcx>,
 }
@@ -310,12 +312,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.local_def_id,
             &param_resolver,
             self_type_name.clone(),
+            self.generic_args,
         );
 
         let mut ensure_annot = self.ctx.extract_ensure_annot(
             self.local_def_id,
             &result_param_resolver,
             self_type_name.clone(),
+            self.generic_args,
         );
 
         if let Some(trait_item_id) = self.trait_item_id() {
@@ -324,11 +328,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 trait_item_id,
                 &param_resolver,
                 self_type_name.clone(),
+                self.generic_args,
             );
             let trait_ensure_annot = self.ctx.extract_ensure_annot(
                 trait_item_id,
                 &result_param_resolver,
                 self_type_name.clone(),
+                self.generic_args,
             );
 
             assert!(require_annot.is_none() || trait_require_annot.is_none());
@@ -851,17 +857,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let body = tcx.optimized_mir(local_def_id.to_def_id()).clone();
         let drop_points = Default::default();
         let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
+        let generic_args = tcx.mk_args(&[]);
         Self {
             ctx,
             tcx,
             local_def_id,
             body,
+            generic_args,
             drop_points,
             type_builder,
         }
     }
 
     pub fn generic_args(&mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> &mut Self {
+        self.generic_args = generic_args;
         self.body =
             mir_ty::EarlyBinder::bind(self.body.clone()).instantiate(self.tcx, generic_args);
         self

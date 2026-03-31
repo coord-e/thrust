@@ -124,28 +124,41 @@ pub struct AnnotFnTranslator<'tcx> {
 
     typeck: &'tcx mir_ty::TypeckResults<'tcx>,
     body: &'tcx rustc_hir::Body<'tcx>,
+    generic_args: mir_ty::GenericArgsRef<'tcx>,
 
     def_ids: DefIdCache<'tcx>,
     env: HashMap<HirId, chc::Term<rty::FunctionParamIdx>>,
 }
 
 impl<'tcx> AnnotFnTranslator<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, def_ids: DefIdCache<'tcx>, local_def_id: LocalDefId) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, local_def_id: LocalDefId) -> Self {
         let map = tcx.hir();
         let body_id = map.body_owned_by(local_def_id);
         let body = map.body(body_id);
-
+        let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
+        let def_ids = DefIdCache::new(tcx);
         let mut translator = Self {
             tcx,
             local_def_id,
             typeck,
             body,
+            generic_args,
             def_ids,
             env: HashMap::default(),
         };
         translator.build_env_from_params();
         translator
+    }
+
+    pub fn with_generic_args(mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> Self {
+        self.generic_args = generic_args;
+        self
+    }
+
+    pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>) -> Self {
+        self.def_ids = def_ids;
+        self
     }
 
     fn build_env_from_params(&mut self) {
@@ -177,12 +190,19 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
         }
     }
 
+    fn expr_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> mir_ty::Ty<'tcx> {
+        let ty = self.typeck.expr_ty(expr);
+        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
+        let param_env = mir_ty::ParamEnv::reveal_all();
+        self.tcx.normalize_erasing_regions(param_env, instantiated)
+    }
+
     pub fn to_formula_fn(&self) -> FormulaFn<'tcx> {
         let formula = self.to_formula(self.body.value);
         let params = self
             .tcx
             .fn_sig(self.local_def_id.to_def_id())
-            .instantiate_identity()
+            .instantiate(self.tcx, self.generic_args)
             .skip_binder()
             .inputs()
             .to_vec();
@@ -260,7 +280,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                     FormulaOrTerm::Term(operand.neg())
                 }
                 rustc_hir::UnOp::Not => {
-                    let operand_ty = self.typeck.expr_ty(operand);
+                    let operand_ty = self.expr_ty(operand);
                     match operand_ty.ty_adt_def() {
                         Some(adt) if Some(adt.did()) == self.def_ids.mut_model() => {
                             let operand = self.to_term(operand);
@@ -273,7 +293,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                     }
                 }
                 rustc_hir::UnOp::Deref => {
-                    let operand_ty = self.typeck.expr_ty(operand);
+                    let operand_ty = self.expr_ty(operand);
                     let adt = operand_ty
                         .ty_adt_def()
                         .expect("deref operand must be a model type");
