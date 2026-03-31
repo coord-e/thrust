@@ -234,6 +234,13 @@ mod thrust_models {
     impl<T, E> Model for Result<T, E> where T: Model, E: Model {
         type Ty = Result<<T as Model>::Ty, <E as Model>::Ty>;
     }
+
+    #[allow(dead_code)]
+    #[thrust::def::exists]
+    #[thrust::ignored]
+    pub fn exists<T>(_x: T) -> bool {
+        unimplemented!()
+    }
 }
 
 #[thrust::extern_spec_fn]
