@@ -39,10 +39,16 @@ pub fn mir_borrowck_skip_formula_fn(
     local_def_id: rustc_span::def_id::LocalDefId,
 ) -> rustc_middle::query::queries::mir_borrowck::ProvidedValue {
     // TODO: unify impl with local_def::Analyzer
+    // if the def is closure defined in formula_fn
+    let root_def_id = tcx.typeck_root_def_id(local_def_id.to_def_id());
     let is_annotated_as_formula_fn = tcx
         .get_attrs_by_path(local_def_id.to_def_id(), &analyze::annot::formula_fn_path())
         .next()
-        .is_some();
+        .is_some()
+        || tcx
+            .get_attrs_by_path(root_def_id, &analyze::annot::formula_fn_path())
+            .next()
+            .is_some();
 
     if is_annotated_as_formula_fn {
         tracing::debug!(?local_def_id, "skipping borrow check for formula fn");
