@@ -100,6 +100,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return;
         }
 
+        // skip analysis if the def is closure defined in skipped def
+        if let Some(root_local_def_id) = self
+            .tcx
+            .typeck_root_def_id(local_def_id.to_def_id())
+            .as_local()
+        {
+            if root_local_def_id != local_def_id && self.skip_analysis.contains(&root_local_def_id)
+            {
+                self.skip_analysis.insert(local_def_id);
+                return;
+            }
+        }
+
         let target_def_id = if analyzer.is_annotated_as_extern_spec_fn() {
             analyzer.extern_spec_fn_target_def_id()
         } else {
