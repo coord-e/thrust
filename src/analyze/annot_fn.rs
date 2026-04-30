@@ -393,6 +393,23 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 let term = self.to_term(expr);
                 FormulaOrTerm::Term(term.tuple_proj(index))
             }
+            ExprKind::Index(array, index, _) => {
+                let array_term = self.to_term(array);
+                let index_term = self.to_term(index);
+                FormulaOrTerm::Term(array_term.select(index_term))
+            }
+            ExprKind::MethodCall(method, receiver, args, _) => {
+                if let Some(def_id) = self.typeck.type_dependent_def_id(hir.hir_id) {
+                    if Some(def_id) == self.def_ids.array_model_store() {
+                        assert_eq!(args.len(), 2, "array_store takes exactly 2 arguments");
+                        let array_term = self.to_term(receiver);
+                        let index_term = self.to_term(&args[0]);
+                        let value_term = self.to_term(&args[1]);
+                        return FormulaOrTerm::Term(array_term.store(index_term, value_term));
+                    }
+                }
+                unimplemented!("unsupported method call in formula: {:?}", method)
+            }
             ExprKind::Call(func_expr, args) => {
                 if let ExprKind::Path(qpath) = &func_expr.kind {
                     let res = self.typeck.qpath_res(qpath, func_expr.hir_id);
@@ -441,16 +458,20 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                             let t = self.to_term(&args[0]);
                             return FormulaOrTerm::Term(chc::Term::box_(t));
                         }
-                        if matches!(
-                            def_kind,
-                            rustc_hir::def::DefKind::Ctor(rustc_hir::def::CtorOf::Variant, _)
-                        ) {
-                            let field_terms = args.iter().map(|arg| self.to_term(arg)).collect();
-                            return FormulaOrTerm::Term(self.variant_ctor_term(
-                                def_id,
-                                self.expr_ty(hir),
-                                field_terms,
-                            ));
+                        if let rustc_hir::def::DefKind::Ctor(ctor_of, _) = def_kind {
+                            let terms = args.iter().map(|e| self.to_term(e)).collect();
+                            match ctor_of {
+                                rustc_hir::def::CtorOf::Variant => {
+                                    return FormulaOrTerm::Term(self.variant_ctor_term(
+                                        def_id,
+                                        self.expr_ty(hir),
+                                        terms,
+                                    ));
+                                }
+                                rustc_hir::def::CtorOf::Struct => {
+                                    return FormulaOrTerm::Term(chc::Term::tuple(terms));
+                                }
+                            }
                         }
                     }
                 }

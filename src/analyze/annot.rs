@@ -125,6 +125,14 @@ pub fn box_model_new_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn array_model_store_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("array_store"),
+    ]
+}
+
 pub fn exists_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
