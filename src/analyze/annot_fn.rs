@@ -333,10 +333,13 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 }
                 rustc_hir::UnOp::Deref => {
                     let operand_ty = self.expr_ty(operand);
+                    let term = self.to_term(operand);
+                    if matches!(operand_ty.kind(), mir_ty::TyKind::Ref(_, _, mir_ty::Mutability::Not)) {
+                        return FormulaOrTerm::Term(term.box_current());
+                    }
                     let adt = operand_ty
                         .ty_adt_def()
                         .expect("deref operand must be a model type");
-                    let term = self.to_term(operand);
                     if Some(adt.did()) == self.def_ids.mut_model() {
                         FormulaOrTerm::Term(term.mut_current())
                     } else if Some(adt.did()) == self.def_ids.box_model() {
@@ -349,6 +352,10 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                     }
                 }
             },
+            ExprKind::AddrOf(rustc_hir::BorrowKind::Ref, rustc_hir::Mutability::Not, operand) => {
+                let operand = self.to_term(operand);
+                FormulaOrTerm::Term(operand.boxed())
+            }
             ExprKind::Lit(lit) => match lit.node {
                 rustc_ast::LitKind::Int(i, _) => {
                     let n = i64::try_from(i.get())
