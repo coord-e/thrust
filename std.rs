@@ -137,10 +137,35 @@ mod thrust_models {
             }
         }
 
+        impl<I, T> std::ops::Index<I> for Array<I, T> {
+            type Output = T;
+
+            #[thrust::ignored]
+            fn index(&self, _index: I) -> &Self::Output {
+                unimplemented!()
+            }
+        }
+
+        impl<I, T> Array<I, T> {
+            #[allow(dead_code)]
+            #[thrust::def::array_store]
+            #[thrust::ignored]
+            pub fn store(&self, _index: I, _value: T) -> Self {
+                unimplemented!()
+            }
+        }
+
         #[thrust::def::closure_model]
         pub struct Closure<T>(PhantomData<T>);
 
-        pub struct Vec<T>(pub Array<Int, T>, pub usize);
+        pub struct Vec<T>(pub Array<Int, T>, pub Int);
+
+        impl<T, U> PartialEq<U> for Vec<T> where U: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &U) -> bool {
+                unimplemented!()
+            }
+        }
     }
 
     impl Model for model::Int {
@@ -217,6 +242,10 @@ mod thrust_models {
 
     impl<T> Model for model::Box<T> {
         type Ty = model::Box<T>;
+    }
+
+    impl<I, T> Model for model::Array<I, T> {
+        type Ty = model::Array<I, T>;
     }
 
     impl<T> Model for Vec<T> where T: Model {

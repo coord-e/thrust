@@ -333,10 +333,16 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 }
                 rustc_hir::UnOp::Deref => {
                     let operand_ty = self.expr_ty(operand);
+                    let term = self.to_term(operand);
+                    if matches!(
+                        operand_ty.kind(),
+                        mir_ty::TyKind::Ref(_, _, mir_ty::Mutability::Not)
+                    ) {
+                        return FormulaOrTerm::Term(term.box_current());
+                    }
                     let adt = operand_ty
                         .ty_adt_def()
                         .expect("deref operand must be a model type");
-                    let term = self.to_term(operand);
                     if Some(adt.did()) == self.def_ids.mut_model() {
                         FormulaOrTerm::Term(term.mut_current())
                     } else if Some(adt.did()) == self.def_ids.box_model() {
@@ -349,6 +355,10 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                     }
                 }
             },
+            ExprKind::AddrOf(rustc_hir::BorrowKind::Ref, rustc_hir::Mutability::Not, operand) => {
+                let operand = self.to_term(operand);
+                FormulaOrTerm::Term(operand.boxed())
+            }
             ExprKind::Lit(lit) => match lit.node {
                 rustc_ast::LitKind::Int(i, _) => {
                     let n = i64::try_from(i.get())
@@ -385,6 +395,23 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                     .expect("tuple field index must be a non-negative integer");
                 let term = self.to_term(expr);
                 FormulaOrTerm::Term(term.tuple_proj(index))
+            }
+            ExprKind::Index(array, index, _) => {
+                let array_term = self.to_term(array);
+                let index_term = self.to_term(index);
+                FormulaOrTerm::Term(array_term.select(index_term))
+            }
+            ExprKind::MethodCall(method, receiver, args, _) => {
+                if let Some(def_id) = self.typeck.type_dependent_def_id(hir.hir_id) {
+                    if Some(def_id) == self.def_ids.array_model_store() {
+                        assert_eq!(args.len(), 2, "array_store takes exactly 2 arguments");
+                        let array_term = self.to_term(receiver);
+                        let index_term = self.to_term(&args[0]);
+                        let value_term = self.to_term(&args[1]);
+                        return FormulaOrTerm::Term(array_term.store(index_term, value_term));
+                    }
+                }
+                unimplemented!("unsupported method call in formula: {:?}", method)
             }
             ExprKind::Call(func_expr, args) => {
                 if let ExprKind::Path(qpath) = &func_expr.kind {
@@ -434,16 +461,20 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                             let t = self.to_term(&args[0]);
                             return FormulaOrTerm::Term(chc::Term::box_(t));
                         }
-                        if matches!(
-                            def_kind,
-                            rustc_hir::def::DefKind::Ctor(rustc_hir::def::CtorOf::Variant, _)
-                        ) {
-                            let field_terms = args.iter().map(|arg| self.to_term(arg)).collect();
-                            return FormulaOrTerm::Term(self.variant_ctor_term(
-                                def_id,
-                                self.expr_ty(hir),
-                                field_terms,
-                            ));
+                        if let rustc_hir::def::DefKind::Ctor(ctor_of, _) = def_kind {
+                            let terms = args.iter().map(|e| self.to_term(e)).collect();
+                            match ctor_of {
+                                rustc_hir::def::CtorOf::Variant => {
+                                    return FormulaOrTerm::Term(self.variant_ctor_term(
+                                        def_id,
+                                        self.expr_ty(hir),
+                                        terms,
+                                    ));
+                                }
+                                rustc_hir::def::CtorOf::Struct => {
+                                    return FormulaOrTerm::Term(chc::Term::tuple(terms));
+                                }
+                            }
                         }
                     }
                 }
