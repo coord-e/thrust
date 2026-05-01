@@ -1,7 +1,9 @@
 //@check-pass
 
-#[thrust::requires(true)]
-#[thrust::ensures(x == <*x, y>)]
+use thrust_models::model::Mut;
+
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(x == Mut::new(*x, y))]
 fn f(x: &mut i64, y: i64) {
     *x = y;
 }

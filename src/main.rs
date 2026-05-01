@@ -66,8 +66,36 @@ impl Callbacks for CompilerCalls {
     }
 }
 
+fn thrust_macros_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    // When thrust-macros is a cargo dependency it lands in deps/ with a hash
+    // suffix (e.g. libthrust_macros-<hash>.so), so check both locations.
+    let search_dirs = [dir.to_path_buf(), dir.join("deps")];
+    for search_dir in &search_dirs {
+        for ext in ["so", "dylib", "dll"] {
+            // First try the exact name (e.g. when built standalone).
+            let candidate = search_dir.join(format!("libthrust_macros.{ext}"));
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            // Then scan for libthrust_macros-<hash>.<ext>.
+            if let Ok(entries) = std::fs::read_dir(search_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.starts_with("libthrust_macros-") && name.ends_with(ext) {
+                        return Some(entry.path());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn main() {
-    let args = std::env::args().collect::<Vec<_>>();
+    let mut args = std::env::args().collect::<Vec<_>>();
 
     use tracing_subscriber::{filter::EnvFilter, prelude::*};
     tracing_subscriber::registry()
@@ -79,6 +107,14 @@ pub fn main() {
                 .with_filter(EnvFilter::from_default_env()),
         )
         .init();
+
+    if let Some(path) = thrust_macros_path() {
+        args.push("--extern".to_owned());
+        args.push(format!("thrust_macros={}", path.display()));
+        tracing::debug!("linking thrust_macros from {}", path.display());
+    } else {
+        tracing::warn!("could not locate thrust_macros library");
+    }
 
     let code =
         rustc_driver::catch_with_exit_code(|| RunCompiler::new(&args, &mut CompilerCalls {}).run());

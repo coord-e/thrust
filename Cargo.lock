@@ -711,9 +711,19 @@ dependencies = [
  "process_control",
  "tempfile",
  "thiserror 2.0.18",
+ "thrust-macros",
  "tracing",
  "tracing-subscriber",
  "ui_test",
+]
+
+[[package]]
+name = "thrust-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

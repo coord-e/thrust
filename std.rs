@@ -273,179 +273,232 @@ mod thrust_models {
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(result == <x>)]
-fn _extern_spec_box_new<T>(x: T) -> Box<T> where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == thrust_models::model::Box::new(x))]
+fn _extern_spec_box_new<T>(x: T) -> Box<T> where T: thrust_models::Model, T::Ty: PartialEq {
     Box::new(x)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(*x == ^y && *y == ^x)]
-fn _extern_spec_std_mem_swap<T>(x: &mut T, y: &mut T) where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == (x == y))]
+fn _extern_spec_box_partialeq_eq<T>(x: &Box<T>, y: &Box<T>) -> bool
+  where T: thrust_models::Model + PartialEq, T::Ty: PartialEq
+{
+    <Box<T> as PartialEq>::eq(x, y)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(*x == !y && *y == !x)]
+fn _extern_spec_std_mem_swap<T>(x: &mut T, y: &mut T) where T: thrust_models::Model, T::Ty: PartialEq {
     std::mem::swap(x, y)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(^dest == src && result == *dest)]
-fn _extern_spec_std_mem_replace<T>(dest: &mut T, src: T) -> T where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(!dest == src && result == *dest)]
+fn _extern_spec_std_mem_replace<T>(dest: &mut T, src: T) -> T where T: thrust_models::Model, T::Ty: PartialEq {
     std::mem::replace(dest, src)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(opt != std::option::Option::<T0>::None())]
-#[thrust::ensures(std::option::Option::<T0>::Some(result) == opt)]
-fn _extern_spec_option_unwrap<T>(opt: Option<T>) -> T where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == (x == y))]
+fn _extern_spec_option_partialeq_eq<T>(x: &Option<T>, y: &Option<T>) -> bool
+  where T: thrust_models::Model + PartialEq, T::Ty: PartialEq
+{
+    <Option<T> as PartialEq>::eq(x, y)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(opt != None)]
+#[thrust_macros::ensures(Some(result) == opt)]
+fn _extern_spec_option_unwrap<T>(opt: Option<T>) -> T where T: thrust_models::Model, T::Ty: PartialEq {
     Option::unwrap(opt)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (*opt == std::option::Option::<T0>::None() && result == true)
-    || (*opt != std::option::Option::<T0>::None() && result == false)
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    (*opt == None && result == true)
+    || (*opt != None && result == false)
 )]
-fn _extern_spec_option_is_none<T>(opt: &Option<T>) -> bool where T: thrust_models::Model {
+fn _extern_spec_option_is_none<T>(opt: &Option<T>) -> bool where T: thrust_models::Model, T::Ty: PartialEq {
     Option::is_none(opt)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (*opt == std::option::Option::<T0>::None() && result == false)
-    || (*opt != std::option::Option::<T0>::None() && result == true)
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    (*opt == None && result == false)
+    || (*opt != None && result == true)
 )]
-fn _extern_spec_option_is_some<T>(opt: &Option<T>) -> bool where T: thrust_models::Model {
+fn _extern_spec_option_is_some<T>(opt: &Option<T>) -> bool where T: thrust_models::Model, T::Ty: PartialEq {
     Option::is_some(opt)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (opt != std::option::Option::<T0>::None() && std::option::Option::<T0>::Some(result) == opt)
-    || (opt == std::option::Option::<T0>::None() && result == default)
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    (opt != None && Some(result) == opt)
+    || (opt == None && result == default)
 )]
-fn _extern_spec_option_unwrap_or<T>(opt: Option<T>, default: T) -> T where T: thrust_models::Model {
+fn _extern_spec_option_unwrap_or<T>(opt: Option<T>, default: T) -> T where T: thrust_models::Model, T::Ty: PartialEq {
     Option::unwrap_or(opt, default)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (exists x:T0. opt == std::option::Option::<T0>::Some(x) && result == std::result::Result::<T0, T1>::Ok(x))
-    || (opt == std::option::Option::<T0>::None() && result == std::result::Result::<T0, T1>::Err(err))
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    (thrust_models::exists(|x| opt == Some(x) && result == Ok(x)))
+    || (opt == None && result == Err(err))
 )]
-fn _extern_spec_option_ok_or<T, E>(opt: Option<T>, err: E) -> Result<T, E> where T: thrust_models::Model, E: thrust_models::Model {
+fn _extern_spec_option_ok_or<T, E>(opt: Option<T>, err: E) -> Result<T, E>
+    where T: thrust_models::Model, T::Ty: PartialEq,
+          E: thrust_models::Model, E::Ty: PartialEq,
+{
     Option::ok_or(opt, err)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(^opt == std::option::Option::<T0>::None() && result == *opt)]
-fn _extern_spec_option_take<T>(opt: &mut Option<T>) -> Option<T> where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(!opt == None && result == *opt)]
+fn _extern_spec_option_take<T>(opt: &mut Option<T>) -> Option<T> where T: thrust_models::Model, T::Ty: PartialEq {
     Option::take(opt)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(^opt == std::option::Option::<T0>::Some(src) && result == *opt)]
-fn _extern_spec_option_replace<T>(opt: &mut Option<T>, src: T) -> Option<T> where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(!opt == Some(src) && result == *opt)]
+fn _extern_spec_option_replace<T>(opt: &mut Option<T>, src: T) -> Option<T>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
     Option::replace(opt, src)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (exists x:T0. opt == <std::option::Option::<T0>::Some(x)> && result == std::option::Option::<&T0>::Some(<x>))
-    || (opt == <std::option::Option::<T0>::None()> && result == std::option::Option::<&T0>::None())
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    thrust_models::exists(|x| opt == &Some(x) && result == Some(&x))
+    || (opt == &None && result == None)
 )]
-fn _extern_spec_option_as_ref<T>(opt: &Option<T>) -> Option<&T> where T: thrust_models::Model {
+fn _extern_spec_option_as_ref<T>(opt: &Option<T>) -> Option<&T> where T: thrust_models::Model, T::Ty: PartialEq {
     Option::as_ref(opt)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (exists x1:T0, x2:T0.
-      *opt == std::option::Option::<T0>::Some(x1) &&
-      ^opt == std::option::Option::<T0>::Some(x2) &&
-      result == std::option::Option::<&mut T0>::Some(<x1, x2>)
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    thrust_models::exists(|x1, x2|
+      *opt == Some(x1) &&
+      !opt == Some(x2) &&
+      result == Some(thrust_models::model::Mut::new(x1, x2))
     )
     || (
-      *opt == std::option::Option::<T0>::None() &&
-      ^opt == std::option::Option::<T0>::None() &&
-      result == std::option::Option::<&mut T0>::None()
+      *opt == None &&
+      !opt == None &&
+      result == None
     )
 )]
-fn _extern_spec_option_as_mut<T>(opt: &mut Option<T>) -> Option<&mut T> where T: thrust_models::Model {
+fn _extern_spec_option_as_mut<T>(opt: &mut Option<T>) -> Option<&mut T>
+  where T: thrust_models::Model, T::Ty: PartialEq
+{
     Option::as_mut(opt)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(exists x:T0. res == std::result::Result::<T0, T1>::Ok(x))]
-#[thrust::ensures(std::result::Result::<T0, T1>::Ok(result) == res)]
-fn _extern_spec_result_unwrap<T, E: std::fmt::Debug>(res: Result<T, E>) -> T where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == (x == y))]
+fn _extern_spec_result_partialeq_eq<T, E>(x: &Result<T, E>, y: &Result<T, E>) -> bool
+  where T: thrust_models::Model + PartialEq, T::Ty: PartialEq,
+        E: thrust_models::Model + PartialEq, E::Ty: PartialEq,
+{
+    <Result<T, E> as PartialEq>::eq(x, y)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(thrust_models::exists(|x| res == Ok(x)))]
+#[thrust_macros::ensures(Ok(result) == res)]
+fn _extern_spec_result_unwrap<T, E: std::fmt::Debug>(res: Result<T, E>) -> T
+  where T: thrust_models::Model, T::Ty: PartialEq,
+        E: thrust_models::Model, E::Ty: PartialEq,
+{
     Result::unwrap(res)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(exists x:T1. res == std::result::Result::<T0, T1>::Err(x))]
-#[thrust::ensures(std::result::Result::<T0, T1>::Err(result) == res)]
-fn _extern_spec_result_unwrap_err<T: std::fmt::Debug, E>(res: Result<T, E>) -> E where T: thrust_models::Model, E: thrust_models::Model {
+#[thrust_macros::requires(thrust_models::exists(|x| res == Err(x)))]
+#[thrust_macros::ensures(Err(result) == res)]
+fn _extern_spec_result_unwrap_err<T: std::fmt::Debug, E>(res: Result<T, E>) -> E
+  where T: thrust_models::Model, T::Ty: PartialEq,
+        E: thrust_models::Model, E::Ty: PartialEq,
+{
     Result::unwrap_err(res)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (exists x:T0. res == std::result::Result::<T0, T1>::Ok(x) && result == std::option::Option::<T0>::Some(x))
-    || (exists x:T1. res == std::result::Result::<T0, T1>::Err(x) && result == std::option::Option::<T0>::None())
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    thrust_models::exists(|x| res == Ok(x) && result == Some(x))
+    || thrust_models::exists(|x| res == Err(x) && result == None)
 )]
-fn _extern_spec_result_ok<T, E>(res: Result<T, E>) -> Option<T> where T: thrust_models::Model, E: thrust_models::Model {
+fn _extern_spec_result_ok<T, E>(res: Result<T, E>) -> Option<T>
+  where T: thrust_models::Model, T::Ty: PartialEq,
+        E: thrust_models::Model, E::Ty: PartialEq,
+{
     Result::ok(res)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (exists x:T0. res == std::result::Result::<T0, T1>::Ok(x) && result == std::option::Option::<T1>::None())
-    || (exists x:T1. res == std::result::Result::<T0, T1>::Err(x) && result == std::option::Option::<T1>::Some(x))
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    thrust_models::exists(|x| res == Ok(x) && result == None)
+    || thrust_models::exists(|x| res == Err(x) && result == Some(x))
 )]
-fn _extern_spec_result_err<T, E>(res: Result<T, E>) -> Option<E> where T: thrust_models::Model, E: thrust_models::Model {
+fn _extern_spec_result_err<T, E>(res: Result<T, E>) -> Option<E>
+  where T: thrust_models::Model, T::Ty: PartialEq,
+        E: thrust_models::Model, E::Ty: PartialEq,
+{
     Result::err(res)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (exists x:T0. *res == std::result::Result::<T0, T1>::Ok(x) && result == true)
-    || (exists x:T1. *res == std::result::Result::<T0, T1>::Err(x) && result == false)
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    thrust_models::exists(|x| *res == Ok(x) && result == true)
+    || thrust_models::exists(|x| *res == Err(x) && result == false)
 )]
-fn _extern_spec_result_is_ok<T, E>(res: &Result<T, E>) -> bool where T: thrust_models::Model, E: thrust_models::Model {
+fn _extern_spec_result_is_ok<T, E>(res: &Result<T, E>) -> bool
+  where T: thrust_models::Model, T::Ty: PartialEq,
+        E: thrust_models::Model, E::Ty: PartialEq,
+{
     Result::is_ok(res)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (exists x:T0. *res == std::result::Result::<T0, T1>::Ok(x) && result == false)
-    || (exists x:T1. *res == std::result::Result::<T0, T1>::Err(x) && result == true)
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    thrust_models::exists(|x| *res == Ok(x) && result == false)
+    || thrust_models::exists(|x| *res == Err(x) && result == true)
 )]
-fn _extern_spec_result_is_err<T, E>(res: &Result<T, E>) -> bool where T: thrust_models::Model, E: thrust_models::Model {
+fn _extern_spec_result_is_err<T, E>(res: &Result<T, E>) -> bool
+  where T: thrust_models::Model, T::Ty: PartialEq,
+        E: thrust_models::Model, E::Ty: PartialEq,
+{
     Result::is_err(res)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)] // TODO: require x != i32::MIN
-#[thrust::ensures(result >= 0 && (result == x || result == -x))]
+#[thrust_macros::requires(true)] // TODO: require x != i32::MIN
+#[thrust_macros::ensures(result >= 0 && (result == x || result == -x))]
 fn _extern_spec_i32_abs(x: i32) -> i32 {
     i32::abs(x)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
     (x >= y && result == (x - y))
     || (x < y && result == (y - x))
 )]
@@ -454,109 +507,113 @@ fn _extern_spec_i32_abs_diff(x: i32, y: i32) -> u32 {
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures((x == 0 && result == 0) || (x > 0 && result == 1) || (x < 0 && result == -1))]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures((x == 0 && result == 0) || (x > 0 && result == 1) || (x < 0 && result == -1))]
 fn _extern_spec_i32_signum(x: i32) -> i32 {
     i32::signum(x)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures((x < 0 && result == false) || (x >= 0 && result == true))]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures((x < 0 && result == false) || (x >= 0 && result == true))]
 fn _extern_spec_i32_is_positive(x: i32) -> bool {
     i32::is_positive(x)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures((x <= 0 && result == true) || (x > 0 && result == false))]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures((x <= 0 && result == true) || (x > 0 && result == false))]
 fn _extern_spec_i32_is_negative(x: i32) -> bool {
     i32::is_negative(x)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(*result.1 == 0)]
-fn _extern_spec_vec_new<T>() -> Vec<T> where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result.1 == 0)]
+fn _extern_spec_vec_new<T>() -> Vec<T> where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::<T>::new()
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(^vec == ((*(*vec).0).store(*(*vec).1, elem), *(*vec).1 + 1))]
-fn _extern_spec_vec_push<T>(vec: &mut Vec<T>, elem: T) where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(!vec == thrust_models::model::Vec((*vec).0.store((*vec).1, elem), (*vec).1 + 1))]
+fn _extern_spec_vec_push<T>(vec: &mut Vec<T>, elem: T)
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
     Vec::push(vec, elem)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(result == *(*vec).1)]
-fn _extern_spec_vec_len<T>(vec: &Vec<T>) -> usize where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == vec.1)]
+fn _extern_spec_vec_len<T>(vec: &Vec<T>) -> usize where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::len(vec)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(index < *(*vec).1)]
-#[thrust::ensures(*result == (*(*vec).0).select(index))]
-fn _extern_spec_vec_index<T>(vec: &Vec<T>, index: usize) -> &T where T: thrust_models::Model {
+#[thrust_macros::requires(index < vec.1)]
+#[thrust_macros::ensures(*result == vec.0[index])]
+fn _extern_spec_vec_index<T>(vec: &Vec<T>, index: usize) -> &T where T: thrust_models::Model, T::Ty: PartialEq {
     <Vec<T> as std::ops::Index<usize>>::index(vec, index)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(index < *(*vec).1)]
-#[thrust::ensures(
-    *result == (*(*vec).0).select(index) &&
-    ^result == (*(^vec).0).select(index) &&
-    ^vec == (<(*(*vec).0).store(index, ^result)>, (*vec).1)
+#[thrust_macros::requires(index < (*vec).1)]
+#[thrust_macros::ensures(
+    *result == (*vec).0[index] &&
+    !result == (!vec).0[index] &&
+    !vec == thrust_models::model::Vec((*vec).0.store(index, !result), (*vec).1)
 )]
-fn _extern_spec_vec_index_mut<T>(vec: &mut Vec<T>, index: usize) -> &mut T where T: thrust_models::Model {
+fn _extern_spec_vec_index_mut<T>(vec: &mut Vec<T>, index: usize) -> &mut T
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
     <Vec<T> as std::ops::IndexMut<usize>>::index_mut(vec, index)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(*(^vec).1 == 0)]
-fn _extern_spec_vec_clear<T>(vec: &mut Vec<T>) where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures((!vec).1 == 0)]
+fn _extern_spec_vec_clear<T>(vec: &mut Vec<T>) where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::clear(vec)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
-    (^vec).0 == (*vec).0 && (
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    (!vec).0 == (*vec).0 && (
         (
-            *(*vec).1 > 0 &&
-            *(^vec).1 == *(*vec).1 - 1 &&
-            result == std::option::Option::<T0>::Some((*(*vec).0).select(*(*vec).1 - 1))
+            (*vec).1 > 0 &&
+            (!vec).1 == (*vec).1 - 1 &&
+            result == Some((*vec).0[(*vec).1 - 1])
         ) || (
-            *(*vec).1 == 0 &&
-            *(^vec).1 == 0 &&
-            result == std::option::Option::<T0>::None()
+            (*vec).1 == 0 &&
+            (!vec).1 == 0 &&
+            result == None
         )
     )
 )]
-fn _extern_spec_vec_pop<T>(vec: &mut Vec<T>) -> Option<T> where T: thrust_models::Model {
+fn _extern_spec_vec_pop<T>(vec: &mut Vec<T>) -> Option<T> where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::pop(vec)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(result == (*(*vec).1 == 0))]
-fn _extern_spec_vec_is_empty<T>(vec: &Vec<T>) -> bool where T: thrust_models::Model {
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == ((*vec).1 == 0))]
+fn _extern_spec_vec_is_empty<T>(vec: &Vec<T>) -> bool where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::is_empty(vec)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
     (
-        *(*vec).1 > len &&
-        ^vec == (<(*vec).0>, <len>)
+        (*vec).1 > len &&
+        !vec == thrust_models::model::Vec((*vec).0, len)
     ) || (
-        *(*vec).1 <= len &&
-        ^vec == *vec
+        (*vec).1 <= len &&
+        !vec == *vec
     )
 )]
-fn _extern_spec_vec_truncate<T>(vec: &mut Vec<T>, len: usize) where T: thrust_models::Model {
+fn _extern_spec_vec_truncate<T>(vec: &mut Vec<T>, len: usize) where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::truncate(vec, len)
 }
