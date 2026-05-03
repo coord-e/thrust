@@ -1,9 +1,10 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
+use std::collections::HashSet;
 use syn::{
-    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, ItemFn, ReturnType,
-    Type, TypeParamBound, WherePredicate,
+    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, ItemFn,
+    LifetimeParam, ReturnType, Type, TypeParamBound, WherePredicate,
 };
 
 #[proc_macro_attribute]
@@ -116,6 +117,9 @@ struct ExpandedTokens {
 
     model_ty_params: TokenStream2,
     ret_model_ty: Type,
+
+    extern_spec_inputs: TokenStream2,
+    call_args: TokenStream2,
 }
 
 impl quote::ToTokens for ExpandedTokens {
@@ -134,17 +138,27 @@ impl ExpandedTokens {
         let requires_name = format_ident!("_thrust_requires_{}", name);
         let ensures_name = format_ident!("_thrust_ensures_{}", name);
 
-        let generics = &func.sig.generics;
-        let def_generics = generic_params_tokens(generics);
-        let turbofish = generic_turbofish(generics);
-        let model_preds = model_where_predicates(generics);
-        let extended_where = extended_where_clause(generics, &model_preds);
+        // Turbofish from original generics (before elaboration) — used at call sites.
+        let turbofish = generic_turbofish(&func.sig.generics);
 
-        let model_ty_params = fn_params_with_model_ty(&func.sig.inputs);
+        // Clone sig and elaborate: insert fresh lifetimes into reference-typed params.
+        let mut helper_inputs = func.sig.inputs.clone();
+        let mut helper_generics = func.sig.generics.clone();
+        elaborate_typed_param_lifetimes(&mut helper_inputs, &mut helper_generics);
+
+        let def_generics = generic_params_tokens(&helper_generics);
+
+        let fn_bounds = fn_has_fn_bounds(&func.sig.generics);
+        let model_preds = model_predicates_from_params(&helper_inputs, &fn_bounds);
+        let extended_where = extended_where_clause(&helper_generics, &model_preds);
+
+        let model_ty_params = fn_params_with_model_ty(&helper_inputs);
         let ret_model_ty: Type = match &func.sig.output {
             ReturnType::Default => syn::parse_quote!(<() as thrust_models::Model>::Ty),
             ReturnType::Type(_, ty) => syn::parse_quote!(<#ty as thrust_models::Model>::Ty),
         };
+
+        let (extern_spec_inputs, call_args) = rewrite_inputs_for_call(&helper_inputs);
 
         Self {
             func,
@@ -157,6 +171,8 @@ impl ExpandedTokens {
             extended_where,
             model_ty_params,
             ret_model_ty,
+            extern_spec_inputs,
+            call_args,
         }
     }
 
@@ -225,7 +241,8 @@ impl ExpandedTokens {
         let turbofish = &self.turbofish;
 
         let name = &self.func.sig.ident;
-        let (extern_spec_inputs, call_args) = rewrite_inputs_for_call(&self.func.sig.inputs);
+        let extern_spec_inputs = &self.extern_spec_inputs;
+        let call_args = &self.call_args;
 
         quote! {
             #func
@@ -304,15 +321,70 @@ fn generic_turbofish(generics: &Generics) -> TokenStream2 {
     quote!(::<#(#args),*>)
 }
 
-/// Returns `T: thrust_models::Model` predicates for every type param that does not
-/// already carry an `Fn`, `FnOnce`, or `FnMut` bound.
-fn model_where_predicates(generics: &Generics) -> Vec<WherePredicate> {
+/// Returns a fresh lifetime not already declared in `generics.params`.
+/// Tries 'a, 'b, 'c, ... in order.
+fn fresh_lifetime(generics: &Generics) -> syn::Lifetime {
+    let existing: HashSet<String> = generics
+        .params
+        .iter()
+        .filter_map(|p| {
+            if let GenericParam::Lifetime(lp) = p {
+                Some(lp.lifetime.ident.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    for c in b'a'..=b'z' {
+        let name = String::from(c as char);
+        if !existing.contains(&name) {
+            return syn::Lifetime::new(&format!("'{}", name), proc_macro2::Span::call_site());
+        }
+    }
+    syn::Lifetime::new("'_thrust_lt", proc_macro2::Span::call_site())
+}
+
+/// Inserts a lifetime param after existing lifetimes but before type/const params.
+fn insert_lifetime_param(generics: &mut Generics, lt: syn::Lifetime) {
+    let pos = generics
+        .params
+        .iter()
+        .take_while(|p| matches!(p, GenericParam::Lifetime(_)))
+        .count();
+    generics
+        .params
+        .insert(pos, GenericParam::Lifetime(LifetimeParam::new(lt)));
+}
+
+/// Inserts fresh lifetimes into reference-typed params that have no explicit lifetime.
+/// Mutates `inputs` (the type in-place) and `generics` (adds LifetimeParam).
+/// Skips receiver params — those are handled separately in Step 2.
+fn elaborate_typed_param_lifetimes(
+    inputs: &mut Punctuated<FnArg, syn::token::Comma>,
+    generics: &mut Generics,
+) {
+    for arg in inputs.iter_mut() {
+        let FnArg::Typed(pt) = arg else { continue };
+        let Type::Reference(ref_ty) = pt.ty.as_mut() else {
+            continue;
+        };
+        if ref_ty.lifetime.is_some() {
+            continue;
+        }
+        let lt = fresh_lifetime(generics);
+        ref_ty.lifetime = Some(lt.clone());
+        insert_lifetime_param(generics, lt);
+    }
+}
+
+/// Returns the idents of type params that have Fn/FnOnce/FnMut bounds.
+fn fn_has_fn_bounds(generics: &Generics) -> HashSet<String> {
     generics
         .params
         .iter()
-        .flat_map(|p| {
+        .filter_map(|p| {
             let GenericParam::Type(tp) = p else {
-                return vec![];
+                return None;
             };
             let has_fn_bound = tp.bounds.iter().any(|b| {
                 let TypeParamBound::Trait(tb) = b else {
@@ -323,15 +395,76 @@ fn model_where_predicates(generics: &Generics) -> Vec<WherePredicate> {
                 })
             });
             if has_fn_bound {
-                return vec![];
+                Some(tp.ident.to_string())
+            } else {
+                None
             }
-            let ident = &tp.ident;
-            vec![
-                syn::parse_quote!(#ident: thrust_models::Model),
-                syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq),
-            ]
         })
         .collect()
+}
+
+/// Returns `T: thrust_models::Model` predicates derived from actual parameter types.
+/// Collects the leaf type-variable idents from each parameter's type (recursing through
+/// references, tuples, and generic args) and emits model predicates for each unique ident.
+/// This includes idents that come from an outer `impl<T>` block and are therefore not
+/// present in the function's own generic param list.
+/// Skips idents that match Fn-bound type params.
+/// Receiver params are skipped — handled separately in Step 2.
+fn model_predicates_from_params(
+    inputs: &Punctuated<FnArg, syn::token::Comma>,
+    fn_bounds: &HashSet<String>,
+) -> Vec<WherePredicate> {
+    let mut seen = HashSet::new();
+    let mut preds = Vec::new();
+    for arg in inputs {
+        let FnArg::Typed(pt) = arg else { continue };
+        collect_type_var_predicates(&pt.ty, fn_bounds, &mut seen, &mut preds);
+    }
+    preds
+}
+
+/// Recursively collects model where-predicates for every plain type-variable ident
+/// reachable from `ty` (through references, tuples, and angle-bracketed generics).
+fn collect_type_var_predicates(
+    ty: &Type,
+    fn_bounds: &HashSet<String>,
+    seen: &mut HashSet<String>,
+    preds: &mut Vec<WherePredicate>,
+) {
+    match ty {
+        Type::Path(tp) if tp.qself.is_none() => {
+            let segs = &tp.path.segments;
+            if segs.len() == 1 && matches!(segs[0].arguments, syn::PathArguments::None) {
+                // Plain ident — a type variable (or concrete type like i32; harmless either way).
+                let name = segs[0].ident.to_string();
+                if !fn_bounds.contains(&name) && seen.insert(name) {
+                    let ident = &segs[0].ident;
+                    preds.push(syn::parse_quote!(#ident: thrust_models::Model));
+                    preds.push(syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
+                }
+            } else {
+                // Compound path (e.g. Option<T>, Vec<T>) — recurse into generic args.
+                for seg in segs {
+                    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                        for arg in &args.args {
+                            if let syn::GenericArgument::Type(inner) = arg {
+                                collect_type_var_predicates(inner, fn_bounds, seen, preds);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Type::Reference(ref_ty) => {
+            collect_type_var_predicates(&ref_ty.elem, fn_bounds, seen, preds);
+        }
+        Type::Tuple(tuple_ty) => {
+            for elem in &tuple_ty.elems {
+                collect_type_var_predicates(elem, fn_bounds, seen, preds);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Builds `where <original predicates>, <model predicates>`.
@@ -352,9 +485,7 @@ fn extended_where_clause(generics: &Generics, model_preds: &[WherePredicate]) ->
 
 /// Maps each typed function parameter `x: T` to `x: <T as thrust_models::Model>::Ty`.
 /// Receiver (`self`) parameters are skipped.
-fn fn_params_with_model_ty(
-    inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
-) -> TokenStream2 {
+fn fn_params_with_model_ty(inputs: &Punctuated<FnArg, syn::token::Comma>) -> TokenStream2 {
     let params: Vec<TokenStream2> = inputs
         .iter()
         .filter_map(|arg| {
@@ -371,7 +502,7 @@ fn fn_params_with_model_ty(
 /// For the extern_spec wrapper: replaces every typed parameter with a fresh `_arg_N` ident,
 /// returning `(rewritten_inputs_tokens, call_args_tokens)`.
 fn rewrite_inputs_for_call(
-    inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
+    inputs: &Punctuated<FnArg, syn::token::Comma>,
 ) -> (TokenStream2, TokenStream2) {
     let mut rewritten: Vec<TokenStream2> = Vec::new();
     let mut call_args: Vec<TokenStream2> = Vec::new();
