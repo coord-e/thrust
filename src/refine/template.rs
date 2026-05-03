@@ -432,7 +432,6 @@ where
     where
         I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
     {
-        // this is necessary for local_def::Analyzer::elaborate_unused_args
         let mut live_locals: Vec<_> = live_locals.into_iter().collect();
         live_locals.sort_by_key(|(local, _)| *local);
 
