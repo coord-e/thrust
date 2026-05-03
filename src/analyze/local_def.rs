@@ -276,6 +276,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .trait_item_def_id
             .and_then(|id| id.as_local())?;
 
+        // Default/provided trait methods have trait_item_def_id == self; skip them.
+        if trait_item_id == self.local_def_id {
+            return None;
+        }
+
         Some(trait_item_id)
     }
 
@@ -402,6 +407,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             rustc_hir::Node::ImplItem(impl_item) => {
                 let rustc_hir::ImplItemKind::Fn(_, body_id) = impl_item.kind else {
                     panic!("extern_spec_fn must be a function");
+                };
+                body_id
+            }
+            rustc_hir::Node::TraitItem(trait_item) => {
+                let rustc_hir::TraitItemKind::Fn(_, rustc_hir::TraitFn::Provided(body_id)) = trait_item.kind else {
+                    panic!("extern_spec_fn must be a function with a body");
                 };
                 body_id
             }

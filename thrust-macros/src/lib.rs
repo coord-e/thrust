@@ -3,49 +3,79 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use std::collections::HashSet;
 use syn::{
-    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, ItemFn,
-    LifetimeParam, ReturnType, Type, TypeParamBound, WherePredicate,
+    punctuated::Punctuated, FnArg, GenericParam, Generics, ItemFn,
+    LifetimeParam, ReturnType, TraitItemFn, Type, TypeParamBound, WherePredicate,
 };
 use syn::visit_mut::VisitMut;
 
 #[proc_macro_attribute]
 pub fn requires(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expr = TokenStream2::from(attr);
-    let mut func = parse_macro_input!(item as ItemFn);
 
-    let (req_expr, ens_expr) = match extract_requires_ensures(&mut func) {
-        Ok((req, ens)) => (req, ens),
-        Err(e) => return e.to_compile_error().into(),
-    };
-    func.attrs.push(syn::parse_quote!(
-        #[::thrust_macros::_requires_ensures((#req_expr) && (#expr), #ens_expr)]
-    ));
+    if let Ok(mut func) = syn::parse::<ItemFn>(item.clone()) {
+        let (req_expr, ens_expr) = match extract_requires_ensures(&mut func.attrs) {
+            Ok(r) => r,
+            Err(e) => return e.to_compile_error().into(),
+        };
+        func.attrs.push(syn::parse_quote!(
+            #[::thrust_macros::_requires_ensures((#req_expr) && (#expr), #ens_expr)]
+        ));
+        return func.into_token_stream().into();
+    }
 
-    func.into_token_stream().into()
+    if let Ok(mut func) = syn::parse::<TraitItemFn>(item.clone()) {
+        let (req_expr, ens_expr) = match extract_requires_ensures(&mut func.attrs) {
+            Ok(r) => r,
+            Err(e) => return e.to_compile_error().into(),
+        };
+        func.attrs.push(syn::parse_quote!(
+            #[::thrust_macros::_requires_ensures((#req_expr) && (#expr), #ens_expr)]
+        ));
+        return func.into_token_stream().into();
+    }
+
+    syn::Error::new(proc_macro2::Span::call_site(), "expected a function or trait method")
+        .to_compile_error()
+        .into()
 }
 
 #[proc_macro_attribute]
 pub fn ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expr = TokenStream2::from(attr);
-    let mut func = parse_macro_input!(item as ItemFn);
 
-    let (req_expr, ens_expr) = match extract_requires_ensures(&mut func) {
-        Ok((req, ens)) => (req, ens),
-        Err(e) => return e.to_compile_error().into(),
-    };
-    func.attrs.push(syn::parse_quote!(
-        #[::thrust_macros::_requires_ensures(#req_expr, (#ens_expr) && (#expr))]
-    ));
+    if let Ok(mut func) = syn::parse::<ItemFn>(item.clone()) {
+        let (req_expr, ens_expr) = match extract_requires_ensures(&mut func.attrs) {
+            Ok(r) => r,
+            Err(e) => return e.to_compile_error().into(),
+        };
+        func.attrs.push(syn::parse_quote!(
+            #[::thrust_macros::_requires_ensures(#req_expr, (#ens_expr) && (#expr))]
+        ));
+        return func.into_token_stream().into();
+    }
 
-    func.into_token_stream().into()
+    if let Ok(mut func) = syn::parse::<TraitItemFn>(item.clone()) {
+        let (req_expr, ens_expr) = match extract_requires_ensures(&mut func.attrs) {
+            Ok(r) => r,
+            Err(e) => return e.to_compile_error().into(),
+        };
+        func.attrs.push(syn::parse_quote!(
+            #[::thrust_macros::_requires_ensures(#req_expr, (#ens_expr) && (#expr))]
+        ));
+        return func.into_token_stream().into();
+    }
+
+    syn::Error::new(proc_macro2::Span::call_site(), "expected a function or trait method")
+        .to_compile_error()
+        .into()
 }
 
-fn extract_requires_ensures(func: &mut ItemFn) -> syn::Result<(syn::Expr, syn::Expr)> {
+fn extract_requires_ensures(attrs: &mut Vec<syn::Attribute>) -> syn::Result<(syn::Expr, syn::Expr)> {
     let mut result = None;
 
     let requires_ensures_path: syn::Path = syn::parse_quote!(::thrust_macros::_requires_ensures);
 
-    for attr in &func.attrs {
+    for attr in attrs.iter() {
         if attr.path() == &requires_ensures_path {
             if result.is_some() {
                 return Err(syn::Error::new_spanned(
@@ -68,8 +98,7 @@ fn extract_requires_ensures(func: &mut ItemFn) -> syn::Result<(syn::Expr, syn::E
         }
     }
 
-    func.attrs
-        .retain(|attr| attr.path() != &requires_ensures_path);
+    attrs.retain(|attr| attr.path() != &requires_ensures_path);
 
     if let Some((req_expr, ens_expr)) = result {
         Ok((req_expr, ens_expr))
@@ -98,14 +127,39 @@ pub fn _requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ens_expr = exprs.pop().unwrap().into_value();
     let req_expr = exprs.pop().unwrap().into_value();
 
-    let func = parse_macro_input!(item as ItemFn);
-    ExpandedTokens::new(func, req_expr, ens_expr)
-        .into_token_stream()
+    if let Ok(func) = syn::parse::<ItemFn>(item.clone()) {
+        return ExpandedTokens::new(func, req_expr, ens_expr)
+            .into_token_stream()
+            .into();
+    }
+
+    if let Ok(func) = syn::parse::<TraitItemFn>(item.clone()) {
+        return ExpandedTokens::new_trait(func, req_expr, ens_expr)
+            .into_token_stream()
+            .into();
+    }
+
+    syn::Error::new(proc_macro2::Span::call_site(), "expected a function or trait method")
+        .to_compile_error()
         .into()
 }
 
+enum FnItem {
+    Free(ItemFn),
+    Trait(TraitItemFn),
+}
+
+impl FnItem {
+    fn sig(&self) -> &syn::Signature {
+        match self {
+            FnItem::Free(f) => &f.sig,
+            FnItem::Trait(f) => &f.sig,
+        }
+    }
+}
+
 struct ExpandedTokens {
-    func: ItemFn,
+    item: FnItem,
 
     requires_name: syn::Ident,
     ensures_name: syn::Ident,
@@ -127,43 +181,49 @@ struct ExpandedTokens {
 
 impl quote::ToTokens for ExpandedTokens {
     fn to_tokens(&self, tokens: &mut TokenStream2) {
-        if self.is_extern_spec_fn() {
-            self.expand_extern_spec_fn().to_tokens(tokens);
-        } else {
-            self.expand().to_tokens(tokens);
+        match &self.item {
+            FnItem::Free(_) => {
+                if self.is_extern_spec_fn() {
+                    self.expand_extern_spec_fn().to_tokens(tokens);
+                } else {
+                    self.expand().to_tokens(tokens);
+                }
+            }
+            FnItem::Trait(_) => self.expand_trait().to_tokens(tokens),
         }
     }
 }
 
 impl ExpandedTokens {
-    pub fn new(func: ItemFn, req_expr: syn::Expr, ens_expr: syn::Expr) -> Self {
-        let name = &func.sig.ident;
+    fn from_sig(item: FnItem, req_expr: syn::Expr, ens_expr: syn::Expr) -> Self {
+        let sig = item.sig();
+        let name = &sig.ident;
         let requires_name = format_ident!("_thrust_requires_{}", name);
         let ensures_name = format_ident!("_thrust_ensures_{}", name);
 
-        let has_receiver = matches!(func.sig.inputs.first(), Some(FnArg::Receiver(_)));
+        let has_receiver = matches!(sig.inputs.first(), Some(FnArg::Receiver(_)));
 
         // Rewrite `self` to `self_` in expressions when there's a receiver.
         let req_expr = if has_receiver { rewrite_self_in_expr(&req_expr) } else { req_expr };
         let ens_expr = if has_receiver { rewrite_self_in_expr(&ens_expr) } else { ens_expr };
 
         // Turbofish from original generics (before elaboration) — used at call sites.
-        let turbofish = generic_turbofish(&func.sig.generics);
+        let turbofish = generic_turbofish(&sig.generics);
 
         // Clone sig and elaborate: insert fresh lifetimes into receiver and reference-typed params.
-        let mut helper_inputs = func.sig.inputs.clone();
-        let mut helper_generics = func.sig.generics.clone();
+        let mut helper_inputs = sig.inputs.clone();
+        let mut helper_generics = sig.generics.clone();
         elaborate_receiver_lifetime(&mut helper_inputs, &mut helper_generics);
         elaborate_typed_param_lifetimes(&mut helper_inputs, &mut helper_generics);
 
         let def_generics = generic_params_tokens(&helper_generics);
 
-        let fn_bounds = fn_has_fn_bounds(&func.sig.generics);
+        let fn_bounds = fn_has_fn_bounds(&sig.generics);
         let model_preds = model_predicates_from_params(&helper_inputs, &fn_bounds);
         let extended_where = extended_where_clause(&helper_generics, &model_preds);
 
         let model_ty_params = fn_params_with_model_ty(&helper_inputs);
-        let ret_model_ty: Type = match &func.sig.output {
+        let ret_model_ty: Type = match &sig.output {
             ReturnType::Default => syn::parse_quote!(<() as thrust_models::Model>::Ty),
             ReturnType::Type(_, ty) => syn::parse_quote!(<#ty as thrust_models::Model>::Ty),
         };
@@ -171,7 +231,7 @@ impl ExpandedTokens {
         let (extern_spec_inputs, call_args) = rewrite_inputs_for_call(&helper_inputs);
 
         Self {
-            func,
+            item,
             req_expr,
             ens_expr,
             requires_name,
@@ -187,12 +247,20 @@ impl ExpandedTokens {
         }
     }
 
+    pub fn new(func: ItemFn, req_expr: syn::Expr, ens_expr: syn::Expr) -> Self {
+        Self::from_sig(FnItem::Free(func), req_expr, ens_expr)
+    }
+
+    pub fn new_trait(func: TraitItemFn, req_expr: syn::Expr, ens_expr: syn::Expr) -> Self {
+        Self::from_sig(FnItem::Trait(func), req_expr, ens_expr)
+    }
+
     fn is_extern_spec_fn(&self) -> bool {
         let extern_spec_fn_path: syn::Path = syn::parse_quote!(thrust::extern_spec_fn);
-        self.func
-            .attrs
-            .iter()
-            .any(|a| a.path() == &extern_spec_fn_path)
+        match &self.item {
+            FnItem::Free(f) => f.attrs.iter().any(|a| a.path() == &extern_spec_fn_path),
+            FnItem::Trait(_) => false,
+        }
     }
 
     fn requires_fn(&self) -> TokenStream2 {
@@ -231,7 +299,8 @@ impl ExpandedTokens {
     }
 
     fn expand(&self) -> TokenStream2 {
-        let mut func = self.func.clone();
+        let FnItem::Free(func) = &self.item else { unreachable!() };
+        let mut func = func.clone();
         let trusted_path: syn::Path = syn::parse_quote!(thrust::trusted);
         for attr in &mut func.attrs {
             if attr.path() == &trusted_path {
@@ -242,16 +311,16 @@ impl ExpandedTokens {
         let requires_fn = self.requires_fn();
         let ensures_fn = self.ensures_fn();
 
-        let extern_spec_name = format_ident!("_thrust_extern_spec_{}", self.func.sig.ident);
+        let extern_spec_name = format_ident!("_thrust_extern_spec_{}", func.sig.ident);
         let def_generics = &self.def_generics;
-        let orig_output = &self.func.sig.output;
+        let orig_output = &func.sig.output;
         let extended_where = &self.extended_where;
 
         let requires_name = &self.requires_name;
         let ensures_name = &self.ensures_name;
         let turbofish = &self.turbofish;
 
-        let name = &self.func.sig.ident;
+        let name = &func.sig.ident;
         let extern_spec_inputs = &self.extern_spec_inputs;
         let call_args = &self.call_args;
 
@@ -297,11 +366,12 @@ impl ExpandedTokens {
     }
 
     fn expand_extern_spec_fn(&self) -> TokenStream2 {
+        let FnItem::Free(func) = &self.item else { unreachable!() };
         let requires_name = &self.requires_name;
         let ensures_name = &self.ensures_name;
         let turbofish = &self.turbofish;
 
-        let mut func = self.func.clone();
+        let mut func = func.clone();
         let orig_stmts = func.block.stmts.clone();
         func.block = syn::parse_quote!({
             #[thrust::requires_path]
@@ -321,6 +391,44 @@ impl ExpandedTokens {
             #ensures_fn
 
             #[allow(path_statements)]
+            #func
+        }
+    }
+
+    fn expand_trait(&self) -> TokenStream2 {
+        let FnItem::Trait(func) = &self.item else { unreachable!() };
+        let func = func.clone();
+
+        let requires_fn = self.requires_fn();
+        let ensures_fn = self.ensures_fn();
+
+        let fn_name = &func.sig.ident;
+        let extern_spec_name = format_ident!("_thrust_extern_spec_{}", fn_name);
+        let def_generics = &self.def_generics;
+        let orig_output = &func.sig.output;
+        let extended_where = &self.extended_where;
+
+        let requires_name = &self.requires_name;
+        let ensures_name = &self.ensures_name;
+        let extern_spec_inputs = &self.extern_spec_inputs;
+        let call_args = &self.call_args;
+
+        quote! {
+            #requires_fn
+            #ensures_fn
+
+            #[thrust::extern_spec_fn]
+            #[allow(path_statements)]
+            fn #extern_spec_name #def_generics(#extern_spec_inputs) #orig_output #extended_where {
+                #[thrust::requires_path]
+                Self::#requires_name;
+
+                #[thrust::ensures_path]
+                Self::#ensures_name;
+
+                Self::#fn_name(#call_args)
+            }
+
             #func
         }
     }
