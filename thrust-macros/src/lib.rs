@@ -9,6 +9,61 @@ use syn::{
 use syn::visit_mut::VisitMut;
 
 #[proc_macro_attribute]
+pub fn predicate(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    if let Ok(mut func) = syn::parse::<ItemFn>(item.clone()) {
+        rewrite_predicate_sig_and_attrs(&mut func.sig, &mut func.attrs);
+        return func.into_token_stream().into();
+    }
+    if let Ok(mut func) = syn::parse::<TraitItemFn>(item.clone()) {
+        rewrite_predicate_sig_and_attrs(&mut func.sig, &mut func.attrs);
+        return func.into_token_stream().into();
+    }
+    syn::Error::new(proc_macro2::Span::call_site(), "expected a function or trait method")
+        .to_compile_error()
+        .into()
+}
+
+fn rewrite_predicate_sig_and_attrs(sig: &mut syn::Signature, attrs: &mut Vec<syn::Attribute>) {
+    let predicate_path: syn::Path = syn::parse_quote!(::thrust_macros::predicate);
+    attrs.retain(|a| a.path() != &predicate_path);
+    attrs.push(syn::parse_quote!(#[thrust::predicate]));
+
+    elaborate_receiver_lifetime(&mut sig.inputs, &mut sig.generics);
+    elaborate_typed_param_lifetimes(&mut sig.inputs, &mut sig.generics);
+
+    let fn_bounds = fn_has_fn_bounds(&sig.generics);
+    let model_preds = model_predicates_from_params(&sig.inputs, &fn_bounds);
+
+    let new_inputs: Punctuated<FnArg, syn::token::Comma> = sig
+        .inputs
+        .iter()
+        .map(|arg| -> FnArg {
+            match arg {
+                FnArg::Receiver(recv) => {
+                    let model_ty = receiver_model_ty(recv);
+                    syn::parse_quote!(self_: #model_ty)
+                }
+                FnArg::Typed(pt) => {
+                    let pat = &pt.pat;
+                    let ty = &pt.ty;
+                    let model_ty: Type = syn::parse_quote!(<#ty as thrust_models::Model>::Ty);
+                    syn::parse_quote!(#pat: #model_ty)
+                }
+            }
+        })
+        .collect();
+    sig.inputs = new_inputs;
+
+    let wc = sig.generics.where_clause.get_or_insert_with(|| syn::WhereClause {
+        where_token: Default::default(),
+        predicates: Punctuated::new(),
+    });
+    for pred in model_preds {
+        wc.predicates.push(pred);
+    }
+}
+
+#[proc_macro_attribute]
 pub fn requires(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expr = TokenStream2::from(attr);
 
