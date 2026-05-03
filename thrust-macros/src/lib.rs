@@ -6,6 +6,7 @@ use syn::{
     parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, ItemFn,
     LifetimeParam, ReturnType, Type, TypeParamBound, WherePredicate,
 };
+use syn::visit_mut::VisitMut;
 
 #[proc_macro_attribute]
 pub fn requires(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -111,6 +112,8 @@ struct ExpandedTokens {
     req_expr: syn::Expr,
     ens_expr: syn::Expr,
 
+    has_receiver: bool,
+
     def_generics: TokenStream2,
     turbofish: TokenStream2,
     extended_where: TokenStream2,
@@ -138,12 +141,19 @@ impl ExpandedTokens {
         let requires_name = format_ident!("_thrust_requires_{}", name);
         let ensures_name = format_ident!("_thrust_ensures_{}", name);
 
+        let has_receiver = matches!(func.sig.inputs.first(), Some(FnArg::Receiver(_)));
+
+        // Rewrite `self` to `self_` in expressions when there's a receiver.
+        let req_expr = if has_receiver { rewrite_self_in_expr(&req_expr) } else { req_expr };
+        let ens_expr = if has_receiver { rewrite_self_in_expr(&ens_expr) } else { ens_expr };
+
         // Turbofish from original generics (before elaboration) — used at call sites.
         let turbofish = generic_turbofish(&func.sig.generics);
 
-        // Clone sig and elaborate: insert fresh lifetimes into reference-typed params.
+        // Clone sig and elaborate: insert fresh lifetimes into receiver and reference-typed params.
         let mut helper_inputs = func.sig.inputs.clone();
         let mut helper_generics = func.sig.generics.clone();
+        elaborate_receiver_lifetime(&mut helper_inputs, &mut helper_generics);
         elaborate_typed_param_lifetimes(&mut helper_inputs, &mut helper_generics);
 
         let def_generics = generic_params_tokens(&helper_generics);
@@ -166,6 +176,7 @@ impl ExpandedTokens {
             ens_expr,
             requires_name,
             ensures_name,
+            has_receiver,
             def_generics,
             turbofish,
             extended_where,
@@ -244,22 +255,43 @@ impl ExpandedTokens {
         let extern_spec_inputs = &self.extern_spec_inputs;
         let call_args = &self.call_args;
 
-        quote! {
-            #func
+        if self.has_receiver {
+            quote! {
+                #func
 
-            #requires_fn
-            #ensures_fn
+                #requires_fn
+                #ensures_fn
 
-            #[thrust::extern_spec_fn]
-            #[allow(path_statements)]
-            fn #extern_spec_name #def_generics(#extern_spec_inputs) #orig_output #extended_where {
-                #[thrust::requires_path]
-                #requires_name #turbofish;
+                #[thrust::extern_spec_fn]
+                #[allow(path_statements)]
+                fn #extern_spec_name #def_generics(#extern_spec_inputs) #orig_output #extended_where {
+                    #[thrust::requires_path]
+                    Self::#requires_name;
 
-                #[thrust::ensures_path]
-                #ensures_name #turbofish;
+                    #[thrust::ensures_path]
+                    Self::#ensures_name;
 
-                #name #turbofish(#call_args)
+                    Self::#name(#call_args)
+                }
+            }
+        } else {
+            quote! {
+                #func
+
+                #requires_fn
+                #ensures_fn
+
+                #[thrust::extern_spec_fn]
+                #[allow(path_statements)]
+                fn #extern_spec_name #def_generics(#extern_spec_inputs) #orig_output #extended_where {
+                    #[thrust::requires_path]
+                    #requires_name #turbofish;
+
+                    #[thrust::ensures_path]
+                    #ensures_name #turbofish;
+
+                    #name #turbofish(#call_args)
+                }
             }
         }
     }
@@ -356,9 +388,67 @@ fn insert_lifetime_param(generics: &mut Generics, lt: syn::Lifetime) {
         .insert(pos, GenericParam::Lifetime(LifetimeParam::new(lt)));
 }
 
+/// If receiver is `&self` or `&mut self` without a lifetime, inserts a fresh one.
+fn elaborate_receiver_lifetime(
+    inputs: &mut Punctuated<FnArg, syn::token::Comma>,
+    generics: &mut Generics,
+) {
+    if let Some(FnArg::Receiver(recv)) = inputs.first_mut() {
+        if let Some((_, ref mut lt_opt)) = recv.reference {
+            if lt_opt.is_none() {
+                let lt = fresh_lifetime(generics);
+                *lt_opt = Some(lt.clone());
+                insert_lifetime_param(generics, lt);
+            }
+        }
+    }
+}
+
+/// Returns the full receiver type: `Self`, `&'a Self`, or `&'a mut Self`.
+fn receiver_full_type(recv: &syn::Receiver) -> Type {
+    match &recv.reference {
+        None => syn::parse_quote!(Self),
+        Some((_, Some(lt))) => {
+            if recv.mutability.is_some() {
+                syn::parse_quote!(&#lt mut Self)
+            } else {
+                syn::parse_quote!(&#lt Self)
+            }
+        }
+        Some((_, None)) => {
+            if recv.mutability.is_some() {
+                syn::parse_quote!(&mut Self)
+            } else {
+                syn::parse_quote!(&Self)
+            }
+        }
+    }
+}
+
+/// Returns `<ReceiverTy as Model>::Ty` — the model-type of the receiver.
+fn receiver_model_ty(recv: &syn::Receiver) -> Type {
+    let recv_ty = receiver_full_type(recv);
+    syn::parse_quote!(<#recv_ty as thrust_models::Model>::Ty)
+}
+
+/// Rewrites every `self` ident in `expr` to `self_`.
+fn rewrite_self_in_expr(expr: &syn::Expr) -> syn::Expr {
+    struct RewriteSelf;
+    impl VisitMut for RewriteSelf {
+        fn visit_ident_mut(&mut self, i: &mut syn::Ident) {
+            if i == "self" {
+                *i = format_ident!("self_");
+            }
+        }
+    }
+    let mut e = expr.clone();
+    RewriteSelf.visit_expr_mut(&mut e);
+    e
+}
+
 /// Inserts fresh lifetimes into reference-typed params that have no explicit lifetime.
 /// Mutates `inputs` (the type in-place) and `generics` (adds LifetimeParam).
-/// Skips receiver params — those are handled separately in Step 2.
+/// Skips receiver params — handled by elaborate_receiver_lifetime.
 fn elaborate_typed_param_lifetimes(
     inputs: &mut Punctuated<FnArg, syn::token::Comma>,
     generics: &mut Generics,
@@ -403,13 +493,11 @@ fn fn_has_fn_bounds(generics: &Generics) -> HashSet<String> {
         .collect()
 }
 
-/// Returns `T: thrust_models::Model` predicates derived from actual parameter types.
-/// Collects the leaf type-variable idents from each parameter's type (recursing through
-/// references, tuples, and generic args) and emits model predicates for each unique ident.
-/// This includes idents that come from an outer `impl<T>` block and are therefore not
-/// present in the function's own generic param list.
+/// Returns model where-predicates derived from actual parameter types.
+/// For receivers: adds `ReceiverTy: Model` + `<ReceiverTy as Model>::Ty: PartialEq` (full type).
+/// For typed params: recursively collects leaf type-variable idents and emits model predicates.
+/// This catches type params from outer `impl<T>` blocks not present in the function's own generics.
 /// Skips idents that match Fn-bound type params.
-/// Receiver params are skipped — handled separately in Step 2.
 fn model_predicates_from_params(
     inputs: &Punctuated<FnArg, syn::token::Comma>,
     fn_bounds: &HashSet<String>,
@@ -417,8 +505,21 @@ fn model_predicates_from_params(
     let mut seen = HashSet::new();
     let mut preds = Vec::new();
     for arg in inputs {
-        let FnArg::Typed(pt) = arg else { continue };
-        collect_type_var_predicates(&pt.ty, fn_bounds, &mut seen, &mut preds);
+        match arg {
+            FnArg::Receiver(recv) => {
+                // For reference receivers use `Self: Model` rather than `&'a mut Self: Model`.
+                // An explicit `&'a mut Self: Model` where clause blocks rustc's blanket impl
+                // selection and causes normalization of `<&'a mut Self as Model>::Ty` to get
+                // stuck. With `Self: Model` the solver can select the blanket impl and normalize.
+                let inner_ty: Type = syn::parse_quote!(Self);
+                let pred_ty = if recv.reference.is_some() { inner_ty } else { receiver_full_type(recv) };
+                preds.push(syn::parse_quote!(#pred_ty: thrust_models::Model));
+                preds.push(syn::parse_quote!(<#pred_ty as thrust_models::Model>::Ty: PartialEq));
+            }
+            FnArg::Typed(pt) => {
+                collect_type_var_predicates(&pt.ty, fn_bounds, &mut seen, &mut preds);
+            }
+        }
     }
     preds
 }
@@ -483,19 +584,24 @@ fn extended_where_clause(generics: &Generics, model_preds: &[WherePredicate]) ->
     quote! { where #(#existing,)* #(#model_preds),* }
 }
 
-/// Maps each typed function parameter `x: T` to `x: <T as thrust_models::Model>::Ty`.
-/// Receiver (`self`) parameters are skipped.
+/// Maps each function parameter to its model-type form for helper fn signatures.
+/// Receiver → `self_: <ReceiverTy as Model>::Ty`; typed `x: T` → `x: <T as Model>::Ty`.
 fn fn_params_with_model_ty(
     inputs: &Punctuated<FnArg, syn::token::Comma>,
 ) -> TokenStream2 {
     let params: Vec<TokenStream2> = inputs
         .iter()
-        .filter_map(|arg| {
-            let FnArg::Typed(pt) = arg else { return None };
-            let pat = &pt.pat;
-            let ty = &pt.ty;
-            let model_ty: Type = syn::parse_quote!(<#ty as thrust_models::Model>::Ty);
-            Some(quote!(#pat: #model_ty))
+        .filter_map(|arg| match arg {
+            FnArg::Receiver(recv) => {
+                let model_ty = receiver_model_ty(recv);
+                Some(quote!(self_: #model_ty))
+            }
+            FnArg::Typed(pt) => {
+                let pat = &pt.pat;
+                let ty = &pt.ty;
+                let model_ty: Type = syn::parse_quote!(<#ty as thrust_models::Model>::Ty);
+                Some(quote!(#pat: #model_ty))
+            }
         })
         .collect();
     quote!(#(#params),*)

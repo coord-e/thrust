@@ -392,11 +392,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     /// semicolon) in the function body block.
     pub fn extern_spec_fn_target_def_id(&self) -> DefId {
         let node = self.tcx.hir_node_by_def_id(self.local_def_id);
-        let rustc_hir::Node::Item(item) = node else {
-            panic!("extern_spec_fn must be a function item");
-        };
-        let rustc_hir::ItemKind::Fn(_, _, body_id) = item.kind else {
-            panic!("extern_spec_fn must be a function");
+        let body_id = match node {
+            rustc_hir::Node::Item(item) => {
+                let rustc_hir::ItemKind::Fn(_, _, body_id) = item.kind else {
+                    panic!("extern_spec_fn must be a function");
+                };
+                body_id
+            }
+            rustc_hir::Node::ImplItem(impl_item) => {
+                let rustc_hir::ImplItemKind::Fn(_, body_id) = impl_item.kind else {
+                    panic!("extern_spec_fn must be a function");
+                };
+                body_id
+            }
+            _ => panic!("extern_spec_fn must be a function item or impl item"),
         };
 
         let body = self.tcx.hir().body(body_id);
