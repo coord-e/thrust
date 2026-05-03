@@ -13,7 +13,7 @@ use crate::analyze;
 use crate::annot::{self, AnnotFormula, AnnotParser, ResolverExt as _};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
-use crate::refine::{BasicBlockType, TypeBuilder};
+use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
 
 fn stmt_str_literal(stmt: &rustc_hir::Stmt) -> Option<String> {
@@ -116,13 +116,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn analyze_predicate_definition(&self, local_def_id: LocalDefId) {
-        // predicate's name
-        let impl_type = self.impl_type();
-        let pred_item_name = self.tcx.item_name(local_def_id.to_def_id()).to_string();
-        let pred_name = match impl_type {
-            Some(t) => t.to_string() + "_" + &pred_item_name,
-            None => pred_item_name,
-        };
+        let pred = refine::user_defined_pred(self.tcx, local_def_id.to_def_id());
 
         // function's body
         use rustc_hir::{Block, Expr, ExprKind};
@@ -158,7 +152,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let arg_name_and_sorts = arg_names.into_iter().zip(arg_sorts).collect::<Vec<_>>();
 
         self.ctx.system.borrow_mut().push_pred_define(
-            chc::UserDefinedPred::new(pred_name),
+            pred,
             chc::UserDefinedPredSig::from(arg_name_and_sorts),
             predicate_body,
         );

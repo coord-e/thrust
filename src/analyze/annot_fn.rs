@@ -8,7 +8,7 @@ use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use crate::analyze::did_cache::DefIdCache;
 use crate::annot::AnnotFormula;
 use crate::chc;
-use crate::refine::TypeBuilder;
+use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
 #[derive(Debug, Clone)]
@@ -476,6 +476,11 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                                 }
                             }
                         }
+
+                        let pred = refine::user_defined_pred(self.tcx, def_id);
+                        let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
+                        let atom = chc::Atom::new(pred.into(), arg_terms);
+                        return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
                     }
                 }
                 unimplemented!("unsupported call in formula: {:?}", func_expr)
