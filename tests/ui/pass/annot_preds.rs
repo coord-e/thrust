@@ -2,7 +2,7 @@
 //@compile-flags: -Adead_code -C debug-assertions=off
 
 #[thrust::predicate]
-fn is_double(x: i64, doubled_x: i64) -> bool {
+fn is_double(x: thrust_models::model::Int, doubled_x: thrust_models::model::Int) -> bool {
     "(=
         (* x 2)
         doubled_x

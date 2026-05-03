@@ -5,10 +5,10 @@ use rustc_hir::{def_id::LocalDefId, HirId};
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
-use crate::analyze::did_cache::DefIdCache;
+use crate::analyze::{self, did_cache::DefIdCache};
 use crate::annot::AnnotFormula;
 use crate::chc;
-use crate::refine::TypeBuilder;
+use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
 #[derive(Debug, Clone)]
@@ -475,6 +475,17 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                                     return FormulaOrTerm::Term(chc::Term::tuple(terms));
                                 }
                             }
+                        }
+                        if self
+                            .tcx
+                            .get_attrs_by_path(def_id, &analyze::annot::predicate_path())
+                            .next()
+                            .is_some()
+                        {
+                            let pred = refine::user_defined_pred(self.tcx, def_id);
+                            let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
+                            let atom = chc::Atom::new(pred.into(), arg_terms);
+                            return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
                         }
                     }
                 }
