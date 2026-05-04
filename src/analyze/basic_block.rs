@@ -420,12 +420,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 _ty,
             ) => {
                 let func_ty = match operand.const_fn_def() {
-                    Some((def_id, args)) => self
-                        .ctx
-                        .def_ty_with_args(def_id, args)
-                        .expect("unknown def")
-                        .ty
-                        .clone(),
+                    Some((def_id, args)) => self.fn_def_ty(def_id, args),
                     _ => unimplemented!(),
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
@@ -573,44 +568,68 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         });
     }
 
+    fn resolve_fn_def(
+        &self,
+        def_id: DefId,
+        args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> (DefId, mir_ty::GenericArgsRef<'tcx>) {
+        if self.ctx.is_fn_trait_method(def_id) {
+            // When calling a closure via `Fn`/`FnMut`/`FnOnce` trait,
+            // we simply replace the def_id with the closure's function def_id.
+            // This skips shims, and makes self arguments mismatch. visitor::RustCallVisitor
+            // adjusts the arguments accordingly.
+            let mir_ty::TyKind::Closure(closure_def_id, _) = args.type_at(0).kind() else {
+                panic!("expected closure arg for fn trait");
+            };
+            tracing::debug!(?closure_def_id, "closure instance");
+            (*closure_def_id, args)
+        } else {
+            let param_env = self
+                .tcx
+                .param_env(self.local_def_id)
+                .with_reveal_all_normalized(self.tcx);
+            let instance = mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+            if let Some(instance) = instance {
+                (instance.def_id(), instance.args)
+            } else {
+                (def_id, args)
+            }
+        }
+    }
+
+    fn fn_def_ty(
+        &mut self,
+        def_id: DefId,
+        args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> rty::Type<rty::Closed> {
+        if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args) {
+            return def_ty.ty;
+        }
+
+        let (resolved_def_id, resolved_args) = self.resolve_fn_def(def_id, args);
+        if resolved_def_id == def_id {
+            panic!(
+                "unknown def (and not resolved): {:?}, args: {:?}",
+                def_id, args
+            );
+        }
+        tracing::info!(?def_id, ?resolved_def_id, ?resolved_args, "resolved");
+        let Some(def_ty) = self.ctx.def_ty_with_args(resolved_def_id, resolved_args) else {
+            panic!(
+                "unknown def (resolved): {:?}, args: {:?}",
+                resolved_def_id, resolved_args
+            );
+        };
+        def_ty.ty
+    }
+
     fn type_call<I>(&mut self, func: Operand<'tcx>, args: I, expected_ret: &rty::RefinedType<Var>)
     where
         I: IntoIterator<Item = Operand<'tcx>>,
     {
         // TODO: handle const_fn_def on Env side
         let func_ty = if let Some((def_id, args)) = func.const_fn_def() {
-            let (resolved_def_id, resolved_args) = if self.ctx.is_fn_trait_method(def_id) {
-                // When calling a closure via `Fn`/`FnMut`/`FnOnce` trait,
-                // we simply replace the def_id with the closure's function def_id.
-                // This skips shims, and makes self arguments mismatch. visitor::RustCallVisitor
-                // adjusts the arguments accordingly.
-                let mir_ty::TyKind::Closure(closure_def_id, _) = args.type_at(0).kind() else {
-                    panic!("expected closure arg for fn trait");
-                };
-                tracing::debug!(?closure_def_id, "closure instance");
-                (*closure_def_id, args)
-            } else {
-                let param_env = self
-                    .tcx
-                    .param_env(self.local_def_id)
-                    .with_reveal_all_normalized(self.tcx);
-                let instance =
-                    mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
-                if let Some(instance) = instance {
-                    (instance.def_id(), instance.args)
-                } else {
-                    (def_id, args)
-                }
-            };
-            if def_id != resolved_def_id {
-                tracing::info!(?def_id, ?resolved_def_id, ?resolved_args, "resolved");
-            }
-
-            self.ctx
-                .def_ty_with_args(resolved_def_id, resolved_args)
-                .expect("unknown def")
-                .ty
-                .vacuous()
+            self.fn_def_ty(def_id, args).vacuous()
         } else {
             self.operand_type(func.clone()).ty
         };
