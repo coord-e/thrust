@@ -18,10 +18,24 @@ pub use env::{
     Assumption, EnumDefProvider, Env, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx, Var,
 };
 
-use crate::chc::DatatypeSymbol;
+use crate::chc::{DatatypeSymbol, UserDefinedPred};
 use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
+fn stable_def_id_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> String {
+    let hash = tcx.def_path_hash(did);
+    let path = tcx.def_path(did);
+    if let Some(name) = path.data.last().and_then(|d| d.data.get_opt_name()) {
+        format!("{}_{}", name, hash.0.to_hex())
+    } else {
+        hash.0.to_hex()
+    }
+}
+
 pub fn datatype_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> DatatypeSymbol {
     DatatypeSymbol::new(tcx.def_path_str(did).replace("::", "."))
+}
+
+pub fn user_defined_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> UserDefinedPred {
+    UserDefinedPred::new(stable_def_id_symbol(tcx, did))
 }
