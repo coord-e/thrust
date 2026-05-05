@@ -181,12 +181,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let bytes = alloc
             .inner()
             .inspect_with_uninit_and_ptr_outside_interpreter(range.clone());
-        let param_env = self.tcx.param_env(self.local_def_id);
-        let layout = self.tcx.layout_of(param_env.and(ty)).unwrap();
-        let lcx = mir_ty::layout::LayoutCx {
-            tcx: self.tcx,
-            param_env,
-        };
+        let typing_env = self.body.typing_env(self.tcx);
+        let layout = self.tcx.layout_of(typing_env.as_query_input(ty)).unwrap();
+        let lcx = mir_ty::layout::LayoutCx::new(self.tcx, typing_env);
         match ty.kind() {
             mir_ty::TyKind::Str => {
                 let content = std::str::from_utf8(bytes).unwrap();
@@ -271,9 +268,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let global_alloc = self.tcx.global_alloc(prov.alloc_id());
                 match global_alloc {
                     mir::interpret::GlobalAlloc::Memory(alloc) => {
+                        let typing_env = self.body.typing_env(self.tcx);
                         let layout = self
                             .tcx
-                            .layout_of(mir_ty::ParamEnv::reveal_all().and(*elem))
+                            .layout_of(typing_env.as_query_input(*elem))
                             .unwrap();
                         let size = layout.size;
                         let range =
@@ -297,10 +295,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             mir::Const::Unevaluated(unevaluated, ty) => {
                 // since all constants are immutable in current setup,
                 // it should be okay to evaluate them here on-the-fly
-                let param_env = self.tcx.param_env(self.local_def_id);
+                let typing_env = self.body.typing_env(self.tcx);
                 let val = self
                     .tcx
-                    .const_eval_resolve(param_env, *unevaluated, rustc_span::DUMMY_SP)
+                    .const_eval_resolve(typing_env, *unevaluated, rustc_span::DUMMY_SP)
                     .unwrap();
                 self.const_value_ty(&val, ty)
             }
@@ -445,7 +443,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
             }
             Rvalue::Cast(
-                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::ReifyFnPointer),
+                mir::CastKind::PointerCoercion(
+                    mir_ty::adjustment::PointerCoercion::ReifyFnPointer,
+                    _,
+                ),
                 operand,
                 _ty,
             ) => {
@@ -614,12 +615,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             tracing::debug!(?closure_def_id, "closure instance");
             (*closure_def_id, args)
         } else {
-            let param_env = self
-                .tcx
-                .param_env(self.local_def_id)
-                .with_reveal_all_normalized(self.tcx);
+            let typing_env = self.body.typing_env(self.tcx);
             let instance =
-                mir_ty::Instance::try_resolve(self.tcx, param_env, def_id, args).unwrap();
+                mir_ty::Instance::try_resolve(self.tcx, typing_env, def_id, args).unwrap();
             if let Some(instance) = instance {
                 (instance.def_id(), instance.args)
             } else {
@@ -852,7 +850,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         } = &term.kind
         {
             let destination = match destination {
-                p if p.projection.len() == 0 => p.local,
+                p if p.projection.is_empty() => p.local,
                 _ => unimplemented!(),
             };
             if self.is_defined(destination) {
@@ -955,7 +953,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         {
             if let Some((p, Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, _))) = stmt.kind.as_assign()
             {
-                if p.projection.len() != 0 {
+                if !p.projection.is_empty() {
                     unimplemented!();
                 }
                 // TODO: is it appropriate to use builtin_deref here... maybe we should handle dereferencing logic in `refine`
@@ -1088,7 +1086,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let bb_ty = self.basic_block_ty(self.basic_block).clone();
         let params = &bb_ty.as_ref().params;
-        assert!(params.len() >= 1);
+        assert!(!params.is_empty());
         for (param_idx, param_rty) in params.iter_enumerated() {
             let param_ty = &param_rty.ty;
             if let Some(local) = bb_ty.local_of_param(param_idx) {

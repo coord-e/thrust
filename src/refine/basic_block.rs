@@ -19,7 +19,7 @@ pub struct BasicBlockType {
     pub(super) locals: IndexVec<rty::FunctionParamIdx, (Local, mir_ty::Mutability)>,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b BasicBlockType
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &BasicBlockType
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,

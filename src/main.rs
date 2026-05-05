@@ -3,13 +3,13 @@
 extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_interface;
+extern crate rustc_middle;
 extern crate rustc_parse;
 extern crate rustc_session;
 extern crate rustc_span;
 
-use rustc_driver::{Callbacks, Compilation, RunCompiler};
+use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::{Compiler, Config};
-use rustc_interface::Queries;
 
 struct CompilerCalls {}
 
@@ -24,17 +24,14 @@ impl Callbacks for CompilerCalls {
         });
     }
 
-    fn after_crate_root_parsing<'tcx>(
+    fn after_crate_root_parsing(
         &mut self,
         compiler: &Compiler,
-        queries: &'tcx Queries<'tcx>,
+        krate: &mut rustc_ast::Crate,
     ) -> Compilation {
         if matches!(std::env::var("THRUST_NO_INJECT_STD").as_deref(), Ok("1")) {
             return Compilation::Continue;
         }
-
-        let mut result = queries.parse().unwrap();
-        let krate = result.get_mut();
 
         let injected = include_str!("../std.rs");
         let mut parser = rustc_parse::new_parser_from_source_str(
@@ -55,14 +52,12 @@ impl Callbacks for CompilerCalls {
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &Compiler,
-        queries: &'tcx Queries<'tcx>,
+        tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> Compilation {
-        queries.global_ctxt().unwrap().enter(|tcx| {
-            let mut ctx = thrust::Analyzer::new(tcx);
-            ctx.register_well_known_defs();
-            ctx.crate_analyzer().run();
-            ctx.solve();
-        });
+        let mut ctx = thrust::Analyzer::new(tcx);
+        ctx.register_well_known_defs();
+        ctx.crate_analyzer().run();
+        ctx.solve();
         Compilation::Stop
     }
 }
@@ -117,7 +112,8 @@ pub fn main() {
         tracing::warn!("could not locate thrust_macros library");
     }
 
-    let code =
-        rustc_driver::catch_with_exit_code(|| RunCompiler::new(&args, &mut CompilerCalls {}).run());
+    let code = rustc_driver::catch_with_exit_code(|| {
+        rustc_driver::run_compiler(&args, &mut CompilerCalls {})
+    });
     std::process::exit(code);
 }

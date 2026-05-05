@@ -62,7 +62,7 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for RustCallVisitor<'a, 'tcx, 
                     panic!("expected closure arg for fn trait");
                 };
                 let fn_sig = self.analyzer.ctx().fn_sig(*resolved_def_id);
-                if !matches!(fn_sig.abi, rustc_target::spec::abi::Abi::RustCall) {
+                if !matches!(fn_sig.abi, rustc_abi::ExternAbi::RustCall) {
                     self.super_terminator(terminator, location);
                     return;
                 }

@@ -17,7 +17,7 @@ pub struct FormulaFn<'tcx> {
     formula: chc::Formula<rty::FunctionParamIdx>,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b FormulaFn<'_>
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &FormulaFn<'_>
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
@@ -141,8 +141,7 @@ pub struct AnnotFnTranslator<'tcx> {
 
 impl<'tcx> AnnotFnTranslator<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, local_def_id: LocalDefId) -> Self {
-        let map = tcx.hir();
-        let body = map.body_owned_by(local_def_id);
+        let body = tcx.hir_body_owned_by(local_def_id);
         let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
         let def_ids = DefIdCache::new(tcx);
@@ -208,15 +207,15 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
     fn expr_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.expr_ty(expr);
         let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
-        let param_env = mir_ty::ParamEnv::reveal_all();
-        self.tcx.normalize_erasing_regions(param_env, instantiated)
+        let typing_env = mir_ty::TypingEnv::fully_monomorphized();
+        self.tcx.normalize_erasing_regions(typing_env, instantiated)
     }
 
     fn pat_ty(&self, pat: &'tcx rustc_hir::Pat<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.pat_ty(pat);
         let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
-        let param_env = mir_ty::ParamEnv::reveal_all();
-        self.tcx.normalize_erasing_regions(param_env, instantiated)
+        let typing_env = mir_ty::TypingEnv::fully_monomorphized();
+        self.tcx.normalize_erasing_regions(typing_env, instantiated)
     }
 
     pub fn to_formula_fn(&self) -> FormulaFn<'tcx> {
@@ -427,7 +426,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                             let ExprKind::Closure(closure) = args[0].kind else {
                                 panic!("exists argument must be a closure");
                             };
-                            let closure_body = self.tcx.hir().body(closure.body);
+                            let closure_body = self.tcx.hir_body(closure.body);
 
                             let mut inner_translator = self.clone();
                             let mut vars = Vec::new();
@@ -487,10 +486,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                             .next()
                             .is_some()
                         {
-                            let param_env = self
-                                .tcx
-                                .param_env(self.local_def_id)
-                                .with_reveal_all_normalized(self.tcx);
+                            let typing_env = mir_ty::TypingEnv::fully_monomorphized();
                             let generic_args = self.typeck.node_args(func_expr.hir_id);
                             tracing::debug!(
                                 lhs = ?def_id,
@@ -503,7 +499,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                                 .instantiate(self.tcx, self.generic_args);
                             let instance = mir_ty::Instance::try_resolve(
                                 self.tcx,
-                                param_env,
+                                typing_env,
                                 def_id,
                                 generic_args,
                             )

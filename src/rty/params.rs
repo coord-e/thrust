@@ -36,7 +36,7 @@ impl std::fmt::Display for TypeParamIdx {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TypeParamIdx
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &TypeParamIdx
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {

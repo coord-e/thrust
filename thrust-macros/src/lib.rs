@@ -687,7 +687,7 @@ fn model_where_predicates(
                 let TypeParamBound::Trait(tb) = b else {
                     return false;
                 };
-                tb.path.segments.last().map_or(false, |s| {
+                tb.path.segments.last().is_some_and(|s| {
                     matches!(s.ident.to_string().as_str(), "Fn" | "FnOnce" | "FnMut")
                 })
             })

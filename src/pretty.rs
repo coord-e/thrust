@@ -53,7 +53,7 @@ pub struct PrettySlice<'a, T> {
     slice: &'a [T],
 }
 
-impl<'a, 'b, 'c, D, T> Pretty<'a, D, termcolor::ColorSpec> for &'c PrettySlice<'b, T>
+impl<'a, 'b, D, T> Pretty<'a, D, termcolor::ColorSpec> for &PrettySlice<'b, T>
 where
     &'b T: Pretty<'a, D, termcolor::ColorSpec>,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
