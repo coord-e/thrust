@@ -1,6 +1,5 @@
 //! Supporting implementation for parsing Thrust annotations.
 
-use rustc_ast::ast::Attribute;
 use rustc_ast::tokenstream::TokenStream;
 use rustc_index::IndexVec;
 use rustc_span::symbol::{Ident, Symbol};
@@ -197,32 +196,28 @@ impl ResultResolver {
     }
 }
 
-pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
-    use rustc_ast::{AttrArgs, AttrKind, DelimArgs};
+pub fn extract_annot_tokens(attr: &rustc_hir::Attribute) -> TokenStream {
+    use rustc_hir::AttrArgs;
 
-    let AttrKind::Normal(attr) = &attr.kind else {
+    let item = attr.get_normal_item();
+    let AttrArgs::Delimited(delim_args) = &item.args else {
         panic!("invalid attribute");
     };
-
-    let AttrArgs::Delimited(DelimArgs { tokens, .. }, ..) = &attr.item.args else {
-        panic!("invalid attribute");
-    };
-
-    tokens.clone()
+    delim_args.tokens.clone()
 }
 
 pub fn split_param(ts: &TokenStream) -> (Ident, TokenStream) {
     use rustc_ast::token::TokenKind;
     use rustc_ast::tokenstream::TokenTree;
 
-    let mut cursor = ts.trees();
-    let (ident, _) = match cursor.next() {
+    let mut iter = ts.iter();
+    let (ident, _) = match iter.next() {
         Some(TokenTree::Token(t, _)) => t.ident().expect("expected parameter name"),
         _ => panic!("expected parameter name"),
     };
-    match cursor.next() {
+    match iter.next() {
         Some(TokenTree::Token(t, _)) if t.kind == TokenKind::Colon => {}
         _ => panic!("expected :"),
     }
-    (ident, cursor.cloned().collect())
+    (ident, iter.cloned().collect())
 }

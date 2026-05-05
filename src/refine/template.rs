@@ -71,7 +71,7 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
-    param_env: mir_ty::ParamEnv<'tcx>,
+    typing_env: mir_ty::TypingEnv<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
     /// These indices may differ because we skip lifetime parameters and they always need to be
     /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
@@ -93,11 +93,11 @@ impl<'tcx> TypeBuilder<'tcx> {
                 mir_ty::GenericParamDefKind::Const { .. } => {}
             }
         }
-        let param_env = tcx.param_env_reveal_all_normalized(def_id);
+        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, def_id);
         Self {
             tcx,
             def_ids,
-            param_env,
+            typing_env,
             param_idx_mapping,
         }
     }
@@ -126,14 +126,14 @@ impl<'tcx> TypeBuilder<'tcx> {
             closure_model_id: DefId,
         }
 
-        use mir_ty::fold::TypeFoldable;
-        impl<'tcx> mir_ty::fold::TypeFolder<mir_ty::TyCtxt<'tcx>> for ReplaceClosureModel<'tcx> {
-            fn interner(&self) -> mir_ty::TyCtxt<'tcx> {
+        use mir_ty::TypeFoldable;
+        impl<'tcx> mir_ty::TypeFolder<mir_ty::TyCtxt<'tcx>> for ReplaceClosureModel<'tcx> {
+            fn cx(&self) -> mir_ty::TyCtxt<'tcx> {
                 self.tcx
             }
 
             fn fold_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
-                use mir_ty::fold::TypeSuperFoldable;
+                use mir_ty::TypeSuperFoldable;
                 if let mir_ty::TyKind::Closure(_, args) = ty.kind() {
                     let args = self
                         .tcx
@@ -161,7 +161,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         let projection_ty = mir_ty::Ty::new_projection(self.tcx, model_ty_def_id, args);
         if let Ok(normalized_ty) = self
             .tcx
-            .try_normalize_erasing_regions(self.param_env, projection_ty)
+            .try_normalize_erasing_regions(self.typing_env, mir_ty::Unnormalized::new_wip(projection_ty))
         {
             return normalized_ty;
         }
@@ -222,7 +222,7 @@ impl<'tcx> TypeBuilder<'tcx> {
             }
             mir_ty::TyKind::Never => rty::Type::never(),
             mir_ty::TyKind::Param(ty) => self.translate_param_type(ty),
-            mir_ty::TyKind::FnPtr(sig) => {
+            mir_ty::TyKind::FnPtr(sig, _) => {
                 // TODO: justification for skip_binder
                 let sig = sig.skip_binder();
                 let params = sig
@@ -278,10 +278,10 @@ impl<'tcx> TypeBuilder<'tcx> {
         registry: &'a mut R,
         sig: mir_ty::FnSig<'tcx>,
     ) -> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
-        let abi = match sig.abi {
-            rustc_target::spec::abi::Abi::Rust => rty::FunctionAbi::Rust,
-            rustc_target::spec::abi::Abi::RustCall => rty::FunctionAbi::RustCall,
-            _ => unimplemented!("unsupported function ABI: {:?}", sig.abi),
+        let abi = match sig.abi() {
+            rustc_abi::ExternAbi::Rust => rty::FunctionAbi::Rust,
+            rustc_abi::ExternAbi::RustCall => rty::FunctionAbi::RustCall,
+            _ => unimplemented!("unsupported function ABI: {:?}", sig.abi()),
         };
         FunctionTemplateTypeBuilder {
             inner: self.clone(),
@@ -384,9 +384,9 @@ where
             }
             mir_ty::TyKind::Never => rty::Type::never(),
             mir_ty::TyKind::Param(ty) => self.inner.translate_param_type(ty).vacuous(),
-            mir_ty::TyKind::FnPtr(sig) => {
+            mir_ty::TyKind::FnPtr(sig_tys, hdr) => {
                 // TODO: justification for skip_binder
-                let sig = sig.skip_binder();
+                let sig = sig_tys.with(*hdr).skip_binder();
                 let ty = self.inner.for_function_template(self.registry, sig).build();
                 rty::Type::function(ty)
             }
@@ -562,7 +562,7 @@ where
             let param_rty = if let Some(param_refinement) = &self.param_refinement {
                 rty::RefinedType::new(rty::Type::unit(), param_refinement.clone())
             } else {
-                let unit_ty = mir_ty::Ty::new_unit(self.inner.tcx);
+                let unit_ty = mir_ty::Ty::new_tup(self.inner.tcx, &[]);
                 self.inner
                     .for_template(self.registry)
                     .with_scope(&builder)

@@ -6,7 +6,7 @@ use std::rc::Rc;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::Symbol;
-use rustc_target::abi::FieldIdx;
+use rustc_abi::FieldIdx;
 
 #[derive(Debug, Clone, Default)]
 struct DefIds {
@@ -58,6 +58,7 @@ impl<'tcx> DefIdCache<'tcx> {
                 .tcx
                 .type_of(box_first_did)
                 .instantiate_identity()
+                .skip_norm_wip()
                 .ty_adt_def()
                 .expect("expected Box to contain Unique");
             Some(unique_def.did())
@@ -73,6 +74,7 @@ impl<'tcx> DefIdCache<'tcx> {
                 .tcx
                 .type_of(unique_first_did)
                 .instantiate_identity()
+                .skip_norm_wip()
                 .ty_adt_def()
                 .expect("expected Unique to contain NonNull");
             Some(nonnull_def.did())
@@ -80,25 +82,24 @@ impl<'tcx> DefIdCache<'tcx> {
     }
 
     fn annotated_def(&self, path: &[Symbol]) -> Option<DefId> {
-        let map = self.tcx.hir();
-        for item_id in map.items() {
+        for item_id in self.tcx.hir_free_items() {
             let def_id = item_id.owner_id.to_def_id();
             if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
                 return Some(def_id);
             }
 
-            let item = map.item(item_id);
-            if let rustc_hir::ItemKind::Trait(_, _, _, _, trait_item_refs) = item.kind {
+            let item = self.tcx.hir_item(item_id);
+            if let rustc_hir::ItemKind::Trait { items: trait_item_refs, .. } = item.kind {
                 for trait_item_ref in trait_item_refs {
-                    let def_id = trait_item_ref.id.owner_id.to_def_id();
+                    let def_id = trait_item_ref.owner_id.to_def_id();
                     if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
                         return Some(def_id);
                     }
                 }
             }
             if let rustc_hir::ItemKind::Impl(impl_) = item.kind {
-                for impl_item_ref in impl_.items {
-                    let def_id = impl_item_ref.id.owner_id.to_def_id();
+                for impl_item_id in impl_.items {
+                    let def_id = impl_item_id.owner_id.to_def_id();
                     if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
                         return Some(def_id);
                     }

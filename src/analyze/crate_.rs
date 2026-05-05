@@ -36,8 +36,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             use rustc_ast::token::{LitKind, Token, TokenKind};
             use rustc_ast::tokenstream::TokenTree;
 
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let tt = ts.trees().next().expect("string literal");
+            let ts = analyze::annot::extract_annot_tokens(attrs);
+            let tt = ts.iter().next().expect("string literal");
 
             let raw_command = match tt {
                 TokenTree::Token(

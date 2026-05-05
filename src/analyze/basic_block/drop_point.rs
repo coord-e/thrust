@@ -1,15 +1,16 @@
 use std::collections::HashMap;
 
-use rustc_index::bit_set::BitSet;
+use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
+use rustc_middle::mir::visit::Visitor as _;
 use rustc_mir_dataflow::{impls::MaybeLiveLocals, ResultsCursor};
 
 #[derive(Debug, Clone, Default)]
 pub struct DropPoints {
     // TODO: ad-hoc
     pub before_statements: Vec<Local>,
-    after_statements: Vec<BitSet<Local>>,
-    after_terminator: HashMap<BasicBlock, BitSet<Local>>,
+    after_statements: Vec<DenseBitSet<Local>>,
+    after_terminator: HashMap<BasicBlock, DenseBitSet<Local>>,
 }
 
 impl DropPoints {
@@ -40,11 +41,11 @@ impl DropPoints {
         self.after_statements[statement_index].insert(local)
     }
 
-    pub fn after_statement(&self, statement_index: usize) -> BitSet<Local> {
+    pub fn after_statement(&self, statement_index: usize) -> DenseBitSet<Local> {
         self.after_statements[statement_index].clone()
     }
 
-    pub fn after_terminator(&self, target: &BasicBlock) -> BitSet<Local> {
+    pub fn after_terminator(&self, target: &BasicBlock) -> DenseBitSet<Local> {
         let mut t = self.after_terminator[target].clone();
         t.union(self.after_statements.last().unwrap());
         t
@@ -54,12 +55,10 @@ impl DropPoints {
 #[derive(Debug, Clone)]
 pub struct DropPointsBuilder<'mir, 'tcx> {
     body: &'mir Body<'tcx>,
-    bb_ins_cache: HashMap<BasicBlock, BitSet<Local>>,
+    bb_ins_cache: HashMap<BasicBlock, DenseBitSet<Local>>,
 }
 
-fn def_local<'a, 'tcx, T: mir::visit::MirVisitable<'tcx> + ?Sized>(
-    visitable: &'a T,
-) -> Option<Local> {
+fn def_local_stmt<'tcx>(stmt: &mir::Statement<'tcx>) -> Option<Local> {
     struct Visitor {
         local: Option<Local>,
     }
@@ -77,7 +76,29 @@ fn def_local<'a, 'tcx, T: mir::visit::MirVisitable<'tcx> + ?Sized>(
         }
     }
     let mut visitor = Visitor { local: None };
-    visitable.apply(mir::Location::START, &mut visitor);
+    visitor.visit_statement(stmt, mir::Location::START);
+    visitor.local
+}
+
+fn def_local_term<'tcx>(term: &mir::Terminator<'tcx>) -> Option<Local> {
+    struct Visitor {
+        local: Option<Local>,
+    }
+    impl<'tcx> mir::visit::Visitor<'tcx> for Visitor {
+        fn visit_local(
+            &mut self,
+            local: Local,
+            ctxt: mir::visit::PlaceContext,
+            _location: mir::Location,
+        ) {
+            if ctxt.is_place_assignment() {
+                let old = self.local.replace(local);
+                assert!(old.is_none());
+            }
+        }
+    }
+    let mut visitor = Visitor { local: None };
+    visitor.visit_terminator(term, mir::Location::START);
     visitor.local
 }
 
@@ -91,13 +112,13 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
 
         let mut after_terminator = HashMap::new();
         let mut after_statements = Vec::new();
-        after_statements.resize_with(data.statements.len() + 1, || BitSet::new_empty(0));
+        after_statements.resize_with(data.statements.len() + 1, || DenseBitSet::new_empty(0));
 
         results.seek_to_block_end(bb);
         let live_locals_after_terminator = results.get().clone();
 
-        use rustc_data_structures::graph::WithSuccessors as _;
-        let mut ins = BitSet::new_empty(self.body.local_decls.len());
+        use rustc_data_structures::graph::Successors as _;
+        let mut ins = DenseBitSet::new_empty(self.body.local_decls.len());
         for succ_bb in self.body.basic_blocks.successors(bb) {
             self.bb_ins_cache.entry(succ_bb).or_insert_with(|| {
                 results.seek_to_block_start(succ_bb);
@@ -127,7 +148,12 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
             tracing::debug!(?live_locals, ?loc);
             after_statements[statement_index] = {
                 let mut t = live_locals.clone();
-                if let Some(def) = def_local(data.visitable(statement_index)) {
+                let def = if statement_index < data.statements.len() {
+                def_local_stmt(&data.statements[statement_index])
+            } else {
+                def_local_term(data.terminator())
+            };
+            if let Some(def) = def {
                     t.insert(def);
                 }
                 t.subtract(&last_live_locals);

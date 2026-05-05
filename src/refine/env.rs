@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Place, PlaceElem};
-use rustc_target::abi::{FieldIdx, VariantIdx};
+use rustc_abi::{FieldIdx, VariantIdx};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;

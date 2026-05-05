@@ -8,11 +8,32 @@
 //! The main entry point is [`AnnotParser`], which parses a [`TokenStream`] into a
 //! [`rty::RefinedType`] or a [`chc::Formula`].
 
-use rustc_ast::token::{BinOpToken, Delimiter, LitKind, Token, TokenKind};
-use rustc_ast::tokenstream::{RefTokenTreeCursor, Spacing, TokenStream, TokenTree};
+use rustc_ast::token::{Delimiter, LitKind, Token, TokenKind};
+use rustc_ast::tokenstream::{Spacing, TokenStream, TokenTree};
 use rustc_index::IndexVec;
 use rustc_span::symbol::Ident;
 use std::collections::HashMap;
+
+struct TokenCursor<'a> {
+    stream: &'a TokenStream,
+    index: usize,
+}
+
+impl<'a> TokenCursor<'a> {
+    fn new(stream: &'a TokenStream) -> Self {
+        Self { stream, index: 0 }
+    }
+
+    fn next(&mut self) -> Option<&'a TokenTree> {
+        let tree = self.stream.get(self.index)?;
+        self.index += 1;
+        Some(tree)
+    }
+
+    fn look_ahead(&self, n: usize) -> Option<&'a TokenTree> {
+        self.stream.get(self.index + n)
+    }
+}
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
@@ -257,7 +278,7 @@ impl<T> FormulaOrTerm<T> {
 struct Parser<'a, T> {
     resolver: T,
     self_type_name: Option<String>,
-    cursor: RefTokenTreeCursor<'a>,
+    cursor: TokenCursor<'a>,
     formula_existentials: HashMap<String, chc::Sort>,
 }
 
@@ -377,7 +398,7 @@ where
             generic_args: Vec::new(),
         });
         while let Some(Token {
-            kind: TokenKind::ModSep,
+            kind: TokenKind::PathSep,
             ..
         }) = self.look_ahead_token(0)
         {
@@ -461,7 +482,7 @@ where
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
                     self_type_name: self.self_type_name.clone(),
-                    cursor: s.trees(),
+                    cursor: TokenCursor::new(s),
                     formula_existentials: self.formula_existentials.clone(),
                 };
                 let formula_or_term = parser.parse_formula_or_term_or_tuple()?;
@@ -502,7 +523,7 @@ where
                             let mut parser = Parser {
                                 resolver: self.boxed_resolver(),
                                 self_type_name: self.self_type_name.clone(),
-                                cursor: args.trees(),
+                                cursor: TokenCursor::new(&args),
                                 formula_existentials: self.formula_existentials.clone(),
                             };
                             let args = parser.parse_arg_terms()?;
@@ -528,7 +549,7 @@ where
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
                     self_type_name: self.self_type_name.clone(),
-                    cursor: s.trees(),
+                    cursor: TokenCursor::new(&s),
                     formula_existentials: self.formula_existentials.clone(),
                 };
                 let args = parser.parse_arg_terms()?;
@@ -646,7 +667,7 @@ where
                     let mut parser = Parser {
                         resolver: self.boxed_resolver(),
                         self_type_name: self.self_type_name.clone(),
-                        cursor: args.trees(),
+                        cursor: TokenCursor::new(&args),
                         formula_existentials: self.formula_existentials.clone(),
                     };
                     let args = parser.parse_arg_terms()?;
@@ -695,14 +716,14 @@ where
     fn parse_prefix(&mut self) -> Result<FormulaOrTerm<T::Output>> {
         let formula_or_term =
             match self.look_ahead_token(0).map(|t| &t.kind) {
-                Some(TokenKind::BinOp(BinOpToken::Minus)) => {
+                Some(TokenKind::Minus) => {
                     self.consume();
                     let (operand, sort) = self.parse_postfix()?.into_term().ok_or_else(|| {
                         ParseAttrError::unexpected_formula("after unary - operator")
                     })?;
                     FormulaOrTerm::Term(operand.neg(), sort)
                 }
-                Some(TokenKind::BinOp(BinOpToken::Star)) => {
+                Some(TokenKind::Star) => {
                     self.consume();
                     let (operand, sort) = self.parse_postfix()?.into_term().ok_or_else(|| {
                         ParseAttrError::unexpected_formula("after unary * operator")
@@ -714,7 +735,7 @@ where
                     };
                     FormulaOrTerm::Term(t, s)
                 }
-                Some(TokenKind::BinOp(BinOpToken::Caret)) => {
+                Some(TokenKind::Caret) => {
                     self.consume();
                     let (operand, sort) = self.parse_postfix()?.into_term().ok_or_else(|| {
                         ParseAttrError::unexpected_formula("after unary ^ operator")
@@ -725,7 +746,7 @@ where
                         return Err(ParseAttrError::unsorted_op("^", sort));
                     }
                 }
-                Some(TokenKind::Not) => {
+                Some(TokenKind::Bang) => {
                     self.consume();
                     let formula_or_term = self.parse_postfix()?;
                     FormulaOrTerm::Not(Box::new(formula_or_term))
@@ -738,7 +759,7 @@ where
     fn parse_binop_1(&mut self) -> Result<FormulaOrTerm<T::Output>> {
         let mut formula_or_term = self.parse_prefix()?;
 
-        while let Some(TokenKind::BinOp(BinOpToken::Star)) =
+        while let Some(TokenKind::Star) =
             self.look_ahead_token(0).map(|t| &t.kind)
         {
             self.consume();
@@ -760,7 +781,7 @@ where
 
         loop {
             match self.look_ahead_token(0).map(|t| &t.kind) {
-                Some(TokenKind::BinOp(BinOpToken::Plus)) => {
+                Some(TokenKind::Plus) => {
                     self.consume();
                     let (lhs, _) = formula_or_term
                         .into_term()
@@ -771,7 +792,7 @@ where
                         .ok_or_else(|| ParseAttrError::unexpected_formula("after + operator"))?;
                     formula_or_term = FormulaOrTerm::Term(lhs.add(rhs), chc::Sort::int())
                 }
-                Some(TokenKind::BinOp(BinOpToken::Minus)) => {
+                Some(TokenKind::Minus) => {
                     self.consume();
                     let (lhs, _) = formula_or_term
                         .into_term()
@@ -947,7 +968,7 @@ where
         match tt {
             TokenTree::Token(
                 Token {
-                    kind: TokenKind::BinOp(BinOpToken::And),
+                    kind: TokenKind::And,
                     ..
                 },
                 _,
@@ -995,7 +1016,7 @@ where
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
                     self_type_name: self.self_type_name.clone(),
-                    cursor: ts.trees(),
+                    cursor: TokenCursor::new(&ts),
                     formula_existentials: self.formula_existentials.clone(),
                 };
                 let mut sorts = Vec::new();
@@ -1076,14 +1097,14 @@ where
             }
             TokenTree::Token(
                 Token {
-                    kind: TokenKind::Not,
+                    kind: TokenKind::Bang,
                     ..
                 },
                 _,
             ) => Ok(rty::Type::never()),
             TokenTree::Token(
                 Token {
-                    kind: TokenKind::BinOp(BinOpToken::And),
+                    kind: TokenKind::And,
                     ..
                 },
                 _,
@@ -1102,7 +1123,7 @@ where
                 let mut parser = Parser {
                     resolver: self.boxed_resolver(),
                     self_type_name: self.self_type_name.clone(),
-                    cursor: ts.trees(),
+                    cursor: TokenCursor::new(&ts),
                     formula_existentials: self.formula_existentials.clone(),
                 };
                 let mut rtys = Vec::new();
@@ -1139,7 +1160,7 @@ where
         let mut parser = Parser {
             resolver: self.boxed_resolver(),
             self_type_name: self.self_type_name.clone(),
-            cursor: ts.trees(),
+            cursor: TokenCursor::new(&ts),
             formula_existentials: self.formula_existentials.clone(),
         };
         let self_ident = if matches!(
@@ -1159,7 +1180,7 @@ where
             None
         };
         let ty = parser.parse_ty()?;
-        parser.expect_next_token(TokenKind::BinOp(BinOpToken::Or), "|")?;
+        parser.expect_next_token(TokenKind::Or, "|")?;
 
         let mut parser = Parser {
             resolver: RefinementResolver::new(self.boxed_resolver()),
@@ -1309,7 +1330,7 @@ where
         let mut parser = Parser {
             resolver: &self.resolver,
             self_type_name: self.self_type_name.clone(),
-            cursor: ts.trees(),
+            cursor: TokenCursor::new(&ts),
             formula_existentials: Default::default(),
         };
         let rty = parser.parse_rty()?;
@@ -1321,7 +1342,7 @@ where
         let mut parser = Parser {
             resolver: &self.resolver,
             self_type_name: self.self_type_name.clone(),
-            cursor: ts.trees(),
+            cursor: TokenCursor::new(&ts),
             formula_existentials: Default::default(),
         };
         let formula = parser.parse_annot_formula()?;

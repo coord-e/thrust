@@ -3,13 +3,14 @@
 extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_interface;
+extern crate rustc_middle;
 extern crate rustc_parse;
 extern crate rustc_session;
 extern crate rustc_span;
 
-use rustc_driver::{Callbacks, Compilation, RunCompiler};
+use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::{Compiler, Config};
-use rustc_interface::Queries;
+use rustc_middle::ty::TyCtxt;
 
 struct CompilerCalls {}
 
@@ -20,30 +21,34 @@ impl Callbacks for CompilerCalls {
         attrs.push("register_tool(thrust)".to_owned());
 
         config.override_queries = Some(|_sess, providers| {
-            providers.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
+            providers.queries.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
         });
     }
 
-    fn after_crate_root_parsing<'tcx>(
+    fn after_crate_root_parsing(
         &mut self,
         compiler: &Compiler,
-        queries: &'tcx Queries<'tcx>,
+        krate: &mut rustc_ast::Crate,
     ) -> Compilation {
         if matches!(std::env::var("THRUST_NO_INJECT_STD").as_deref(), Ok("1")) {
             return Compilation::Continue;
         }
-
-        let mut result = queries.parse().unwrap();
-        let krate = result.get_mut();
 
         let injected = include_str!("../std.rs");
         let mut parser = rustc_parse::new_parser_from_source_str(
             &compiler.sess.psess,
             rustc_span::FileName::Custom("thrust std injected".to_string()),
             injected.to_owned(),
-        );
+            rustc_parse::lexer::StripTokens::Nothing,
+        ).unwrap_or_else(|errs| {
+            for err in errs { err.emit(); }
+            panic!("failed to parse injected std");
+        });
         while let Some(item) = parser
-            .parse_item(rustc_parse::parser::ForceCollect::No)
+            .parse_item(
+                rustc_parse::parser::ForceCollect::No,
+                rustc_parse::parser::AllowConstBlockItems::Yes,
+            )
             .unwrap()
         {
             krate.items.push(item);
@@ -54,14 +59,12 @@ impl Callbacks for CompilerCalls {
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &Compiler,
-        queries: &'tcx Queries<'tcx>,
+        tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        queries.global_ctxt().unwrap().enter(|tcx| {
-            let mut ctx = thrust::Analyzer::new(tcx);
-            ctx.register_well_known_defs();
-            ctx.crate_analyzer().run();
-            ctx.solve();
-        });
+        let mut ctx = thrust::Analyzer::new(tcx);
+        ctx.register_well_known_defs();
+        ctx.crate_analyzer().run();
+        ctx.solve();
         Compilation::Stop
     }
 }
@@ -94,7 +97,7 @@ fn thrust_macros_path() -> Option<std::path::PathBuf> {
     None
 }
 
-pub fn main() {
+pub fn main() -> std::process::ExitCode {
     let mut args = std::env::args().collect::<Vec<_>>();
 
     use tracing_subscriber::{filter::EnvFilter, prelude::*};
@@ -116,7 +119,7 @@ pub fn main() {
         tracing::warn!("could not locate thrust_macros library");
     }
 
-    let code =
-        rustc_driver::catch_with_exit_code(|| RunCompiler::new(&args, &mut CompilerCalls {}).run());
-    std::process::exit(code);
+    rustc_driver::catch_with_exit_code(|| {
+        rustc_driver::run_compiler(&args, &mut CompilerCalls {})
+    })
 }

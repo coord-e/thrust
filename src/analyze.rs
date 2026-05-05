@@ -37,7 +37,7 @@ pub use did_cache::DefIdCache;
 pub fn mir_borrowck_skip_formula_fn(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_def_id: rustc_span::def_id::LocalDefId,
-) -> rustc_middle::query::queries::mir_borrowck::ProvidedValue {
+) -> rustc_middle::queries::mir_borrowck::ProvidedValue<'_> {
     // TODO: unify impl with local_def::Analyzer
     // if the def is closure defined in formula_fn
     let root_def_id = tcx.typeck_root_def_id(local_def_id.to_def_id());
@@ -52,13 +52,7 @@ pub fn mir_borrowck_skip_formula_fn(
 
     if is_annotated_as_formula_fn {
         tracing::debug!(?local_def_id, "skipping borrow check for formula fn");
-        let dummy_result = rustc_middle::mir::BorrowCheckResult {
-            concrete_opaque_types: Default::default(),
-            closure_requirements: None,
-            used_mut_upvars: Default::default(),
-            tainted_by_errors: None,
-        };
-        return tcx.arena.alloc(dummy_result);
+        return Ok(tcx.arena.alloc(Default::default()));
     }
 
     (rustc_interface::DEFAULT_QUERY_PROVIDERS
@@ -75,7 +69,7 @@ pub fn resolve_discr(tcx: TyCtxt<'_>, discr: mir_ty::VariantDiscr) -> u32 {
         mir_ty::VariantDiscr::Relative(i) => i,
         mir_ty::VariantDiscr::Explicit(did) => {
             let val = tcx.const_eval_poly(did).unwrap();
-            val.try_to_scalar_int().unwrap().try_to_u32().unwrap()
+            val.try_to_scalar_int().unwrap().to_u32()
         }
     }
 }
@@ -285,7 +279,7 @@ impl<'tcx> Analyzer<'tcx> {
                     .fields
                     .iter()
                     .map(|field| {
-                        let field_ty = self.tcx.type_of(field.did).instantiate_identity();
+                        let field_ty = self.tcx.type_of(field.did).instantiate_identity().skip_norm_wip();
                         TypeBuilder::new(self.tcx, self.def_ids(), def_id).build(field_ty)
                     })
                     .collect();
@@ -511,7 +505,7 @@ impl<'tcx> Analyzer<'tcx> {
             let ret = rty::RefinedType::new(rty::Type::never(), rty::Refinement::bottom());
             rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret)
         };
-        let panic_def_id = self.tcx.require_lang_item(LangItem::Panic, None);
+        let panic_def_id = self.tcx.require_lang_item(LangItem::Panic, rustc_span::DUMMY_SP);
         self.register_def(panic_def_id, rty::RefinedType::unrefined(panic_ty.into()));
     }
 
@@ -550,7 +544,7 @@ impl<'tcx> Analyzer<'tcx> {
     /// but extracts parameter and return types directly from the given `body` to obtain a signature that
     /// reflects potential type instantiations happened after `optimized_mir`.
     pub fn fn_sig_with_body(&self, def_id: DefId, body: &mir::Body<'tcx>) -> mir_ty::FnSig<'tcx> {
-        let ty = self.tcx.type_of(def_id).instantiate_identity();
+        let ty = self.tcx.type_of(def_id).instantiate_identity().skip_norm_wip();
         let sig = if let mir_ty::TyKind::Closure(_, substs) = ty.kind() {
             substs.as_closure().sig().skip_binder()
         } else {
@@ -560,9 +554,7 @@ impl<'tcx> Analyzer<'tcx> {
         self.tcx.mk_fn_sig(
             body.args_iter().map(|arg| body.local_decls[arg].ty),
             body.return_ty(),
-            sig.c_variadic,
-            sig.unsafety,
-            sig.abi,
+            sig.fn_sig_kind,
         )
     }
 
@@ -581,16 +573,14 @@ impl<'tcx> Analyzer<'tcx> {
         local_def_id: LocalDefId,
         attr_path: &[Symbol],
     ) -> Option<DefId> {
-        let map = self.tcx.hir();
-        let body_id = map.maybe_body_owned_by(local_def_id)?;
-        let body = map.body(body_id);
+        let body = self.tcx.hir_maybe_body_owned_by(local_def_id)?;
 
         let rustc_hir::ExprKind::Block(block, _) = body.value.kind else {
             return None;
         };
         for stmt in block.stmts {
-            if map
-                .attrs(stmt.hir_id)
+            if self.tcx
+                .hir_attrs(stmt.hir_id)
                 .iter()
                 .all(|attr| !attr.path_matches(attr_path))
             {
@@ -649,7 +639,7 @@ impl<'tcx> Analyzer<'tcx> {
             if require_annot.is_some() {
                 unimplemented!();
             }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let ts = analyze::annot::extract_annot_tokens(attrs);
             let require = parser.parse_formula(ts).unwrap();
             require_annot = Some(require);
         }
@@ -699,7 +689,7 @@ impl<'tcx> Analyzer<'tcx> {
             if ensure_annot.is_some() {
                 unimplemented!();
             }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
+            let ts = analyze::annot::extract_annot_tokens(attrs);
             let ensure = parser.parse_formula(ts).unwrap();
             ensure_annot = Some(ensure);
         }
@@ -731,7 +721,7 @@ impl<'tcx> Analyzer<'tcx> {
     /// Whether the given `def_id` corresponds to a method of one of the `Fn` traits.
     fn is_fn_trait_method(&self, def_id: DefId) -> bool {
         self.tcx
-            .trait_of_item(def_id)
+            .trait_of_assoc(def_id)
             .and_then(|trait_did| self.tcx.fn_trait_kind_from_def_id(trait_did))
             .is_some()
     }

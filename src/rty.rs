@@ -41,7 +41,7 @@ use std::collections::{HashMap, HashSet};
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
-use rustc_target::abi::VariantIdx;
+use rustc_abi::VariantIdx;
 
 use crate::chc;
 

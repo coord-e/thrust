@@ -206,14 +206,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn const_value_ty(&self, val: &mir::ConstValue<'tcx>, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
+    fn const_value_ty(&self, val: &mir::ConstValue, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
         use mir::{interpret::Scalar, ConstValue, Mutability};
         match (ty.kind(), val) {
             (
                 mir_ty::TyKind::Int(_) | mir_ty::TyKind::Uint(_),
                 ConstValue::Scalar(Scalar::Int(val)),
             ) => {
-                let val = val.try_to_int(val.size()).unwrap();
+                let val = val.to_int(val.size());
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
                     chc::Term::int(val.try_into().unwrap()),
@@ -235,15 +235,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                 ConstValue::Scalar(Scalar::Ptr(ptr, _)),
             ) => {
-                // Pointer::into_parts is OK for CtfeProvenance
-                // in a later version of rustc it has prov_and_relative_offset that ensures this
-                let (prov, offset) = ptr.into_parts();
+                let (prov, offset) = ptr.into_raw_parts();
                 let global_alloc = self.tcx.global_alloc(prov.alloc_id());
                 match global_alloc {
                     mir::interpret::GlobalAlloc::Memory(alloc) => {
                         let layout = self
                             .tcx
-                            .layout_of(mir_ty::ParamEnv::reveal_all().and(*elem))
+                            .layout_of(mir_ty::TypingEnv::fully_monomorphized().as_query_input(*elem))
                             .unwrap();
                         let size = layout.size;
                         let range =
@@ -253,9 +251,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!("const ptr alloc: {:?}", global_alloc),
                 }
             }
-            (mir_ty::TyKind::Ref(_, elem, Mutability::Not), ConstValue::Slice { data, meta }) => {
+            (mir_ty::TyKind::Ref(_, elem, Mutability::Not), ConstValue::Slice { alloc_id, meta }) => {
                 let end = (*meta).try_into().unwrap();
-                self.const_bytes_ty(*elem, *data, 0..end).immut()
+                let global_alloc = self.tcx.global_alloc(*alloc_id);
+                let mir::interpret::GlobalAlloc::Memory(alloc) = global_alloc else {
+                    unimplemented!("const slice alloc: {:?}", global_alloc);
+                };
+                self.const_bytes_ty(*elem, alloc, 0..end).immut()
             }
             _ => unimplemented!("const: {:?}, ty: {:?}", val, ty),
         }
@@ -267,10 +269,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             mir::Const::Unevaluated(unevaluated, ty) => {
                 // since all constants are immutable in current setup,
                 // it should be okay to evaluate them here on-the-fly
-                let param_env = self.tcx.param_env(self.local_def_id);
+                let typing_env = mir_ty::TypingEnv::post_analysis(self.tcx, self.local_def_id);
                 let val = self
                     .tcx
-                    .const_eval_resolve(param_env, *unevaluated, None)
+                    .const_eval_resolve(typing_env, *unevaluated, rustc_span::DUMMY_SP)
                     .unwrap();
                 self.const_value_ty(&val, ty)
             }
@@ -285,6 +287,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let ty = match &operand {
             Operand::Copy(place) | Operand::Move(place) => self.env.place_type(*place),
             Operand::Constant(operand) => self.const_ty(&operand.const_),
+            Operand::RuntimeChecks(_) => unimplemented!("RuntimeChecks operand"),
         };
         tracing::debug!(operand = ?operand, ty = %ty.display(), "operand_type");
         ty
@@ -292,7 +295,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
-            Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::Use(operand, _) => self.operand_type(operand),
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
@@ -415,7 +418,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
             }
             Rvalue::Cast(
-                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::ReifyFnPointer),
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::ReifyFnPointer(_), _),
                 operand,
                 _ty,
             ) => {
@@ -470,11 +473,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn operand_refined_type(&mut self, operand: Operand<'tcx>) -> rty::RefinedType<Var> {
-        self.rvalue_refined_type(Rvalue::Use(operand))
+        self.rvalue_refined_type(Rvalue::Use(operand, mir::WithRetag::No))
     }
 
     fn type_operand(&mut self, operand: Operand<'tcx>, expected: &rty::RefinedType<Var>) {
-        self.type_rvalue(Rvalue::Use(operand), expected);
+        self.type_rvalue(Rvalue::Use(operand, mir::WithRetag::No), expected);
     }
 
     fn type_return(&mut self, expected: &rty::RefinedType<Var>) {
@@ -590,12 +593,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::debug!(?closure_def_id, "closure instance");
                 (*closure_def_id, args)
             } else {
-                let param_env = self
-                    .tcx
-                    .param_env(self.local_def_id)
-                    .with_reveal_all_normalized(self.tcx);
+                let typing_env = mir_ty::TypingEnv::post_analysis(self.tcx, self.local_def_id);
                 let instance =
-                    mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+                    mir_ty::Instance::try_resolve(self.tcx, typing_env, def_id, args).unwrap();
                 if let Some(instance) = instance {
                     (instance.def_id(), instance.args)
                 } else {
@@ -815,7 +815,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .for_template(&mut self.ctx)
                 .with_scope(&self.env)
                 .build_refined(decl.ty);
-            self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
+            self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node.clone()), &rty);
             self.bind_local(destination, rty);
         }
     }
@@ -905,7 +905,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     unimplemented!();
                 }
                 // TODO: is it appropriate to use builtin_deref here... maybe we should handle dereferencing logic in `refine`
-                let inner_ty = self.local_decls[p.local].ty.builtin_deref(true).unwrap().ty;
+                let inner_ty = self.local_decls[p.local].ty.builtin_deref(true).unwrap();
                 self.add_prophecy_var(stmt_idx, inner_ty);
             }
         }
