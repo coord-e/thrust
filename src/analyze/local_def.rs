@@ -276,7 +276,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             || (all_params_annotated && has_ret)
     }
 
-    pub fn trait_item_id(&self) -> Option<LocalDefId> {
+    pub fn local_trait_item_id(&self) -> Option<LocalDefId> {
         let impl_item_assoc = self
             .tcx
             .opt_associated_item(self.local_def_id.to_def_id())?;
@@ -284,9 +284,33 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .trait_item_def_id
             .and_then(|id| id.as_local())?;
 
+        if trait_item_id == self.local_def_id {
+            return None;
+        }
+
         Some(trait_item_id)
     }
 
+    pub fn trait_item_ty(&mut self) -> Option<rty::RefinedType> {
+        let impl_did = self.tcx.parent(self.local_def_id.to_def_id());
+
+        if self.tcx.def_kind(impl_did) != (rustc_hir::def::DefKind::Impl { of_trait: true }) {
+            return None;
+        }
+
+        let trait_ref = self.tcx.impl_trait_ref(impl_did)?.instantiate_identity();
+        let trait_item_did = self
+            .tcx
+            .associated_item(self.local_def_id.to_def_id())
+            .trait_item_def_id
+            .unwrap();
+        self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
+    }
+
+    // Note that we do not expect predicate variables to be generated here
+    // when type params are still present in the type. Callers should ensure either
+    // - type params are fully instantiated, or
+    // - the function is fully annotated
     pub fn expected_ty(&mut self) -> rty::RefinedType {
         let sig = self
             .ctx
@@ -324,7 +348,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.generic_args,
         );
 
-        if let Some(trait_item_id) = self.trait_item_id() {
+        if let Some(trait_item_id) = self.local_trait_item_id() {
             tracing::info!("trait item found: {:?}", trait_item_id);
             let trait_require_annot = self.ctx.extract_require_annot(
                 trait_item_id,
@@ -364,6 +388,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         assert!(require_annot.is_none() || param_annots.is_empty());
         assert!(ensure_annot.is_none() || ret_annot.is_none());
 
+        let trait_item_ty = self.trait_item_ty();
+        let is_fully_annotated = self.is_fully_annotated();
+
         let mut builder = self.type_builder.for_function_template(&mut self.ctx, sig);
         if let Some(AnnotFormula::Formula(require)) = require_annot {
             let formula = require.map_var(|idx| {
@@ -387,11 +414,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             builder.ret_rty(ret_rty);
         }
 
-        // Note that we do not expect predicate variables to be generated here
-        // when type params are still present in the type. Callers should ensure either
-        // - type params are fully instantiated, or
-        // - the function is fully annotated
-        rty::RefinedType::unrefined(builder.build().into())
+        if is_fully_annotated {
+            rty::RefinedType::unrefined(builder.build().into())
+        } else if let Some(trait_item_ty) = trait_item_ty {
+            trait_item_ty
+        } else {
+            rty::RefinedType::unrefined(builder.build().into())
+        }
     }
 
     /// Extract the target DefId from `#[thrust::extern_spec_fn]` function.
