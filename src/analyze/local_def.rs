@@ -156,9 +156,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // names and sorts of arguments
         let arg_names = self
             .tcx
-            .fn_arg_names(self.local_def_id.to_def_id())
+            .fn_arg_idents(self.local_def_id.to_def_id())
             .iter()
-            .map(|ident| ident.to_string());
+            .map(|ident| {
+                ident
+                    .expect("predicate arguments must be named")
+                    .name
+                    .to_string()
+            });
 
         let sig = self.ctx.fn_sig(self.local_def_id.to_def_id());
         let arg_sorts = sig
@@ -276,10 +281,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .next()
             .is_some();
 
-        let arg_names = self.tcx.fn_arg_names(self.local_def_id.to_def_id());
+        let arg_names = self.tcx.fn_arg_idents(self.local_def_id.to_def_id());
         let all_params_annotated = arg_names
             .iter()
-            .all(|ident| annotated_params.contains(ident));
+            .all(|ident| ident.is_some_and(|i| annotated_params.contains(&i)));
         self.is_annotated_as_callable()
             || (has_requires && has_ensures)
             || (all_params_annotated && has_ret)
@@ -328,12 +333,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut param_resolver = analyze::annot::ParamResolver::default();
         for (input_ident, input_ty) in self
             .tcx
-            .fn_arg_names(self.local_def_id.to_def_id())
+            .fn_arg_idents(self.local_def_id.to_def_id())
             .iter()
             .zip(sig.inputs())
         {
             let input_ty = self.type_builder.build(*input_ty);
-            param_resolver.push_param(input_ident.name, input_ty.to_sort());
+            param_resolver.push_param(
+                input_ident
+                    .map(|i| i.name)
+                    .unwrap_or(rustc_span::Symbol::intern("")),
+                input_ty.to_sort(),
+            );
         }
 
         let output_ty = self.type_builder.build(sig.output());

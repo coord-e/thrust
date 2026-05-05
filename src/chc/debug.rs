@@ -119,7 +119,7 @@ impl DebugInfo {
         self
     }
 
-    pub fn display(&self, line_head: &'static str) -> Display {
+    pub fn display(&self, line_head: &'static str) -> Display<'_> {
         Display {
             inner: self,
             line_head,

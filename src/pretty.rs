@@ -72,19 +72,19 @@ where
 #[allow(dead_code)]
 pub trait PrettySliceExt {
     type Item;
-    fn pretty_slice(&self) -> PrettySlice<Self::Item>;
+    fn pretty_slice(&self) -> PrettySlice<'_, Self::Item>;
 }
 
 impl<T> PrettySliceExt for [T] {
     type Item = T;
-    fn pretty_slice(&self) -> PrettySlice<T> {
+    fn pretty_slice(&self) -> PrettySlice<'_, T> {
         PrettySlice { slice: self }
     }
 }
 
 impl<T> PrettySliceExt for Vec<T> {
     type Item = T;
-    fn pretty_slice(&self) -> PrettySlice<T> {
+    fn pretty_slice(&self) -> PrettySlice<'_, T> {
         PrettySlice {
             slice: self.as_slice(),
         }
@@ -93,14 +93,14 @@ impl<T> PrettySliceExt for Vec<T> {
 
 impl<I: rustc_index::Idx, T> PrettySliceExt for IndexSlice<I, T> {
     type Item = T;
-    fn pretty_slice(&self) -> PrettySlice<T> {
+    fn pretty_slice(&self) -> PrettySlice<'_, T> {
         PrettySlice { slice: &self.raw }
     }
 }
 
 impl<I: rustc_index::Idx, T> PrettySliceExt for IndexVec<I, T> {
     type Item = T;
-    fn pretty_slice(&self) -> PrettySlice<T> {
+    fn pretty_slice(&self) -> PrettySlice<'_, T> {
         PrettySlice {
             slice: self.raw.as_slice(),
         }
@@ -124,14 +124,14 @@ where
 }
 
 pub trait PrettyDisplayExt: Sized {
-    fn display(&self) -> Display<Self>;
+    fn display(&self) -> Display<'_, Self>;
 }
 
 impl<P> PrettyDisplayExt for P
 where
     for<'a, 'b> &'b P: Pretty<'a, pretty::Arena<'a, termcolor::ColorSpec>, termcolor::ColorSpec>,
 {
-    fn display(&self) -> Display<Self> {
+    fn display(&self) -> Display<'_, Self> {
         Display::new(self)
     }
 }

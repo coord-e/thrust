@@ -87,9 +87,9 @@ impl<'tcx> DefIdCache<'tcx> {
             }
 
             let item = self.tcx.hir_item(item_id);
-            if let rustc_hir::ItemKind::Trait(_, _, _, _, trait_item_refs) = item.kind {
+            if let rustc_hir::ItemKind::Trait(_, _, _, _, _, _, trait_item_refs) = item.kind {
                 for trait_item_ref in trait_item_refs {
-                    let def_id = trait_item_ref.id.owner_id.to_def_id();
+                    let def_id = trait_item_ref.owner_id.to_def_id();
                     if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
                         return Some(def_id);
                     }
@@ -97,7 +97,7 @@ impl<'tcx> DefIdCache<'tcx> {
             }
             if let rustc_hir::ItemKind::Impl(impl_) = item.kind {
                 for impl_item_ref in impl_.items {
-                    let def_id = impl_item_ref.id.owner_id.to_def_id();
+                    let def_id = impl_item_ref.owner_id.to_def_id();
                     if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
                         return Some(def_id);
                     }

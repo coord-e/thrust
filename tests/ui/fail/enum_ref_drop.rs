@@ -1,5 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
+//@no-rustfix
 
 pub enum X<'a, 'b> {
     A(&'a mut i64),
