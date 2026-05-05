@@ -128,7 +128,7 @@ impl<'tcx> TypeBuilder<'tcx> {
 
         use mir_ty::fold::TypeFoldable;
         impl<'tcx> mir_ty::fold::TypeFolder<mir_ty::TyCtxt<'tcx>> for ReplaceClosureModel<'tcx> {
-            fn interner(&self) -> mir_ty::TyCtxt<'tcx> {
+            fn cx(&self) -> mir_ty::TyCtxt<'tcx> {
                 self.tcx
             }
 
@@ -222,9 +222,9 @@ impl<'tcx> TypeBuilder<'tcx> {
             }
             mir_ty::TyKind::Never => rty::Type::never(),
             mir_ty::TyKind::Param(ty) => self.translate_param_type(ty),
-            mir_ty::TyKind::FnPtr(sig) => {
+            mir_ty::TyKind::FnPtr(sig_tys, hdr) => {
                 // TODO: justification for skip_binder
-                let sig = sig.skip_binder();
+                let sig = sig_tys.with(*hdr).skip_binder();
                 let params = sig
                     .inputs()
                     .iter()
@@ -384,9 +384,9 @@ where
             }
             mir_ty::TyKind::Never => rty::Type::never(),
             mir_ty::TyKind::Param(ty) => self.inner.translate_param_type(ty).vacuous(),
-            mir_ty::TyKind::FnPtr(sig) => {
+            mir_ty::TyKind::FnPtr(sig_tys, hdr) => {
                 // TODO: justification for skip_binder
-                let sig = sig.skip_binder();
+                let sig = sig_tys.with(*hdr).skip_binder();
                 let ty = self.inner.for_function_template(self.registry, sig).build();
                 rty::Type::function(ty)
             }
@@ -562,7 +562,7 @@ where
             let param_rty = if let Some(param_refinement) = &self.param_refinement {
                 rty::RefinedType::new(rty::Type::unit(), param_refinement.clone())
             } else {
-                let unit_ty = mir_ty::Ty::new_unit(self.inner.tcx);
+                let unit_ty = self.inner.tcx.types.unit;
                 self.inner
                     .for_template(self.registry)
                     .with_scope(&builder)

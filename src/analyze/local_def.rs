@@ -141,8 +141,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         use rustc_hir::{Block, Expr, ExprKind};
 
         let hir_map = self.tcx.hir();
-        let body_id = hir_map.maybe_body_owned_by(self.local_def_id).unwrap();
-        let hir_body = hir_map.body(body_id);
+        let hir_body = hir_map.maybe_body_owned_by(self.local_def_id).unwrap();
 
         let predicate_body = match hir_body.value {
             Expr {
@@ -489,7 +488,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let args = typeck_result.node_args(hir_id);
         let param_env = self.tcx.param_env(self.local_def_id);
-        let instance = mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+        let instance = mir_ty::Instance::try_resolve(self.tcx, param_env, def_id, args).unwrap();
         if let Some(instance) = instance {
             instance.def_id()
         } else {
@@ -535,7 +534,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if !local_ty.is_box() {
             return None;
         }
-        let inner_ty = local_ty.boxed_ty();
+        let inner_ty = local_ty.boxed_ty()?;
 
         use mir::ProjectionElem::Field;
         use rustc_target::abi::FieldIdx;
@@ -559,8 +558,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         if !matches!(
-            ty2.kind(), mir_ty::TyKind::RawPtr(t)
-            if t.ty == inner_ty && t.mutbl.is_not()
+            ty2.kind(), mir_ty::TyKind::RawPtr(t, mutbl)
+            if *t == inner_ty && mutbl.is_not()
         ) {
             return None;
         }
@@ -643,17 +642,75 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         visitor.locals
     }
 
+    // XXX: In nightly-2024-09-08, `MaybeInitializedPlaces::switch_int_edge_effects`
+    //      requires `SwitchInt` values to be in the same order as `AdtDef::discriminants`.
+    //      Since optimizations can sometimes break this order, we normalize it beforehand.
+    //
+    // > thread 'rustc' panicked at /rustc/12b26c13fba25c9e1bc2fdf05f3c2dbb851c83de/compiler/rustc_mir_dataflow/src/impls/initialized.rs:431:18:
+    // > Order of `AdtDef::discriminants` differed from `SwitchInt::values`
+    fn normalize_switch_int_discriminant_order(&mut self) {
+        let blocks = self.body.basic_blocks.as_mut().as_mut_slice();
+        for block in blocks.iter_mut() {
+            let Some(terminator) = &mut block.terminator else {
+                continue;
+            };
+            let mir::TerminatorKind::SwitchInt { discr, targets } = &mut terminator.kind else {
+                continue;
+            };
+            let Some(discr_place) = discr.place() else {
+                continue;
+            };
+
+            let enum_adt = block.statements.iter().rev().find_map(|stmt| {
+                let mir::StatementKind::Assign(assign) = &stmt.kind else {
+                    return None;
+                };
+                let (lhs, mir::Rvalue::Discriminant(disc_place)) = assign.as_ref() else {
+                    return None;
+                };
+                if *lhs != discr_place {
+                    return None;
+                }
+                let ty = disc_place.ty(&self.body.local_decls, self.tcx).ty;
+                if let mir_ty::TyKind::Adt(def, _) = ty.kind() {
+                    Some(*def)
+                } else {
+                    None
+                }
+            });
+            let Some(adt_def) = enum_adt else {
+                continue;
+            };
+
+            let otherwise = targets.otherwise();
+            let mut pairs: Vec<(u128, mir::BasicBlock)> = targets.iter().collect();
+            let discriminant_order: Vec<u128> = adt_def
+                .discriminants(self.tcx)
+                .map(|(_, discr)| discr.val)
+                .collect();
+            pairs.sort_by_key(|(val, _)| {
+                discriminant_order
+                    .iter()
+                    .position(|d| d == val)
+                    .unwrap_or(usize::MAX)
+            });
+            *targets = mir::SwitchTargets::new(pairs.into_iter(), otherwise);
+        }
+    }
+
     fn reassign_local_mutabilities(&mut self) {
         use rustc_mir_dataflow::{
             move_paths::{HasMoveData as _, MoveData},
-            Analysis as _, MaybeReachable, MoveDataParamEnv,
+            Analysis as _, MaybeReachable,
         };
+
+        self.normalize_switch_int_discriminant_order();
 
         for local_decl in &mut self.body.local_decls {
             local_decl.mutability = mir::Mutability::Not;
         }
 
-        let move_data_param_env = {
+        let move_data = {
             // XXX: what...
             let mut body = self.body.clone();
             struct Visitor {
@@ -685,21 +742,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 local_decl.local_info = mir::ClearCrossCrate::Set(Box::new(local_info));
             }
             let param_env = self.tcx.param_env_reveal_all_normalized(self.local_def_id);
-            let move_data = MoveData::gather_moves(&body, self.tcx, param_env, |_| true);
-            MoveDataParamEnv {
-                move_data,
-                param_env,
-            }
+            MoveData::gather_moves(&body, self.tcx, param_env, |_| true)
         };
         let tmp_body = self.body.clone();
-        let mut results = rustc_mir_dataflow::impls::MaybeInitializedPlaces::new(
-            self.tcx,
-            &tmp_body,
-            &move_data_param_env,
-        )
-        .into_engine(self.tcx, &self.body)
-        .iterate_to_fixpoint()
-        .into_results_cursor(&tmp_body);
+        let mut results =
+            rustc_mir_dataflow::impls::MaybeInitializedPlaces::new(self.tcx, &tmp_body, &move_data)
+                .into_engine(self.tcx, &self.body)
+                .iterate_to_fixpoint()
+                .into_results_cursor(&tmp_body);
 
         let mut zst_locals = BitSet::new_empty(self.body.local_decls.len());
         for (local, local_decl) in self.body.local_decls.iter_enumerated() {

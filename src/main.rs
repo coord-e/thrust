@@ -41,7 +41,8 @@ impl Callbacks for CompilerCalls {
             &compiler.sess.psess,
             rustc_span::FileName::Custom("thrust std injected".to_string()),
             injected.to_owned(),
-        );
+        )
+        .unwrap();
         while let Some(item) = parser
             .parse_item(rustc_parse::parser::ForceCollect::No)
             .unwrap()

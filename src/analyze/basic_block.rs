@@ -243,7 +243,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 mir_ty::TyKind::Int(_) | mir_ty::TyKind::Uint(_),
                 ConstValue::Scalar(Scalar::Int(val)),
             ) => {
-                let val = val.try_to_int(val.size()).unwrap();
+                let val = val.to_int(val.size());
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
                     chc::Term::int(val.try_into().unwrap()),
@@ -300,7 +300,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let param_env = self.tcx.param_env(self.local_def_id);
                 let val = self
                     .tcx
-                    .const_eval_resolve(param_env, *unevaluated, None)
+                    .const_eval_resolve(param_env, *unevaluated, rustc_span::DUMMY_SP)
                     .unwrap();
                 self.const_value_ty(&val, ty)
             }
@@ -618,7 +618,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .tcx
                 .param_env(self.local_def_id)
                 .with_reveal_all_normalized(self.tcx);
-            let instance = mir_ty::Instance::resolve(self.tcx, param_env, def_id, args).unwrap();
+            let instance =
+                mir_ty::Instance::try_resolve(self.tcx, param_env, def_id, args).unwrap();
             if let Some(instance) = instance {
                 (instance.def_id(), instance.args)
             } else {
@@ -864,7 +865,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .for_template(&mut self.ctx)
                 .with_scope(&self.env)
                 .build_refined(decl.ty);
-            self.type_call(func.clone(), args.clone().into_iter().map(|a| a.node), &rty);
+            self.type_call(
+                func.clone(),
+                args.clone().iter().map(|a| a.node.clone()),
+                &rty,
+            );
             self.bind_local(destination, rty);
         }
     }
@@ -954,7 +959,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     unimplemented!();
                 }
                 // TODO: is it appropriate to use builtin_deref here... maybe we should handle dereferencing logic in `refine`
-                let inner_ty = self.local_decls[p.local].ty.builtin_deref(true).unwrap().ty;
+                let inner_ty = self.local_decls[p.local].ty.builtin_deref(true).unwrap();
                 self.add_prophecy_var(stmt_idx, inner_ty);
             }
         }

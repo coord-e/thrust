@@ -75,7 +75,7 @@ pub fn resolve_discr(tcx: TyCtxt<'_>, discr: mir_ty::VariantDiscr) -> u32 {
         mir_ty::VariantDiscr::Relative(i) => i,
         mir_ty::VariantDiscr::Explicit(did) => {
             let val = tcx.const_eval_poly(did).unwrap();
-            val.try_to_scalar_int().unwrap().try_to_u32().unwrap()
+            val.try_to_scalar_int().unwrap().to_u32()
         }
     }
 }
@@ -561,7 +561,7 @@ impl<'tcx> Analyzer<'tcx> {
             body.args_iter().map(|arg| body.local_decls[arg].ty),
             body.return_ty(),
             sig.c_variadic,
-            sig.unsafety,
+            sig.safety,
             sig.abi,
         )
     }
@@ -582,8 +582,7 @@ impl<'tcx> Analyzer<'tcx> {
         attr_path: &[Symbol],
     ) -> Option<DefId> {
         let map = self.tcx.hir();
-        let body_id = map.maybe_body_owned_by(local_def_id)?;
-        let body = map.body(body_id);
+        let body = map.maybe_body_owned_by(local_def_id)?;
 
         let rustc_hir::ExprKind::Block(block, _) = body.value.kind else {
             return None;
