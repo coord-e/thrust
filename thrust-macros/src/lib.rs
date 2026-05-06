@@ -183,7 +183,7 @@ impl quote::ToTokens for ExpandedTokens {
 }
 
 impl ExpandedTokens {
-    pub fn new(func: ItemFn, req_expr: syn::Expr, ens_expr: syn::Expr) -> Self {
+    pub fn new(func: ItemFn, mut req_expr: syn::Expr, mut ens_expr: syn::Expr) -> Self {
         let name = &func.sig.ident;
         let requires_name = format_ident!("_thrust_requires_{}", name);
         let ensures_name = format_ident!("_thrust_ensures_{}", name);
@@ -197,6 +197,11 @@ impl ExpandedTokens {
             ReturnType::Default => syn::parse_quote!(<() as thrust_models::Model>::Ty),
             ReturnType::Type(_, ty) => syn::parse_quote!(<#ty as thrust_models::Model>::Ty),
         };
+
+        if func.sig.receiver().is_some() {
+            rewrite_self_in_expr(&mut req_expr);
+            rewrite_self_in_expr(&mut ens_expr);
+        }
 
         Self {
             func,
@@ -414,6 +419,21 @@ fn mentions_self(sig: &syn::Signature) -> bool {
     visitor.mentions_self
 }
 
+fn rewrite_self_in_expr(expr: &mut syn::Expr) {
+    struct Visitor;
+
+    impl syn::visit_mut::VisitMut for Visitor {
+        fn visit_ident_mut(&mut self, ident: &mut syn::Ident) {
+            if ident == "self" {
+                *ident = format_ident!("self_");
+            }
+        }
+    }
+
+    use syn::visit_mut::VisitMut as _;
+    Visitor.visit_expr_mut(expr);
+}
+
 /// Returns `<T: Bound, U, 'a>` — the generic param list for function definitions,
 /// without a where clause.
 fn generic_params_tokens(generics: &Generics) -> TokenStream2 {
@@ -441,22 +461,26 @@ fn generic_turbofish(generics: &Generics) -> TokenStream2 {
     quote!(::<#(#args),*>)
 }
 
-/// Maps each typed function parameter `x: T` to `x: <T as thrust_models::Model>::Ty`.
-/// Receiver (`self`) parameters are skipped.
-fn fn_params_with_model_ty(
-    inputs: &syn::punctuated::Punctuated<FnArg, syn::token::Comma>,
-) -> TokenStream2 {
-    let params: Vec<TokenStream2> = inputs
-        .iter()
-        .filter_map(|arg| {
-            let FnArg::Typed(pt) = arg else { return None };
-            let pat = &pt.pat;
-            let ty = &pt.ty;
-            let model_ty: Type = syn::parse_quote!(<#ty as thrust_models::Model>::Ty);
-            Some(quote!(#pat: #model_ty))
-        })
-        .collect();
-    quote!(#(#params),*)
+/// Maps each function parameter `x: T` to `x: <T as thrust_models::Model>::Ty`.
+fn fn_params_with_model_ty<'ast, I>(args: I) -> TokenStream2
+where
+    I: IntoIterator<Item = &'ast FnArg>,
+{
+    let mut model_inputs: Vec<FnArg> = Vec::new();
+    for arg in args {
+        match arg {
+            FnArg::Receiver(receiver) => {
+                let ty = &receiver.ty;
+                model_inputs.push(syn::parse_quote!(self_: <#ty as thrust_models::Model>::Ty));
+            }
+            FnArg::Typed(pt) => {
+                let pat = &pt.pat;
+                let ty = &pt.ty;
+                model_inputs.push(syn::parse_quote!(#pat: <#ty as thrust_models::Model>::Ty));
+            }
+        }
+    }
+    quote!(#(#model_inputs),*)
 }
 
 /// For the extern_spec wrapper: replaces every typed parameter with a fresh `_arg_N` ident,
