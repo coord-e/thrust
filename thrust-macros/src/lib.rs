@@ -7,6 +7,25 @@ use syn::{
 };
 
 #[proc_macro_attribute]
+pub fn context(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut impl_item = syn::parse_macro_input!(item as syn::ItemImpl);
+    let impl_header = {
+        let mut header = impl_item.clone();
+        header.items.clear();
+        header
+    };
+    for item in &mut impl_item.items {
+        let syn::ImplItem::Fn(item) = item else {
+            continue;
+        };
+        // TODO: why ::thrust_macros doesn't work here?
+        item.attrs
+            .push(syn::parse_quote!(#[thrust::_impl_context(#impl_header)]));
+    }
+    impl_item.into_token_stream().into()
+}
+
+#[proc_macro_attribute]
 pub fn requires(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expr = TokenStream2::from(attr);
     let mut func = parse_macro_input!(item as ItemFn);
@@ -97,9 +116,43 @@ pub fn _requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
     let req_expr = exprs.pop().unwrap().into_value();
 
     let func = parse_macro_input!(item as ItemFn);
-    ExpandedTokens::new(func, req_expr, ens_expr)
-        .into_token_stream()
-        .into()
+    let impl_context = match extract_impl_context(&func) {
+        Ok(ctx) => ctx,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    if mentions_self(&func.sig) && impl_context.is_none() {
+        let err = syn::Error::new_spanned(
+            func.sig.ident.clone(),
+            "Wrap impl block with #[thrust_macros::context] to use requires/ensures on methods",
+        )
+        .to_compile_error();
+        return quote! { #err #func }.into();
+    }
+    let mut tokens = ExpandedTokens::new(func, req_expr, ens_expr);
+    if let Some(ctx) = impl_context {
+        tokens = tokens.with_impl_context(ctx);
+    }
+    tokens.into_token_stream().into()
+}
+
+fn extract_impl_context(func: &syn::ItemFn) -> syn::Result<Option<syn::ItemImpl>> {
+    let impl_context_path: syn::Path = syn::parse_quote!(thrust::_impl_context);
+    let mut impl_context = None;
+    for attr in &func.attrs {
+        if attr.path() != &impl_context_path {
+            continue;
+        }
+
+        let item = attr.parse_args()?;
+        if impl_context.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "multiple _impl_context attributes found; expected at most one",
+            ));
+        }
+        impl_context = Some(item);
+    }
+    Ok(impl_context)
 }
 
 struct ExpandedTokens {
@@ -116,6 +169,8 @@ struct ExpandedTokens {
 
     model_ty_params: TokenStream2,
     ret_model_ty: Type,
+
+    impl_context: Option<syn::ItemImpl>,
 }
 
 impl quote::ToTokens for ExpandedTokens {
@@ -157,7 +212,13 @@ impl ExpandedTokens {
             extended_where,
             model_ty_params,
             ret_model_ty,
+            impl_context: None,
         }
+    }
+
+    pub fn with_impl_context(mut self, impl_item: syn::ItemImpl) -> Self {
+        self.impl_context = Some(impl_item);
+        self
     }
 
     fn is_extern_spec_fn(&self) -> bool {
@@ -275,6 +336,27 @@ impl ExpandedTokens {
             #func
         }
     }
+}
+
+fn mentions_self(sig: &syn::Signature) -> bool {
+    struct Visitor {
+        mentions_self: bool,
+    }
+
+    impl syn::visit::Visit<'_> for Visitor {
+        fn visit_ident(&mut self, i: &syn::Ident) {
+            if i == "self" || i == "Self" {
+                self.mentions_self = true;
+            }
+        }
+    }
+
+    let mut visitor = Visitor {
+        mentions_self: false,
+    };
+    use syn::visit::Visit as _;
+    visitor.visit_signature(sig);
+    visitor.mentions_self
 }
 
 /// Returns `<T: Bound, U, 'a>` — the generic param list for function definitions,
