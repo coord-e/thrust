@@ -324,6 +324,11 @@ impl ExpandedTokens {
         }
     }
 
+    fn path_prefix(&self) -> Option<TokenStream2> {
+        self.impl_context.as_ref()?;
+        Some(quote!(Self::))
+    }
+
     fn expand(&self) -> TokenStream2 {
         let mut func = self.func.clone();
         let trusted_path: syn::Path = syn::parse_quote!(thrust::trusted);
@@ -344,6 +349,7 @@ impl ExpandedTokens {
         let requires_name = &self.requires_name;
         let ensures_name = &self.ensures_name;
         let turbofish = &self.turbofish;
+        let path_prefix = self.path_prefix();
 
         let name = &self.func.sig.ident;
         let (extern_spec_inputs, call_args) = rewrite_inputs_for_call(&self.func.sig.inputs);
@@ -358,12 +364,12 @@ impl ExpandedTokens {
             #[allow(path_statements)]
             fn #extern_spec_name #def_generics(#extern_spec_inputs) #orig_output #extended_where {
                 #[thrust::requires_path]
-                #requires_name #turbofish;
+                #path_prefix #requires_name #turbofish;
 
                 #[thrust::ensures_path]
-                #ensures_name #turbofish;
+                #path_prefix #ensures_name #turbofish;
 
-                #name #turbofish(#call_args)
+                #path_prefix #name #turbofish(#call_args)
             }
         }
     }
@@ -372,15 +378,16 @@ impl ExpandedTokens {
         let requires_name = &self.requires_name;
         let ensures_name = &self.ensures_name;
         let turbofish = &self.turbofish;
+        let path_prefix = self.path_prefix();
 
         let mut func = self.func.clone();
         let orig_stmts = func.block.stmts.clone();
         func.block = syn::parse_quote!({
             #[thrust::requires_path]
-            #requires_name #turbofish;
+            #path_prefix #requires_name #turbofish;
 
             #[thrust::ensures_path]
-            #ensures_name #turbofish;
+            #path_prefix #ensures_name #turbofish;
 
             #(#orig_stmts)*
         });
