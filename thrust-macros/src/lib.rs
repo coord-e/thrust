@@ -715,16 +715,55 @@ fn model_where_predicates(
             });
         }
     }
+    generic_type_params.retain(|p| !p.has_fn_bound());
 
     let mut predicates: Vec<WherePredicate> = Vec::new();
-    for param in generic_type_params {
-        if param.has_fn_bound() {
-            continue;
-        }
+    for param in &generic_type_params {
         let ident = &param.ident;
         predicates.push(syn::parse_quote!(#ident: thrust_models::Model));
         predicates.push(syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
     }
+
+    struct Visitor {
+        generic_type_params: Vec<GenericTypeParam>,
+        generic_paths: Vec<syn::TypePath>,
+    }
+
+    impl syn::visit::Visit<'_> for Visitor {
+        fn visit_type_path(&mut self, tp: &syn::TypePath) {
+            for param in &self.generic_type_params {
+                if let Some(qself) = &tp.qself {
+                    let param = &param.ident;
+                    let param_ty: syn::Type = syn::parse_quote!(#param);
+                    if *qself.ty == param_ty {
+                        self.generic_paths.push(tp.clone());
+                    }
+                }
+                if tp.path.segments.len() > 1
+                    && tp.path.segments.first().unwrap().ident == param.ident
+                    && tp.qself.is_none()
+                {
+                    self.generic_paths.push(tp.clone());
+                }
+            }
+            syn::visit::visit_type_path(self, tp);
+        }
+    }
+
+    let mut visitor = Visitor {
+        generic_type_params,
+        generic_paths: Vec::new(),
+    };
+    use syn::visit::Visit as _;
+    for arg in &func.sig().inputs {
+        visitor.visit_fn_arg(arg);
+    }
+    visitor.visit_return_type(&func.sig().output);
+    for tp in visitor.generic_paths {
+        predicates.push(syn::parse_quote!(#tp: thrust_models::Model));
+        predicates.push(syn::parse_quote!(<#tp as thrust_models::Model>::Ty: PartialEq));
+    }
+
     predicates
 }
 
