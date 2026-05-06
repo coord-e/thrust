@@ -165,7 +165,6 @@ struct ExpandedTokens {
 
     def_generics: TokenStream2,
     turbofish: TokenStream2,
-    extended_where: TokenStream2,
 
     model_ty_params: TokenStream2,
     ret_model_ty: Type,
@@ -192,8 +191,6 @@ impl ExpandedTokens {
         let generics = &func.sig.generics;
         let def_generics = generic_params_tokens(generics);
         let turbofish = generic_turbofish(generics);
-        let model_preds = model_where_predicates(generics);
-        let extended_where = extended_where_clause(generics, &model_preds);
 
         let model_ty_params = fn_params_with_model_ty(&func.sig.inputs);
         let ret_model_ty: Type = match &func.sig.output {
@@ -209,7 +206,6 @@ impl ExpandedTokens {
             ensures_name,
             def_generics,
             turbofish,
-            extended_where,
             model_ty_params,
             ret_model_ty,
             impl_context: None,
@@ -219,6 +215,65 @@ impl ExpandedTokens {
     pub fn with_impl_context(mut self, impl_item: syn::ItemImpl) -> Self {
         self.impl_context = Some(impl_item);
         self
+    }
+
+    /// Returns `T: thrust_models::Model` predicates for every type param that does not
+    /// already carry an `Fn`, `FnOnce`, or `FnMut` bound.
+    fn model_where_predicates(&self) -> Vec<WherePredicate> {
+        let mut generic_type_params: Vec<&syn::TypeParam> = Vec::new();
+        for param in &self.func.sig.generics.params {
+            let GenericParam::Type(tp) = param else {
+                continue;
+            };
+            generic_type_params.push(tp);
+        }
+        if let Some(impl_item) = &self.impl_context {
+            for param in &impl_item.generics.params {
+                let GenericParam::Type(tp) = param else {
+                    continue;
+                };
+                generic_type_params.push(tp);
+            }
+        }
+
+        let mut predicates: Vec<WherePredicate> = Vec::new();
+        for param in generic_type_params {
+            let has_fn_bound = param.bounds.iter().any(|b| {
+                let TypeParamBound::Trait(tb) = b else {
+                    return false;
+                };
+                tb.path.segments.last().map_or(false, |s| {
+                    matches!(s.ident.to_string().as_str(), "Fn" | "FnOnce" | "FnMut")
+                })
+            });
+            if has_fn_bound {
+                continue;
+            }
+            let ident = &param.ident;
+            predicates.push(syn::parse_quote!(#ident: thrust_models::Model));
+            predicates.push(syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
+        }
+        predicates
+    }
+
+    /// Builds `where <original predicates>, <model predicates>`.
+    /// Returns an empty token stream when both sets are empty.
+    fn extended_where_clause(&self) -> TokenStream2 {
+        let model_preds = self.model_where_predicates();
+        let existing: Vec<&WherePredicate> = self
+            .func
+            .sig
+            .generics
+            .where_clause
+            .as_ref()
+            .map(|wc| wc.predicates.iter().collect())
+            .unwrap_or_default();
+
+        if existing.is_empty() && model_preds.is_empty() {
+            return quote!();
+        }
+
+        quote! { where #(#existing,)* #(#model_preds),* }
     }
 
     fn is_extern_spec_fn(&self) -> bool {
@@ -233,7 +288,7 @@ impl ExpandedTokens {
         let requires_name = &self.requires_name;
         let def_generics = &self.def_generics;
         let model_ty_params = &self.model_ty_params;
-        let extended_where = &self.extended_where;
+        let extended_where = self.extended_where_clause();
         let req_expr = &self.req_expr;
 
         quote! {
@@ -250,7 +305,7 @@ impl ExpandedTokens {
         let ensures_name = &self.ensures_name;
         let def_generics = &self.def_generics;
         let model_ty_params = &self.model_ty_params;
-        let extended_where = &self.extended_where;
+        let extended_where = self.extended_where_clause();
         let ret_model_ty = &self.ret_model_ty;
         let ens_expr = &self.ens_expr;
 
@@ -279,7 +334,7 @@ impl ExpandedTokens {
         let extern_spec_name = format_ident!("_thrust_extern_spec_{}", self.func.sig.ident);
         let def_generics = &self.def_generics;
         let orig_output = &self.func.sig.output;
-        let extended_where = &self.extended_where;
+        let extended_where = self.extended_where_clause();
 
         let requires_name = &self.requires_name;
         let ensures_name = &self.ensures_name;
@@ -384,52 +439,6 @@ fn generic_turbofish(generics: &Generics) -> TokenStream2 {
         })
         .collect();
     quote!(::<#(#args),*>)
-}
-
-/// Returns `T: thrust_models::Model` predicates for every type param that does not
-/// already carry an `Fn`, `FnOnce`, or `FnMut` bound.
-fn model_where_predicates(generics: &Generics) -> Vec<WherePredicate> {
-    generics
-        .params
-        .iter()
-        .flat_map(|p| {
-            let GenericParam::Type(tp) = p else {
-                return vec![];
-            };
-            let has_fn_bound = tp.bounds.iter().any(|b| {
-                let TypeParamBound::Trait(tb) = b else {
-                    return false;
-                };
-                tb.path.segments.last().map_or(false, |s| {
-                    matches!(s.ident.to_string().as_str(), "Fn" | "FnOnce" | "FnMut")
-                })
-            });
-            if has_fn_bound {
-                return vec![];
-            }
-            let ident = &tp.ident;
-            vec![
-                syn::parse_quote!(#ident: thrust_models::Model),
-                syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq),
-            ]
-        })
-        .collect()
-}
-
-/// Builds `where <original predicates>, <model predicates>`.
-/// Returns an empty token stream when both sets are empty.
-fn extended_where_clause(generics: &Generics, model_preds: &[WherePredicate]) -> TokenStream2 {
-    let existing: Vec<&WherePredicate> = generics
-        .where_clause
-        .as_ref()
-        .map(|wc| wc.predicates.iter().collect())
-        .unwrap_or_default();
-
-    if existing.is_empty() && model_preds.is_empty() {
-        return quote!();
-    }
-
-    quote! { where #(#existing,)* #(#model_preds),* }
 }
 
 /// Maps each typed function parameter `x: T` to `x: <T as thrust_models::Model>::Ty`.
