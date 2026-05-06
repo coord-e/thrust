@@ -610,16 +610,10 @@ impl<'tcx> Analyzer<'tcx> {
                 );
                 continue;
             };
-            let rustc_hir::QPath::Resolved(_, path) = qpath else {
+            let typeck = self.tcx.typeck(local_def_id);
+            let rustc_hir::def::Res::Def(_, def_id) = typeck.qpath_res(&qpath, expr.hir_id) else {
                 self.tcx.dcx().span_err(
                     expr.span,
-                    "annotated path is expected to be a resolved path",
-                );
-                continue;
-            };
-            let rustc_hir::def::Res::Def(_, def_id) = path.res else {
-                self.tcx.dcx().span_err(
-                    path.span,
                     "annotated path is expected to refer to a definition",
                 );
                 continue;
