@@ -63,7 +63,7 @@ mod thrust_models {
         }
 
         #[thrust::def::mut_model]
-        pub struct Mut<T>(PhantomData<T>);
+        pub struct Mut<T: ?Sized>(PhantomData<T>);
 
         impl<T> Mut<T> {
             #[allow(dead_code)]
@@ -100,7 +100,7 @@ mod thrust_models {
         }
 
         #[thrust::def::box_model]
-        pub struct Box<T>(PhantomData<T>);
+        pub struct Box<T: ?Sized>(PhantomData<T>);
 
         impl<T> Box<T> {
             #[allow(dead_code)]
@@ -128,7 +128,7 @@ mod thrust_models {
         }
 
         #[thrust::def::array_model]
-        pub struct Array<I, T>(PhantomData<I>, PhantomData<T>);
+        pub struct Array<I: ?Sized, T: ?Sized>(PhantomData<I>, PhantomData<T>);
 
         impl<I, T, U> PartialEq<U> for Array<I, T> where U: super::Model<Ty = Self> {
             #[thrust::ignored]
@@ -156,9 +156,9 @@ mod thrust_models {
         }
 
         #[thrust::def::closure_model]
-        pub struct Closure<T>(PhantomData<T>);
+        pub struct Closure<T: ?Sized>(PhantomData<T>);
 
-        pub struct Vec<T>(pub Array<Int, T>, pub Int);
+        pub struct Vec<T: ?Sized>(pub Array<Int, T>, pub Int);
 
         impl<T, U> PartialEq<U> for Vec<T> where U: super::Model<Ty = Self> {
             #[thrust::ignored]
@@ -200,7 +200,7 @@ mod thrust_models {
         type Ty = bool;
     }
 
-    impl<T> Model for model::Closure<T> {
+    impl<T: ?Sized> Model for model::Closure<T> {
         type Ty = model::Closure<T>;
     }
 
@@ -224,27 +224,27 @@ mod thrust_models {
     impl_tuple_model!(T0, T1, T2, T3, T4, T5, T6, T7, T8);
     impl_tuple_model!(T0, T1, T2, T3, T4, T5, T6, T7, T8, T9);
 
-    impl<'a, T> Model for &'a mut T where T: Model {
+    impl<'a, T: ?Sized> Model for &'a mut T where T: Model {
         type Ty = model::Mut<<T as Model>::Ty>;
     }
 
-    impl<T> Model for model::Mut<T> {
+    impl<T: ?Sized> Model for model::Mut<T> {
         type Ty = model::Mut<T>;
     }
 
-    impl<'a, T> Model for &'a T where T: Model {
+    impl<'a, T: ?Sized> Model for &'a T where T: Model {
         type Ty = &'a <T as Model>::Ty;
     }
 
-    impl<T> Model for Box<T> where T: Model {
+    impl<T: ?Sized> Model for Box<T> where T: Model {
         type Ty = model::Box<<T as Model>::Ty>;
     }
 
-    impl<T> Model for model::Box<T> {
+    impl<T: ?Sized> Model for model::Box<T> {
         type Ty = model::Box<T>;
     }
 
-    impl<I, T> Model for model::Array<I, T> {
+    impl<I: ?Sized, T: ?Sized> Model for model::Array<I, T> {
         type Ty = model::Array<I, T>;
     }
 
@@ -252,7 +252,7 @@ mod thrust_models {
         type Ty = model::Vec<<T as Model>::Ty>;
     }
 
-    impl<T> Model for model::Vec<T> {
+    impl<T: ?Sized> Model for model::Vec<T> {
         type Ty = model::Vec<T>;
     }
 
