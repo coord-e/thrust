@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, ReturnType, Type,
-    TypeParamBound, WherePredicate,
+    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, TypeParamBound,
+    WherePredicate,
 };
 
 #[derive(Debug, Clone)]
@@ -135,6 +135,14 @@ impl quote::ToTokens for FnItemWithSignature {
 }
 
 impl FnItemWithSignature {
+    fn block(&self) -> Option<&syn::Block> {
+        match self {
+            FnItemWithSignature::ItemFn(item_fn) => Some(&item_fn.block),
+            FnItemWithSignature::ImplItemFn(impl_item_fn) => Some(&impl_item_fn.block),
+            FnItemWithSignature::TraitItemFn(_) => None,
+        }
+    }
+
     fn block_mut(&mut self) -> Option<&mut syn::Block> {
         match self {
             FnItemWithSignature::ItemFn(item_fn) => Some(&mut item_fn.block),
@@ -165,6 +173,37 @@ impl FnItemWithSignature {
             FnItemWithSignature::ImplItemFn(impl_item_fn) => &impl_item_fn.sig,
             FnItemWithSignature::TraitItemFn(trait_item_fn) => &trait_item_fn.sig,
         }
+    }
+}
+
+#[proc_macro_attribute]
+pub fn predicate(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let func = parse_macro_input!(item as FnItemWithSignature);
+    let outer_context = match extract_outer_context(&func) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            let err = e.to_compile_error();
+            return quote! { #err #func }.into();
+        }
+    };
+
+    let name = &func.sig().ident;
+    let def_generics = generic_params_tokens(&func.sig().generics);
+    let model_ty_params = fn_params_with_model_ty(&func.sig().inputs);
+    let model_ret = fn_return_ty_with_model_ty(&func.sig().output);
+
+    let model_preds = model_where_predicates(&func, outer_context.as_ref());
+    let extended_where = extended_where_clause(&func, &model_preds);
+
+    let sig = quote! {
+        #[allow(dead_code)]
+        #[thrust::predicate]
+        fn #name #def_generics(#model_ty_params) -> #model_ret #extended_where
+    };
+    if let Some(block) = func.block() {
+        quote! { #sig #block }.into()
+    } else {
+        quote! { #sig; }.into()
     }
 }
 
@@ -261,16 +300,11 @@ pub fn _requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as FnItemWithSignature);
     let outer_context = match extract_outer_context(&func) {
         Ok(ctx) => ctx,
-        Err(e) => return e.to_compile_error().into(),
+        Err(e) => {
+            let err = e.to_compile_error();
+            return quote! { #err #func }.into();
+        }
     };
-    if mentions_self(func.sig()) && outer_context.is_none() {
-        let err = syn::Error::new_spanned(
-            func.sig().ident.clone(),
-            "Wrap impl block with #[thrust_macros::context] to use requires/ensures on methods",
-        )
-        .to_compile_error();
-        return quote! { #err #func }.into();
-    }
     let mut tokens = ExpandedTokens::new(func, req_expr, ens_expr);
     if let Some(ctx) = outer_context {
         tokens = tokens.with_outer_context(ctx);
@@ -295,6 +329,12 @@ fn extract_outer_context(func: &FnItemWithSignature) -> syn::Result<Option<FnOut
         }
         outer_context = Some(item);
     }
+    if mentions_self(func.sig()) && outer_context.is_none() {
+        return Err(syn::Error::new_spanned(
+            func.sig().ident.clone(),
+            "Wrap the surrounding impl block or trait definition with #[thrust_macros::context] to annotate methods",
+        ));
+    }
     Ok(outer_context)
 }
 
@@ -310,7 +350,7 @@ struct ExpandedTokens {
     turbofish: TokenStream2,
 
     model_ty_params: TokenStream2,
-    ret_model_ty: Type,
+    ret_model_ty: syn::Type,
 
     outer_context: Option<FnOuterItem>,
 }
@@ -340,10 +380,7 @@ impl ExpandedTokens {
         let turbofish = generic_turbofish(generics);
 
         let model_ty_params = fn_params_with_model_ty(&func.sig().inputs);
-        let ret_model_ty: Type = match &func.sig().output {
-            ReturnType::Default => syn::parse_quote!(<() as thrust_models::Model>::Ty),
-            ReturnType::Type(_, ty) => syn::parse_quote!(<#ty as thrust_models::Model>::Ty),
-        };
+        let ret_model_ty = fn_return_ty_with_model_ty(&func.sig().output);
 
         if func.sig().receiver().is_some() {
             rewrite_self_in_expr(&mut req_expr);
@@ -369,88 +406,9 @@ impl ExpandedTokens {
         self
     }
 
-    /// Returns `T: thrust_models::Model` predicates for every type param that does not
-    /// already carry an `Fn`, `FnOnce`, or `FnMut` bound.
-    fn model_where_predicates(&self) -> Vec<WherePredicate> {
-        struct GenericTypeParam {
-            ident: syn::Ident,
-            bounds: Vec<TypeParamBound>,
-        }
-
-        impl From<syn::TypeParam> for GenericTypeParam {
-            fn from(tp: syn::TypeParam) -> Self {
-                Self {
-                    ident: tp.ident,
-                    bounds: tp.bounds.into_iter().collect(),
-                }
-            }
-        }
-
-        impl GenericTypeParam {
-            fn has_fn_bound(&self) -> bool {
-                self.bounds.iter().any(|b| {
-                    let TypeParamBound::Trait(tb) = b else {
-                        return false;
-                    };
-                    tb.path.segments.last().map_or(false, |s| {
-                        matches!(s.ident.to_string().as_str(), "Fn" | "FnOnce" | "FnMut")
-                    })
-                })
-            }
-        }
-
-        let mut generic_type_params: Vec<GenericTypeParam> = Vec::new();
-        for param in &self.func.sig().generics.params {
-            let GenericParam::Type(tp) = param else {
-                continue;
-            };
-            generic_type_params.push(tp.clone().into());
-        }
-        if let Some(outer_item) = &self.outer_context {
-            for param in &outer_item.generics().params {
-                let GenericParam::Type(tp) = param else {
-                    continue;
-                };
-                generic_type_params.push(tp.clone().into());
-            }
-            if let FnOuterItem::ItemTrait(outer_item) = &outer_item {
-                generic_type_params.push(GenericTypeParam {
-                    ident: format_ident!("Self"),
-                    bounds: outer_item.supertraits.iter().cloned().collect(),
-                });
-            }
-        }
-
-        let mut predicates: Vec<WherePredicate> = Vec::new();
-        for param in generic_type_params {
-            if param.has_fn_bound() {
-                continue;
-            }
-            let ident = &param.ident;
-            predicates.push(syn::parse_quote!(#ident: thrust_models::Model));
-            predicates.push(syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
-        }
-        predicates
-    }
-
-    /// Builds `where <original predicates>, <model predicates>`.
-    /// Returns an empty token stream when both sets are empty.
     fn extended_where_clause(&self) -> TokenStream2 {
-        let model_preds = self.model_where_predicates();
-        let existing: Vec<&WherePredicate> = self
-            .func
-            .sig()
-            .generics
-            .where_clause
-            .as_ref()
-            .map(|wc| wc.predicates.iter().collect())
-            .unwrap_or_default();
-
-        if existing.is_empty() && model_preds.is_empty() {
-            return quote!();
-        }
-
-        quote! { where #(#existing,)* #(#model_preds),* }
+        let model_preds = model_where_predicates(&self.func, self.outer_context.as_ref());
+        extended_where_clause(&self.func, &model_preds)
     }
 
     fn is_extern_spec_fn(&self) -> bool {
@@ -701,4 +659,99 @@ fn rewrite_inputs_for_call(
     }
 
     (quote!(#(#rewritten),*), quote!(#(#call_args),*))
+}
+
+/// Returns `T: thrust_models::Model` predicates for every type param that does not
+/// already carry an `Fn`, `FnOnce`, or `FnMut` bound.
+fn model_where_predicates(
+    func: &FnItemWithSignature,
+    outer_context: Option<&FnOuterItem>,
+) -> Vec<WherePredicate> {
+    struct GenericTypeParam {
+        ident: syn::Ident,
+        bounds: Vec<TypeParamBound>,
+    }
+
+    impl From<syn::TypeParam> for GenericTypeParam {
+        fn from(tp: syn::TypeParam) -> Self {
+            Self {
+                ident: tp.ident,
+                bounds: tp.bounds.into_iter().collect(),
+            }
+        }
+    }
+
+    impl GenericTypeParam {
+        fn has_fn_bound(&self) -> bool {
+            self.bounds.iter().any(|b| {
+                let TypeParamBound::Trait(tb) = b else {
+                    return false;
+                };
+                tb.path.segments.last().map_or(false, |s| {
+                    matches!(s.ident.to_string().as_str(), "Fn" | "FnOnce" | "FnMut")
+                })
+            })
+        }
+    }
+
+    let mut generic_type_params: Vec<GenericTypeParam> = Vec::new();
+    for param in &func.sig().generics.params {
+        let GenericParam::Type(tp) = param else {
+            continue;
+        };
+        generic_type_params.push(tp.clone().into());
+    }
+    if let Some(outer_item) = outer_context {
+        for param in &outer_item.generics().params {
+            let GenericParam::Type(tp) = param else {
+                continue;
+            };
+            generic_type_params.push(tp.clone().into());
+        }
+        if let FnOuterItem::ItemTrait(outer_item) = &outer_item {
+            generic_type_params.push(GenericTypeParam {
+                ident: format_ident!("Self"),
+                bounds: outer_item.supertraits.iter().cloned().collect(),
+            });
+        }
+    }
+
+    let mut predicates: Vec<WherePredicate> = Vec::new();
+    for param in generic_type_params {
+        if param.has_fn_bound() {
+            continue;
+        }
+        let ident = &param.ident;
+        predicates.push(syn::parse_quote!(#ident: thrust_models::Model));
+        predicates.push(syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
+    }
+    predicates
+}
+
+/// Builds `where <original predicates>, <model predicates>`.
+/// Returns an empty token stream when both sets are empty.
+fn extended_where_clause(
+    func: &FnItemWithSignature,
+    model_preds: &Vec<syn::WherePredicate>,
+) -> TokenStream2 {
+    let existing: Vec<&WherePredicate> = func
+        .sig()
+        .generics
+        .where_clause
+        .as_ref()
+        .map(|wc| wc.predicates.iter().collect())
+        .unwrap_or_default();
+
+    if existing.is_empty() && model_preds.is_empty() {
+        return quote!();
+    }
+
+    quote! { where #(#existing,)* #(#model_preds),* }
+}
+
+fn fn_return_ty_with_model_ty(ret: &syn::ReturnType) -> syn::Type {
+    match ret {
+        syn::ReturnType::Default => syn::parse_quote!(<() as thrust_models::Model>::Ty),
+        syn::ReturnType::Type(_, ty) => syn::parse_quote!(<#ty as thrust_models::Model>::Ty),
+    }
 }
