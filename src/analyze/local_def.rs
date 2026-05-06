@@ -115,22 +115,33 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         Some(self_ty)
     }
 
-    pub fn analyze_predicate_definition(&self, local_def_id: LocalDefId) {
-        // predicate's name
-        // TODO: simply use refine::user_defined_pred for all functions
-        //       after we dropped old annotation parser impl
-        let impl_type = self.impl_type();
-        let pred_item_name = self.tcx.item_name(local_def_id.to_def_id()).to_string();
-        let pred = match impl_type {
-            Some(t) => chc::UserDefinedPred::new(t.to_string() + "_" + &pred_item_name),
-            None => refine::user_defined_pred(self.tcx, local_def_id.to_def_id()),
-        };
+    pub fn analyze_predicate_definition(&self) {
+        self.define_as_predicate(refine::user_defined_pred(
+            self.tcx,
+            self.local_def_id.to_def_id(),
+        ));
 
+        // For thrust::{requires,ensures} annotations which does not know DefId of the predicate
+        // during parsing, we also define a predicate with a name based on the self type name
+        //
+        // TODO: remove this after we dropped old annotation parser impl
+        //       (then move this to crate_::Analyzer)
+        let pred_item_name = self
+            .tcx
+            .item_name(self.local_def_id.to_def_id())
+            .to_string();
+        if let Some(self_ty) = self.impl_type() {
+            let name = chc::UserDefinedPred::new(self_ty.to_string() + "_" + &pred_item_name);
+            self.define_as_predicate(name);
+        }
+    }
+
+    fn define_as_predicate(&self, pred: chc::UserDefinedPred) {
         // function's body
         use rustc_hir::{Block, Expr, ExprKind};
 
         let hir_map = self.tcx.hir();
-        let body_id = hir_map.maybe_body_owned_by(local_def_id).unwrap();
+        let body_id = hir_map.maybe_body_owned_by(self.local_def_id).unwrap();
         let hir_body = hir_map.body(body_id);
 
         let predicate_body = match hir_body.value {
@@ -147,11 +158,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // names and sorts of arguments
         let arg_names = self
             .tcx
-            .fn_arg_names(local_def_id.to_def_id())
+            .fn_arg_names(self.local_def_id.to_def_id())
             .iter()
             .map(|ident| ident.to_string());
 
-        let sig = self.ctx.fn_sig(local_def_id.to_def_id());
+        let sig = self.ctx.fn_sig(self.local_def_id.to_def_id());
         let arg_sorts = sig
             .inputs()
             .iter()
