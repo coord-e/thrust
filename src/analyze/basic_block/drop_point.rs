@@ -96,7 +96,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
         results.seek_to_block_end(bb);
         let live_locals_after_terminator = results.get().clone();
 
-        use rustc_data_structures::graph::WithSuccessors as _;
+        use rustc_data_structures::graph::Successors as _;
         let mut ins = BitSet::new_empty(self.body.local_decls.len());
         for succ_bb in self.body.basic_blocks.successors(bb) {
             self.bb_ins_cache.entry(succ_bb).or_insert_with(|| {

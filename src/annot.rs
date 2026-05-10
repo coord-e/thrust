@@ -377,7 +377,7 @@ where
             generic_args: Vec::new(),
         });
         while let Some(Token {
-            kind: TokenKind::ModSep,
+            kind: TokenKind::PathSep,
             ..
         }) = self.look_ahead_token(0)
         {

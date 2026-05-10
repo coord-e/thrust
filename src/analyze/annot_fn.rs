@@ -142,8 +142,7 @@ pub struct AnnotFnTranslator<'tcx> {
 impl<'tcx> AnnotFnTranslator<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, local_def_id: LocalDefId) -> Self {
         let map = tcx.hir();
-        let body_id = map.body_owned_by(local_def_id);
-        let body = map.body(body_id);
+        let body = map.body_owned_by(local_def_id);
         let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
         let def_ids = DefIdCache::new(tcx);
@@ -502,7 +501,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                             );
                             let generic_args = mir_ty::EarlyBinder::bind(generic_args)
                                 .instantiate(self.tcx, self.generic_args);
-                            let instance = mir_ty::Instance::resolve(
+                            let instance = mir_ty::Instance::try_resolve(
                                 self.tcx,
                                 param_env,
                                 def_id,
