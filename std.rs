@@ -617,3 +617,33 @@ fn _extern_spec_vec_is_empty<T>(vec: &Vec<T>) -> bool where T: thrust_models::Mo
 fn _extern_spec_vec_truncate<T>(vec: &mut Vec<T>, len: usize) where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::truncate(vec, len)
 }
+
+// TODO: The following specs of some trait methods are too restrictive; we should allow for a
+//       per-impl spec once we can describe the spec of blanket impls.
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == (*x == *y))]
+fn _extern_spec_partialeq_eq<T>(x: &T, y: &T) -> bool
+  where T: thrust_models::Model + PartialEq, T::Ty: PartialEq
+{
+    PartialEq::eq(x, y)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == (*x < *y))]
+fn _extern_spec_partialord_lt<T>(x: &T, y: &T) -> bool
+  where T: thrust_models::Model + PartialOrd, T::Ty: PartialOrd
+{
+    PartialOrd::lt(x, y)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == (*x > *y))]
+fn _extern_spec_partialord_gt<T>(x: &T, y: &T) -> bool
+  where T: thrust_models::Model + PartialOrd, T::Ty: PartialOrd
+{
+    PartialOrd::gt(x, y)
+}
