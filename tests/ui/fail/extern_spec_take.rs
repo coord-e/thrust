@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@no-rustfix
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]

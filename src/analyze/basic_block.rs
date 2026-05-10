@@ -471,6 +471,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let ty = match &operand {
             Operand::Copy(place) | Operand::Move(place) => self.env.place_type(*place),
             Operand::Constant(operand) => self.const_ty(&operand.const_),
+            Operand::RuntimeChecks(kind) => {
+                let enabled = match kind {
+                    mir::RuntimeChecks::UbChecks => self.tcx.sess.ub_checks(),
+                    mir::RuntimeChecks::ContractChecks => self.tcx.sess.contract_checks(),
+                    mir::RuntimeChecks::OverflowChecks => self.tcx.sess.overflow_checks(),
+                };
+                PlaceTypeBuilder::default().build(rty::Type::bool(), chc::Term::bool(enabled))
+            }
         };
         tracing::debug!(operand = ?operand, ty = %ty.display(), "operand_type");
         ty
@@ -479,7 +487,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
-            Rvalue::CopyForDeref(place) => self.env.place_type(self.elaborate_place(&place)),
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
@@ -639,7 +646,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             Rvalue::Cast(
                 mir::CastKind::PointerCoercion(
-                    mir_ty::adjustment::PointerCoercion::ReifyFnPointer,
+                    mir_ty::adjustment::PointerCoercion::ReifyFnPointer(_),
                     _,
                 ),
                 operand,
