@@ -70,6 +70,8 @@ enum FormulaOrTerm<T> {
     Formula(chc::Formula<T>),
     Term(chc::Term<T>),
     BinOp(chc::Term<T>, AmbiguousBinOp, chc::Term<T>),
+    And(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
+    Or(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
     Not(Box<FormulaOrTerm<T>>),
     Literal(bool),
 }
@@ -90,6 +92,8 @@ impl<T> FormulaOrTerm<T> {
                 };
                 chc::Formula::Atom(chc::Atom::new(pred.into(), vec![lhs, rhs]))
             }
+            FormulaOrTerm::And(lhs, rhs) => lhs.into_formula()?.and(rhs.into_formula()?),
+            FormulaOrTerm::Or(lhs, rhs) => lhs.into_formula()?.or(rhs.into_formula()?),
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_formula()?.not(),
             FormulaOrTerm::Literal(b) => {
                 if b {
@@ -112,6 +116,8 @@ impl<T> FormulaOrTerm<T> {
             FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Le, rhs) => lhs.le(rhs),
             FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Gt, rhs) => lhs.gt(rhs),
             FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Lt, rhs) => lhs.lt(rhs),
+            FormulaOrTerm::And(lhs, rhs) => lhs.into_term()?.and(rhs.into_term()?),
+            FormulaOrTerm::Or(lhs, rhs) => lhs.into_term()?.or(rhs.into_term()?),
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_term()?.not(),
             FormulaOrTerm::Literal(b) => chc::Term::bool(b),
         };
@@ -273,14 +279,14 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
             ExprKind::Binary(op, lhs, rhs) => {
                 match op.node {
                     rustc_hir::BinOpKind::Or => {
-                        let lhs = self.to_formula(lhs);
-                        let rhs = self.to_formula(rhs);
-                        return FormulaOrTerm::Formula(lhs.or(rhs));
+                        let lhs = self.to_formula_or_term(lhs);
+                        let rhs = self.to_formula_or_term(rhs);
+                        return FormulaOrTerm::Or(lhs.into(), rhs.into());
                     }
                     rustc_hir::BinOpKind::And => {
-                        let lhs = self.to_formula(lhs);
-                        let rhs = self.to_formula(rhs);
-                        return FormulaOrTerm::Formula(lhs.and(rhs));
+                        let lhs = self.to_formula_or_term(lhs);
+                        let rhs = self.to_formula_or_term(rhs);
+                        return FormulaOrTerm::And(lhs.into(), rhs.into());
                     }
                     rustc_hir::BinOpKind::Add => {
                         let lhs = self.to_term(lhs);
