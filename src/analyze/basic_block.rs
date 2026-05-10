@@ -354,6 +354,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let ty = match &operand {
             Operand::Copy(place) | Operand::Move(place) => self.env.place_type(*place),
             Operand::Constant(operand) => self.const_ty(&operand.const_),
+            Operand::RuntimeChecks(_) => {
+                PlaceTypeBuilder::default().build(rty::Type::bool(), chc::Term::bool(false))
+            }
         };
         tracing::debug!(operand = ?operand, ty = %ty.display(), "operand_type");
         ty
@@ -485,7 +488,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             Rvalue::Cast(
                 mir::CastKind::PointerCoercion(
-                    mir_ty::adjustment::PointerCoercion::ReifyFnPointer,
+                    mir_ty::adjustment::PointerCoercion::ReifyFnPointer(_),
                     _,
                 ),
                 operand,

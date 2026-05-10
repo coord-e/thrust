@@ -1013,10 +1013,7 @@ where
         let mut var = place.local.into();
 
         let mut it = place.projection.into_iter();
-        loop {
-            let Some(elem) = it.next() else {
-                break;
-            };
+        while let Some(elem) = it.next() {
             var = match (elem, self.flow_binding(var).expect("deref unbound var")) {
                 (PlaceElem::Deref, &FlowBinding::Box(x)) => x.into(),
                 (PlaceElem::Deref, &FlowBinding::Mut(x, _)) => x.into(),
