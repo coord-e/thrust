@@ -6,7 +6,7 @@ fn box_create(x: i64) -> Box<i64> {
     Box::new(x)
 }
 
-#[thrust::requires(b == <v>)]
+#[thrust_macros::requires(b == thrust_models::model::Box::new(v))]
 fn box_consume(b: Box<i64>, v: i64) {
     assert!(*b == v);
 }

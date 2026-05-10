@@ -1,8 +1,8 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
 
-#[thrust::requires(true)]
-#[thrust::ensures(true)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(true)]
 #[thrust::trusted]
 fn rand() -> i64 { unimplemented!() }
 

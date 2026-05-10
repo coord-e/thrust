@@ -7,8 +7,8 @@ pub enum X<'a, 'b> {
 }
 
 #[thrust::trusted]
-#[thrust::requires(true)]
-#[thrust::ensures(true)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(true)]
 fn rand() -> i64 { unimplemented!() }
 
 fn x(i: &mut i64) -> X {

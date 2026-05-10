@@ -1,13 +1,13 @@
 //@error-in-other-file: Unsat
 
-#[thrust::requires(true)]
-#[thrust::ensures(result == x)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == x)]
 fn id<T>(x: T) -> T {
     x
 }
 
-#[thrust::requires(true)]
-#[thrust::ensures(result != x)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result != x)]
 fn apply_twice<T>(x: T) -> T {
     id(id(x))
 }
