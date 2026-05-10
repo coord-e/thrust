@@ -403,6 +403,8 @@ impl Function {
             Self::GT => Sort::bool(),
             Self::LE => Sort::bool(),
             Self::LT => Sort::bool(),
+            Self::AND => Sort::bool(),
+            Self::OR => Sort::bool(),
             Self::NOT => Sort::bool(),
             Self::NEG => Sort::int(),
             Self::STORE => args.into_iter().next().unwrap(),
@@ -424,6 +426,8 @@ impl Function {
     pub const GT: Function = Function::infix(">");
     pub const LE: Function = Function::infix("<=");
     pub const LT: Function = Function::infix("<");
+    pub const AND: Function = Function::infix("and");
+    pub const OR: Function = Function::infix("or");
     pub const NOT: Function = Function::new("not");
     pub const NEG: Function = Function::new("-");
     pub const STORE: Function = Function::new("store");
@@ -722,6 +726,14 @@ impl<V> Term<V> {
 
     pub fn lt(self, other: Self) -> Self {
         Term::App(Function::LT, vec![self, other])
+    }
+
+    pub fn and(self, other: Self) -> Self {
+        Term::App(Function::AND, vec![self, other])
+    }
+
+    pub fn or(self, other: Self) -> Self {
+        Term::App(Function::OR, vec![self, other])
     }
 
     pub fn not(self) -> Self {
