@@ -115,22 +115,33 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         Some(self_ty)
     }
 
-    pub fn analyze_predicate_definition(&self, local_def_id: LocalDefId) {
-        // predicate's name
-        // TODO: simply use refine::user_defined_pred for all functions
-        //       after we dropped old annotation parser impl
-        let impl_type = self.impl_type();
-        let pred_item_name = self.tcx.item_name(local_def_id.to_def_id()).to_string();
-        let pred = match impl_type {
-            Some(t) => chc::UserDefinedPred::new(t.to_string() + "_" + &pred_item_name),
-            None => refine::user_defined_pred(self.tcx, local_def_id.to_def_id()),
-        };
+    pub fn analyze_predicate_definition(&self) {
+        self.define_as_predicate(refine::user_defined_pred(
+            self.tcx,
+            self.local_def_id.to_def_id(),
+        ));
 
+        // For thrust::{requires,ensures} annotations which does not know DefId of the predicate
+        // during parsing, we also define a predicate with a name based on the self type name
+        //
+        // TODO: remove this after we dropped old annotation parser impl
+        //       (then move this to crate_::Analyzer)
+        let pred_item_name = self
+            .tcx
+            .item_name(self.local_def_id.to_def_id())
+            .to_string();
+        if let Some(self_ty) = self.impl_type() {
+            let name = chc::UserDefinedPred::new(self_ty.to_string() + "_" + &pred_item_name);
+            self.define_as_predicate(name);
+        }
+    }
+
+    fn define_as_predicate(&self, pred: chc::UserDefinedPred) {
         // function's body
         use rustc_hir::{Block, Expr, ExprKind};
 
         let hir_map = self.tcx.hir();
-        let body_id = hir_map.maybe_body_owned_by(local_def_id).unwrap();
+        let body_id = hir_map.maybe_body_owned_by(self.local_def_id).unwrap();
         let hir_body = hir_map.body(body_id);
 
         let predicate_body = match hir_body.value {
@@ -147,11 +158,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // names and sorts of arguments
         let arg_names = self
             .tcx
-            .fn_arg_names(local_def_id.to_def_id())
+            .fn_arg_names(self.local_def_id.to_def_id())
             .iter()
             .map(|ident| ident.to_string());
 
-        let sig = self.ctx.fn_sig(local_def_id.to_def_id());
+        let sig = self.ctx.fn_sig(self.local_def_id.to_def_id());
         let arg_sorts = sig
             .inputs()
             .iter()
@@ -276,7 +287,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             || (all_params_annotated && has_ret)
     }
 
-    pub fn trait_item_id(&self) -> Option<LocalDefId> {
+    pub fn local_trait_item_id(&self) -> Option<LocalDefId> {
         let impl_item_assoc = self
             .tcx
             .opt_associated_item(self.local_def_id.to_def_id())?;
@@ -284,9 +295,33 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .trait_item_def_id
             .and_then(|id| id.as_local())?;
 
+        if trait_item_id == self.local_def_id {
+            return None;
+        }
+
         Some(trait_item_id)
     }
 
+    pub fn trait_item_ty(&mut self) -> Option<rty::RefinedType> {
+        let impl_did = self.tcx.parent(self.local_def_id.to_def_id());
+
+        if self.tcx.def_kind(impl_did) != (rustc_hir::def::DefKind::Impl { of_trait: true }) {
+            return None;
+        }
+
+        let trait_ref = self.tcx.impl_trait_ref(impl_did)?.instantiate_identity();
+        let trait_item_did = self
+            .tcx
+            .associated_item(self.local_def_id.to_def_id())
+            .trait_item_def_id
+            .unwrap();
+        self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
+    }
+
+    // Note that we do not expect predicate variables to be generated here
+    // when type params are still present in the type. Callers should ensure either
+    // - type params are fully instantiated, or
+    // - the function is fully annotated
     pub fn expected_ty(&mut self) -> rty::RefinedType {
         let sig = self
             .ctx
@@ -324,7 +359,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             self.generic_args,
         );
 
-        if let Some(trait_item_id) = self.trait_item_id() {
+        if let Some(trait_item_id) = self.local_trait_item_id() {
             tracing::info!("trait item found: {:?}", trait_item_id);
             let trait_require_annot = self.ctx.extract_require_annot(
                 trait_item_id,
@@ -364,6 +399,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         assert!(require_annot.is_none() || param_annots.is_empty());
         assert!(ensure_annot.is_none() || ret_annot.is_none());
 
+        let trait_item_ty = self.trait_item_ty();
+        let is_fully_annotated = self.is_fully_annotated();
+
         let mut builder = self.type_builder.for_function_template(&mut self.ctx, sig);
         if let Some(AnnotFormula::Formula(require)) = require_annot {
             let formula = require.map_var(|idx| {
@@ -387,11 +425,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             builder.ret_rty(ret_rty);
         }
 
-        // Note that we do not expect predicate variables to be generated here
-        // when type params are still present in the type. Callers should ensure either
-        // - type params are fully instantiated, or
-        // - the function is fully annotated
-        rty::RefinedType::unrefined(builder.build().into())
+        if is_fully_annotated {
+            rty::RefinedType::unrefined(builder.build().into())
+        } else if let Some(trait_item_ty) = trait_item_ty {
+            trait_item_ty
+        } else {
+            rty::RefinedType::unrefined(builder.build().into())
+        }
     }
 
     /// Extract the target DefId from `#[thrust::extern_spec_fn]` function.

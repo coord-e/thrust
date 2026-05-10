@@ -89,7 +89,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         if analyzer.is_annotated_as_predicate() {
-            analyzer.analyze_predicate_definition(local_def_id);
+            analyzer.analyze_predicate_definition();
             self.skip_analysis.insert(local_def_id);
             return;
         }

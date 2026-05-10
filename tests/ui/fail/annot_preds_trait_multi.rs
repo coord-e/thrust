@@ -1,14 +1,15 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -Adead_code -C debug-assertions=off
 
+#[thrust_macros::context]
 trait Double {
     // Support annotations in trait definitions
-    #[thrust::predicate]
+    #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool;
 
     // This annotations are applied to all implementors of the `Double` trait.
-    #[thrust::requires(true)]
-    #[thrust::ensures(Self::is_double(*self, ^self))]
+    #[thrust_macros::requires(true)]
+    #[thrust_macros::ensures(Self::is_double(*self, !self))]
     fn double(&mut self);
 }
 
@@ -21,12 +22,13 @@ impl thrust_models::Model for A {
     type Ty = Self;
 }
 
+#[thrust_macros::context]
 impl Double for A {
-    #[thrust::predicate]
+    #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
         // self.x * 2 == doubled.x
         "(=
-            (* (tuple_proj<Int>.0 self) 2)
+            (* (tuple_proj<Int>.0 self_) 2)
             (tuple_proj<Int>.0 doubled)
         )"; true
     }
@@ -46,17 +48,18 @@ impl thrust_models::Model for B {
     type Ty = Self;
 }
 
+#[thrust_macros::context]
 impl Double for B {
-    #[thrust::predicate]
+    #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
         // self.x * 3 == doubled.x && self.y * 2 == doubled.y (this isn't actually doubled!)
         "(and
             (=
-                (* (tuple_proj<Int-Int>.0 self) 3)
+                (* (tuple_proj<Int-Int>.0 self_) 3)
                 (tuple_proj<Int-Int>.0 doubled)
             )
             (=
-                (* (tuple_proj<Int-Int>.1 self) 2)
+                (* (tuple_proj<Int-Int>.1 self_) 2)
                 (tuple_proj<Int-Int>.1 doubled)
             )
         )"; true // This definition does not comply with annotations in trait!

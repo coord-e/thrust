@@ -488,7 +488,33 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                             .next()
                             .is_some()
                         {
-                            let pred = refine::user_defined_pred(self.tcx, def_id);
+                            let param_env = self
+                                .tcx
+                                .param_env(self.local_def_id)
+                                .with_reveal_all_normalized(self.tcx);
+                            let generic_args = self.typeck.node_args(func_expr.hir_id);
+                            tracing::debug!(
+                                lhs = ?def_id,
+                                lhs_generic_args = ?generic_args,
+                                outer = ?self.local_def_id,
+                                outer_generic_args = ?self.generic_args,
+                                "resolving predicate call in formula"
+                            );
+                            let generic_args = mir_ty::EarlyBinder::bind(generic_args)
+                                .instantiate(self.tcx, self.generic_args);
+                            let instance = mir_ty::Instance::resolve(
+                                self.tcx,
+                                param_env,
+                                def_id,
+                                generic_args,
+                            )
+                            .unwrap();
+                            let pred_def_id = if let Some(instance) = instance {
+                                instance.def_id()
+                            } else {
+                                def_id
+                            };
+                            let pred = refine::user_defined_pred(self.tcx, pred_def_id);
                             let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
                             let atom = chc::Atom::new(pred.into(), arg_terms);
                             return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
