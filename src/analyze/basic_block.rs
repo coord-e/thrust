@@ -178,8 +178,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         alloc: mir::interpret::ConstAllocation,
         range: std::ops::Range<usize>,
     ) -> PlaceType {
-        let alloc = alloc.inner();
-        let bytes = alloc.inspect_with_uninit_and_ptr_outside_interpreter(range);
+        let bytes = alloc.inner().inspect_with_uninit_and_ptr_outside_interpreter(range.clone());
         match ty.kind() {
             mir_ty::TyKind::Str => {
                 let content = std::str::from_utf8(bytes).unwrap();
@@ -201,6 +200,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!("const int bytes len: {}", bytes.len()),
                 };
                 PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(val))
+            }
+            mir_ty::TyKind::Tuple(tys) => {
+                let param_env = self.tcx.param_env(self.local_def_id);
+                let layout = self.tcx.layout_of(param_env.and(ty)).unwrap();
+                let cx = mir_ty::layout::LayoutCx { tcx: self.tcx, param_env };
+                let mut pts = Vec::new();
+                for (i, field_ty) in tys.iter().enumerate() {
+                    let field = layout.field(&cx, i);
+                    let start = range.start + layout.fields.offset(i).bytes() as usize;
+                    let end = start + field.size.bytes() as usize;
+                    let pt = self.const_bytes_ty(field_ty, alloc, start..end);
+                    pts.push(pt.boxed());
+                }
+                PlaceType::tuple(pts)
             }
             _ => unimplemented!("const bytes ty: {:?}", ty),
         }
