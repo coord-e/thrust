@@ -178,7 +178,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         alloc: mir::interpret::ConstAllocation,
         range: std::ops::Range<usize>,
     ) -> PlaceType {
-        let bytes = alloc.inner().inspect_with_uninit_and_ptr_outside_interpreter(range.clone());
+        let bytes = alloc
+            .inner()
+            .inspect_with_uninit_and_ptr_outside_interpreter(range.clone());
+        let param_env = self.tcx.param_env(self.local_def_id);
+        let layout = self.tcx.layout_of(param_env.and(ty)).unwrap();
+        let lcx = mir_ty::layout::LayoutCx {
+            tcx: self.tcx,
+            param_env,
+        };
         match ty.kind() {
             mir_ty::TyKind::Str => {
                 let content = std::str::from_utf8(bytes).unwrap();
@@ -202,14 +210,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(val))
             }
             mir_ty::TyKind::Tuple(tys) => {
-                let param_env = self.tcx.param_env(self.local_def_id);
-                let layout = self.tcx.layout_of(param_env.and(ty)).unwrap();
-                let cx = mir_ty::layout::LayoutCx { tcx: self.tcx, param_env };
                 let mut pts = Vec::new();
                 for (i, field_ty) in tys.iter().enumerate() {
-                    let field = layout.field(&cx, i);
+                    let field = layout.field(&lcx, i);
                     let start = range.start + layout.fields.offset(i).bytes() as usize;
                     let end = start + field.size.bytes() as usize;
+                    let pt = self.const_bytes_ty(field_ty, alloc, start..end);
+                    pts.push(pt.boxed());
+                }
+                PlaceType::tuple(pts)
+            }
+            mir_ty::TyKind::Adt(def, args) if def.is_struct() => {
+                let mut pts = Vec::new();
+                for (i, field_def) in def.all_fields().enumerate() {
+                    let field = layout.field(&lcx, i);
+                    let start = range.start + layout.fields.offset(i).bytes() as usize;
+                    let end = start + field.size.bytes() as usize;
+                    let field_ty = field_def.ty(self.tcx, args);
                     let pt = self.const_bytes_ty(field_ty, alloc, start..end);
                     pts.push(pt.boxed());
                 }
