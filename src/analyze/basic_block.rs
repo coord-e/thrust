@@ -172,79 +172,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         clauses
     }
 
-    fn relate_sub_continuation(
-        &mut self,
-        got: rty::FunctionType,
-        mut expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
-    ) -> Vec<chc::Clause> {
-        let mut clauses = Vec::new();
-
-        tracing::debug!(
-            got = %got.display(),
-            "sub_continuation"
-        );
-
-        match got.abi {
-            rty::FunctionAbi::Rust => {
-                if expected_args.is_empty() {
-                    // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
-                    expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
-                }
-            }
-            rty::FunctionAbi::RustCall => {
-                let rty::RefinedType { ty, mut refinement } =
-                    expected_args.pop().expect("rust-call last arg");
-                let ty = ty.into_tuple().expect("rust-call last arg is tuple");
-                let mut replacement_tuple = Vec::new();
-                for elem in &ty.elems {
-                    let existential = refinement.existentials.push(elem.ty.to_sort());
-                    replacement_tuple.push(chc::Term::var(rty::RefinedTypeVar::Existential(
-                        existential,
-                    )));
-                }
-
-                for (i, elem) in ty.elems.into_iter().enumerate() {
-                    let mut param_ty = elem.deref();
-                    param_ty
-                        .refinement
-                        .push_conj(refinement.clone().subst_value_var(|| {
-                            let mut value_elems = replacement_tuple.clone();
-                            value_elems[i] = chc::Term::var(rty::RefinedTypeVar::Value).boxed();
-                            chc::Term::tuple(value_elems)
-                        }));
-                    expected_args.push(param_ty);
-                }
-
-                tracing::info!(
-                    num_args = %expected_args.len(),
-                    "rust-call expanded",
-                );
-            }
-        }
-
-        let mut builder = self.env.build_clause();
-        for (param_idx, param_rty) in got.params.iter_enumerated() {
-            let param_sort = param_rty.ty.to_sort();
-            if !param_sort.is_singleton() {
-                builder.add_mapped_var(param_idx, param_sort);
-            }
-        }
-        for ((param_idx, got_ty), expected_ty) in got.params.iter_enumerated().zip(&expected_args) {
-            let cs = builder
-                .clone()
-                .with_value_var(&got_ty.ty)
-                .add_body(expected_ty.refinement.clone())
-                .head(got_ty.refinement.clone());
-            clauses.extend(cs);
-            builder
-                .with_mapped_value_var(param_idx)
-                .add_body(expected_ty.refinement.clone());
-            clauses.extend(builder.relate_sub_type(&expected_ty.ty, &got_ty.ty));
-        }
-
-        clauses
-    }
-
     fn const_bytes_ty(
         &self,
         ty: mir_ty::Ty<'tcx>,
@@ -580,7 +507,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.type_operand(Operand::Move(mir::RETURN_PLACE.into()), expected);
     }
 
-    fn type_goto(&mut self, bb: BasicBlock) {
+    fn type_goto(&mut self, bb: BasicBlock, expected_ret: &rty::RefinedType<Var>) {
         tracing::debug!(bb = ?bb, "type_goto");
         let bty = self.basic_block_ty(bb);
         let expected_args: IndexVec<_, _> = bty
@@ -601,7 +528,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
             })
             .collect();
-        let clauses = self.relate_sub_continuation(bty.to_function_ty(), expected_args);
+        let clauses =
+            self.relate_fn_sub_type(bty.to_function_ty(), expected_args, expected_ret.clone());
         self.ctx.extend_clauses(clauses);
     }
 
@@ -631,6 +559,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         &mut self,
         discr: Operand<'tcx>,
         targets: mir::SwitchTargets,
+        expected_ret: &rty::RefinedType<Var>,
         mut callback: F,
     ) where
         F: FnMut(&mut Self, BasicBlock),
@@ -654,7 +583,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             };
             self.with_assumption(pos_assumption, |ecx| {
                 callback(ecx, bb);
-                ecx.type_goto(bb);
+                ecx.type_goto(bb, expected_ret);
             });
             let neg_assumption = {
                 let mut builder = PlaceTypeBuilder::default();
@@ -666,7 +595,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         self.with_assumptions(negations, |ecx| {
             callback(ecx, targets.otherwise());
-            ecx.type_goto(targets.otherwise());
+            ecx.type_goto(targets.otherwise(), expected_ret);
         });
     }
 
@@ -954,10 +883,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.type_return(expected_ret);
             }
             TerminatorKind::Goto { target } => {
-                self.type_goto(*target);
+                self.type_goto(*target, expected_ret);
             }
             TerminatorKind::SwitchInt { discr, targets } => {
-                self.type_switch_int(discr.clone(), targets.clone(), |a, target| {
+                self.type_switch_int(discr.clone(), targets.clone(), expected_ret, |a, target| {
                     for local in a.drop_points.after_terminator(&target).iter() {
                         tracing::info!(?local, ?target, "implicitly dropped for target");
                         a.drop_local(local);
@@ -970,7 +899,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         tracing::info!(?local, "implicitly dropped after call");
                         self.drop_local(local);
                     }
-                    self.type_goto(*target);
+                    self.type_goto(*target, expected_ret);
                 }
             }
             TerminatorKind::Drop { target, .. } => {
@@ -978,7 +907,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     tracing::info!(?local, "dropped");
                     self.drop_local(local);
                 }
-                self.type_goto(*target);
+                self.type_goto(*target, expected_ret);
             }
             TerminatorKind::Assert {
                 cond,
@@ -997,7 +926,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         chc::Term::bool(*expected),
                     ),
                 );
-                self.type_goto(*target);
+                self.type_goto(*target, expected_ret);
             }
             TerminatorKind::UnwindResume {} => {}
             TerminatorKind::Unreachable {} => {}
