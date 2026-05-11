@@ -1,7 +1,7 @@
 //@error-in-other-file: Unsat
 
-#[thrust::requires(true)]
-#[thrust::ensures(result != x)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result != x)]
 fn id_ref<T>(x: &T) -> &T {
     x
 }

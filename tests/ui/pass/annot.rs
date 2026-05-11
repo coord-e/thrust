@@ -1,7 +1,7 @@
 //@check-pass
 
-#[thrust::requires(true)]
-#[thrust::ensures(result != x)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result != x)]
 fn rand_except(x: i64) -> i64 {
     if x == 0 {
         1
@@ -10,8 +10,8 @@ fn rand_except(x: i64) -> i64 {
     }
 }
 
-#[thrust::requires(true)]
-#[thrust::ensures((result == 1) || (result == -1))]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures((result == 1) || (result == -1))]
 fn f(x: i64) -> i64 {
     let y = rand_except(x);
     if y > x {

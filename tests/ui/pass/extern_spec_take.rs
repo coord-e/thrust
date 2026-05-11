@@ -1,8 +1,8 @@
 //@check-pass
 
 #[thrust::extern_spec_fn]
-#[thrust::requires(true)]
-#[thrust::ensures(result == *dest && ^dest == 0)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == *dest && !dest == 0)]
 fn _extern_spec_take(dest: &mut i32) -> i32 {
     std::mem::take(dest)
 }

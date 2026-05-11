@@ -1,7 +1,7 @@
 //@check-pass
 
-#[thrust::requires(true)]
-#[thrust::ensures(result == x)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == x)]
 fn id<T>(x: T) -> T {
     x
 }

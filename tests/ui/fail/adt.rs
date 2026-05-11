@@ -6,9 +6,13 @@ pub enum X {
     B(bool),
 }
 
+impl thrust_models::Model for X {
+    type Ty = Self;
+}
+
 #[thrust::trusted]
-#[thrust::requires(true)]
-#[thrust::ensures(true)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(true)]
 fn rand() -> X { unimplemented!() }
 
 fn inv(x: X) -> X {

@@ -1,15 +1,15 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
 
-#[thrust::requires(true)]
-#[thrust::ensures(true)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(true)]
 #[thrust::trusted]
 fn rand() -> i64 { unimplemented!() }
 
-#[thrust::requires(true)]
-#[thrust::ensures(
-    *ma >= *mb && *mb == ^mb && ma == result ||
-    *ma < *mb && *ma == ^ma && mb == result
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    *ma >= *mb && *mb == !mb && ma == result ||
+    *ma < *mb && *ma == !ma && mb == result
 )]
 fn take_max<'a>(ma: &'a mut i64, mb: &'a mut i64) -> &'a mut i64 {
   if *ma >= *mb {

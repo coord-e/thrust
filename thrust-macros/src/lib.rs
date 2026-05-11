@@ -596,20 +596,20 @@ fn generic_params_tokens(generics: &Generics) -> TokenStream2 {
     quote!(<#params>)
 }
 
-/// Returns `::<T, U, 'a>` for turbofish use, or nothing if no generic params.
+/// Returns `::<T, U>` for turbofish use, or nothing if no generic params.
 fn generic_turbofish(generics: &Generics) -> TokenStream2 {
-    if generics.params.is_empty() {
-        return quote!();
-    }
     let args: Vec<TokenStream2> = generics
         .params
         .iter()
-        .map(|p| match p {
-            GenericParam::Type(tp) => tp.ident.to_token_stream(),
-            GenericParam::Lifetime(lp) => lp.lifetime.to_token_stream(),
-            GenericParam::Const(cp) => cp.ident.to_token_stream(),
+        .flat_map(|p| match p {
+            GenericParam::Type(tp) => Some(tp.ident.to_token_stream()),
+            GenericParam::Lifetime(_) => None,
+            GenericParam::Const(cp) => Some(cp.ident.to_token_stream()),
         })
         .collect();
+    if args.is_empty() {
+        return quote!();
+    }
     quote!(::<#(#args),*>)
 }
 

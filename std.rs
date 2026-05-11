@@ -172,29 +172,61 @@ mod thrust_models {
         type Ty = model::Int;
     }
 
-    impl Model for isize {
-        type Ty = model::Int;
+    macro_rules! int_model {
+        ($T:ty) => {
+            impl Model for $T {
+                type Ty = model::Int;
+            }
+
+            impl PartialEq<model::Int> for $T {
+                #[thrust::ignored]
+                fn eq(&self, _other: &model::Int) -> bool {
+                    unimplemented!()
+                }
+            }
+
+            impl PartialOrd<model::Int> for $T {
+                #[thrust::ignored]
+                fn partial_cmp(&self, _other: &model::Int) -> Option<std::cmp::Ordering> {
+                    unimplemented!()
+                }
+            }
+
+            impl std::ops::Add<model::Int> for $T {
+                type Output = model::Int;
+
+                #[thrust::ignored]
+                fn add(self, _rhs: model::Int) -> Self::Output {
+                    unimplemented!()
+                }
+            }
+
+            impl std::ops::Sub<model::Int> for $T {
+                type Output = model::Int;
+
+                #[thrust::ignored]
+                fn sub(self, _rhs: model::Int) -> Self::Output {
+                    unimplemented!()
+                }
+            }
+
+            impl std::ops::Mul<model::Int> for $T {
+                type Output = model::Int;
+
+                #[thrust::ignored]
+                fn mul(self, _rhs: model::Int) -> Self::Output {
+                    unimplemented!()
+                }
+            }
+        };
     }
 
-    impl Model for i32 {
-        type Ty = model::Int;
-    }
-
-    impl Model for i64 {
-        type Ty = model::Int;
-    }
-
-    impl Model for usize {
-        type Ty = model::Int;
-    }
-
-    impl Model for u32 {
-        type Ty = model::Int;
-    }
-
-    impl Model for u64 {
-        type Ty = model::Int;
-    }
+    int_model!(isize);
+    int_model!(i32);
+    int_model!(i64);
+    int_model!(usize);
+    int_model!(u32);
+    int_model!(u64);
 
     impl Model for bool {
         type Ty = bool;

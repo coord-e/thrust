@@ -19,8 +19,8 @@
     )
 )")]
 
-#[thrust::requires(true)]
-#[thrust::ensures(result == 2 * x)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == 2 * x)]
 fn double(x: i64) -> i64 {
     x + x
 }

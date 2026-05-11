@@ -5,9 +5,13 @@ pub enum X<T> {
     B(T),
 }
 
+impl<T> thrust_models::Model for X<T> {
+    type Ty = Self;
+}
+
 #[thrust::trusted]
-#[thrust::requires(true)]
-#[thrust::ensures(true)]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(true)]
 fn rand<T>() -> X<T> { unimplemented!() }
 
 fn is_a<T>(x: &X<T>) -> bool {
