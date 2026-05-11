@@ -40,8 +40,8 @@
 use std::collections::{HashMap, HashSet};
 
 use pretty::{termcolor, Pretty};
+use rustc_abi::VariantIdx;
 use rustc_index::IndexVec;
-use rustc_target::abi::VariantIdx;
 
 use crate::chc;
 
@@ -74,7 +74,7 @@ impl std::fmt::Display for FunctionParamIdx {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b FunctionParamIdx
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &FunctionParamIdx
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -125,7 +125,7 @@ pub struct FunctionType {
     pub abi: FunctionAbi,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b FunctionType
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &FunctionType
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
@@ -218,7 +218,7 @@ impl std::fmt::Display for RefKind {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b RefKind
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &RefKind
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -243,7 +243,7 @@ impl std::fmt::Display for PointerKind {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PointerKind
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &PointerKind
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -274,7 +274,7 @@ pub struct PointerType<T> {
     pub elem: Box<RefinedType<T>>,
 }
 
-impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PointerType<T>
+impl<'a, T, D> Pretty<'a, D, termcolor::ColorSpec> for &PointerType<T>
 where
     T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -386,7 +386,7 @@ pub struct TupleType<T> {
     pub elems: Vec<RefinedType<T>>,
 }
 
-impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TupleType<T>
+impl<'a, T, D> Pretty<'a, D, termcolor::ColorSpec> for &TupleType<T>
 where
     T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -511,7 +511,7 @@ pub struct EnumType<T> {
     pub args: IndexVec<TypeParamIdx, RefinedType<T>>,
 }
 
-impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b EnumType<V>
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &EnumType<V>
 where
     V: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -612,7 +612,7 @@ pub struct ParamType {
     pub idx: TypeParamIdx,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b ParamType
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ParamType
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -642,7 +642,7 @@ pub struct ArrayType<T> {
     pub elem: Box<RefinedType<T>>,
 }
 
-impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b ArrayType<T>
+impl<'a, T, D> Pretty<'a, D, termcolor::ColorSpec> for &ArrayType<T>
 where
     T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -769,7 +769,7 @@ impl<T> From<EnumType<T>> for Type<T> {
     }
 }
 
-impl<'a, 'b, T, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Type<T>
+impl<'a, T, D> Pretty<'a, D, termcolor::ColorSpec> for &Type<T>
 where
     T: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -1029,7 +1029,7 @@ impl std::fmt::Display for Closed {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Closed
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &Closed
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -1055,7 +1055,7 @@ impl std::fmt::Display for ExistentialVarIdx {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b ExistentialVarIdx
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ExistentialVarIdx
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -1076,7 +1076,7 @@ pub trait ShiftExistential {
 /// - `RefinedTypeVar::Value`: a variable `v` representing the value of the type
 /// - `RefinedTypeVar::Existential`: an existential variable `e`
 /// - `RefinedTypeVar::Free`: a variable from the outer scope, such as function parameters or
-///    variables bound in the environment
+///   variables bound in the environment
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RefinedTypeVar<FV> {
     Value,
@@ -1116,7 +1116,7 @@ where
     }
 }
 
-impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b RefinedTypeVar<FV>
+impl<'a, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &RefinedTypeVar<FV>
 where
     FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -1213,7 +1213,7 @@ where
     }
 }
 
-impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Formula<V>
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &Formula<V>
 where
     V: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -1409,7 +1409,7 @@ pub struct RefinedType<FV = Closed> {
     pub refinement: Refinement<FV>,
 }
 
-impl<'a, 'b, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b RefinedType<FV>
+impl<'a, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &RefinedType<FV>
 where
     FV: chc::Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,

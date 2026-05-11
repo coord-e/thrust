@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rustc_index::bit_set::BitSet;
+use rustc_index::bit_set::DenseBitSet;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeAndMut};
@@ -140,8 +140,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // function's body
         use rustc_hir::{Block, Expr, ExprKind};
 
-        let hir_map = self.tcx.hir();
-        let hir_body = hir_map.maybe_body_owned_by(self.local_def_id).unwrap();
+        let hir_body = self.tcx.hir_maybe_body_owned_by(self.local_def_id).unwrap();
 
         let predicate_body = match hir_body.value {
             Expr {
@@ -441,7 +440,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let node = self.tcx.hir_node_by_def_id(self.local_def_id);
         let body_id = match node {
             rustc_hir::Node::Item(item) => {
-                let rustc_hir::ItemKind::Fn(_, _, body_id) = item.kind else {
+                let rustc_hir::ItemKind::Fn { body: body_id, .. } = item.kind else {
                     panic!("extern_spec_fn must be a function");
                 };
                 body_id
@@ -463,7 +462,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             _ => panic!("extern_spec_fn must be a function item or impl item"),
         };
 
-        let body = self.tcx.hir().body(body_id);
+        let body = self.tcx.hir_body(body_id);
 
         // The body is a block; the tail expression is the function call to the target.
         let rustc_hir::ExprKind::Block(block, _) = &body.value.kind else {
@@ -487,8 +486,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         };
 
         let args = typeck_result.node_args(hir_id);
-        let param_env = self.tcx.param_env(self.local_def_id);
-        let instance = mir_ty::Instance::try_resolve(self.tcx, param_env, def_id, args).unwrap();
+        let typing_env = self.body.typing_env(self.tcx);
+        let instance = mir_ty::Instance::try_resolve(self.tcx, typing_env, def_id, args).unwrap();
         if let Some(instance) = instance {
             instance.def_id()
         } else {
@@ -518,14 +517,28 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return Some((lhs_local, *place));
         }
 
-        let mir::Rvalue::Use(mir::Operand::Copy(place)) = &rvalue else {
-            return None;
-        };
-
         let unique_did = self.ctx.def_ids.unique()?;
         let nonnull_did = self.ctx.def_ids.nonnull()?;
 
-        let (rest, chunk) = place.projection.as_slice().split_last_chunk::<3>()?;
+        use mir::ProjectionElem::Field;
+        use rustc_abi::FieldIdx;
+        const ZERO_FIELD: FieldIdx = FieldIdx::from_u32(0);
+
+        // Box deref pattern: `(_box.0.0 as *const T) Transmute`
+        //   projection = [..., Field(0, Unique<T>), Field(0, NonNull<T>)], transmuted to *const T
+        let mir::Rvalue::Cast(mir::CastKind::Transmute, mir::Operand::Copy(place), cast_ty) =
+            &rvalue
+        else {
+            return None;
+        };
+        if !matches!(cast_ty.kind(), mir_ty::TyKind::RawPtr(_, mutbl) if mutbl.is_not()) {
+            return None;
+        }
+        let Some((rest, [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1)])) =
+            place.projection.as_slice().split_last_chunk::<2>()
+        else {
+            return None;
+        };
         let rest_place = mir::Place {
             local: place.local,
             projection: self.tcx.mk_place_elems(rest),
@@ -535,35 +548,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return None;
         }
         let inner_ty = local_ty.boxed_ty()?;
-
-        use mir::ProjectionElem::Field;
-        use rustc_target::abi::FieldIdx;
-        const ZERO_FIELD: FieldIdx = FieldIdx::from_u32(0);
-        let [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1), Field(ZERO_FIELD, ty2)] = chunk else {
-            return None;
-        };
-
-        if !matches!(
-            ty0.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == unique_did && args.type_at(0) == inner_ty
-        ) {
+        if !matches!(ty0.kind(), mir_ty::TyKind::Adt(def, args)
+            if def.did() == unique_did && args.type_at(0) == inner_ty)
+        {
             return None;
         }
-
-        if !matches!(
-            ty1.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == nonnull_did && args.type_at(0) == inner_ty
-        ) {
+        if !matches!(ty1.kind(), mir_ty::TyKind::Adt(def, args)
+            if def.did() == nonnull_did && args.type_at(0) == inner_ty)
+        {
             return None;
         }
-
-        if !matches!(
-            ty2.kind(), mir_ty::TyKind::RawPtr(t, mutbl)
-            if *t == inner_ty && mutbl.is_not()
-        ) {
-            return None;
-        }
-
         Some((lhs_local, rest_place))
     }
 
@@ -590,15 +584,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn mut_locals<'a, T>(&self, visitable: &'a T) -> BitSet<Local>
-    where
-        T: mir::visit::MirVisitable<'tcx> + ?Sized,
-    {
+    fn mut_locals(
+        &self,
+        data: &mir::BasicBlockData<'tcx>,
+        statement_index: usize,
+    ) -> DenseBitSet<Local> {
         struct Visitor<'tcx, 'a> {
             tcx: TyCtxt<'tcx>,
             body: &'a Body<'tcx>,
 
-            locals: BitSet<Local>,
+            locals: DenseBitSet<Local>,
         }
         impl<'tcx> mir::visit::Visitor<'tcx> for Visitor<'tcx, '_> {
             fn visit_rvalue(&mut self, rvalue: &mir::Rvalue<'tcx>, location: mir::Location) {
@@ -636,9 +631,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut visitor = Visitor {
             tcx: self.tcx,
             body: &self.body,
-            locals: BitSet::new_empty(self.body.local_decls.len()),
+            locals: DenseBitSet::new_empty(self.body.local_decls.len()),
         };
-        visitable.apply(mir::Location::START, &mut visitor);
+        let loc = mir::Location::START;
+        use mir::visit::Visitor as _;
+        if statement_index < data.statements.len() {
+            visitor.visit_statement(&data.statements[statement_index], loc);
+        } else if let Some(tmnt) = &data.terminator {
+            visitor.visit_terminator(tmnt, loc);
+        }
         visitor.locals
     }
 
@@ -714,7 +715,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             // XXX: what...
             let mut body = self.body.clone();
             struct Visitor {
-                deref_temps: BitSet<Local>,
+                deref_temps: DenseBitSet<Local>,
             }
             impl<'tcx> mir::visit::Visitor<'tcx> for Visitor {
                 fn visit_assign(
@@ -729,7 +730,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
             }
             let mut visitor = Visitor {
-                deref_temps: BitSet::new_empty(body.local_decls.len()),
+                deref_temps: DenseBitSet::new_empty(body.local_decls.len()),
             };
             use mir::visit::Visitor as _;
             visitor.visit_body(&body);
@@ -741,22 +742,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 };
                 local_decl.local_info = mir::ClearCrossCrate::Set(Box::new(local_info));
             }
-            let param_env = self.tcx.param_env_reveal_all_normalized(self.local_def_id);
-            MoveData::gather_moves(&body, self.tcx, param_env, |_| true)
+            MoveData::gather_moves(&body, self.tcx, |_| true)
         };
         let tmp_body = self.body.clone();
         let mut results =
             rustc_mir_dataflow::impls::MaybeInitializedPlaces::new(self.tcx, &tmp_body, &move_data)
-                .into_engine(self.tcx, &self.body)
-                .iterate_to_fixpoint()
+                .iterate_to_fixpoint(self.tcx, &self.body, None)
                 .into_results_cursor(&tmp_body);
 
-        let mut zst_locals = BitSet::new_empty(self.body.local_decls.len());
+        let mut zst_locals = DenseBitSet::new_empty(self.body.local_decls.len());
         for (local, local_decl) in self.body.local_decls.iter_enumerated() {
             let ty = local_decl.ty;
             if self
                 .tcx
-                .layout_of(mir_ty::ParamEnv::reveal_all().and(ty))
+                .layout_of(self.body.typing_env(self.tcx).as_query_input(ty))
                 .map(|l| l.is_zst())
                 .unwrap_or(false)
             {
@@ -778,7 +777,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .iter()
                     .map(|p| results.analysis().move_data().move_paths[p].place.local)
                     .collect();
-                let mut_locals = self.mut_locals(data.visitable(statement_index));
+                let mut_locals = self.mut_locals(data, statement_index);
                 tracing::info!(
                     ?init_locals,
                     ?mut_locals,
@@ -800,8 +799,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn refine_basic_blocks(&mut self) {
         use rustc_mir_dataflow::Analysis as _;
         let mut results = rustc_mir_dataflow::impls::MaybeLiveLocals
-            .into_engine(self.tcx, &self.body)
-            .iterate_to_fixpoint()
+            .iterate_to_fixpoint(self.tcx, &self.body, None)
             .into_results_cursor(&self.body);
 
         let mut builder = analyze::basic_block::DropPoints::builder(&self.body);

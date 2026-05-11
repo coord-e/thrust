@@ -37,7 +37,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             use rustc_ast::tokenstream::TokenTree;
 
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let tt = ts.trees().next().expect("string literal");
+            let tt = ts.iter().next().expect("string literal").clone();
 
             let raw_command = match tt {
                 TokenTree::Token(
@@ -206,7 +206,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 mir_ty::GenericParamDefKind::Const { .. } => {
                     unimplemented!()
                 }
-                mir_ty::GenericParamDefKind::Lifetime { .. } => self.tcx.lifetimes.re_erased.into(),
+                mir_ty::GenericParamDefKind::Lifetime => self.tcx.lifetimes.re_erased.into(),
             };
             args.push(arg);
         }

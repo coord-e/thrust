@@ -30,7 +30,7 @@ impl std::fmt::Display for DatatypeSymbol {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b DatatypeSymbol
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &DatatypeSymbol
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -55,7 +55,7 @@ pub struct DatatypeSort {
     args: Vec<Sort>,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b DatatypeSort
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &DatatypeSort
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
@@ -105,7 +105,7 @@ impl From<DatatypeSort> for Sort {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Sort
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &Sort
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
@@ -326,7 +326,7 @@ impl std::fmt::Display for TermVarIdx {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b TermVarIdx
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &TermVarIdx
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -354,7 +354,7 @@ impl std::fmt::Display for Function {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Function
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &Function
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -456,7 +456,7 @@ pub enum Term<V = TermVarIdx> {
     FormulaExistentialVar(Sort, String),
 }
 
-impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Term<V>
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &Term<V>
 where
     V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -798,7 +798,7 @@ impl std::fmt::Display for PredVarId {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PredVarId
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &PredVarId
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -834,7 +834,7 @@ impl std::fmt::Display for KnownPred {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b KnownPred
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &KnownPred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -933,7 +933,7 @@ impl std::fmt::Display for MatcherPred {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b MatcherPred
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &MatcherPred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
@@ -979,7 +979,7 @@ impl std::fmt::Display for UserDefinedPred {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b UserDefinedPred
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &UserDefinedPred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -1014,7 +1014,7 @@ impl std::fmt::Display for Pred {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Pred
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &Pred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
@@ -1113,7 +1113,7 @@ pub struct Atom<V = TermVarIdx> {
     pub args: Vec<Term<V>>,
 }
 
-impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Atom<V>
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &Atom<V>
 where
     V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -1266,7 +1266,7 @@ impl<V> From<Atom<V>> for Formula<V> {
     }
 }
 
-impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Formula<V>
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &Formula<V>
 where
     V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -1629,7 +1629,7 @@ where
     }
 }
 
-impl<'a, 'b, D, V> Pretty<'a, D, termcolor::ColorSpec> for &'b Body<V>
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &Body<V>
 where
     V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -1670,7 +1670,7 @@ pub struct Clause {
     pub debug_info: DebugInfo,
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Clause
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &Clause
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,

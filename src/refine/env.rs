@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use pretty::{termcolor, Pretty};
+use rustc_abi::{FieldIdx, VariantIdx};
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Place, PlaceElem};
-use rustc_target::abi::{FieldIdx, VariantIdx};
 
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
@@ -49,7 +49,7 @@ impl std::fmt::Display for Var {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b Var
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &Var
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -200,7 +200,7 @@ impl std::fmt::Debug for PlaceTypeVar {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PlaceTypeVar
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &PlaceTypeVar
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
@@ -294,7 +294,7 @@ pub trait EnumDefProvider {
     fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef;
 }
 
-impl<'a, T: EnumDefProvider> EnumDefProvider for &'a T {
+impl<T: EnumDefProvider> EnumDefProvider for &T {
     fn enum_def(&self, name: &chc::DatatypeSymbol) -> rty::EnumDatatypeDef {
         <T as EnumDefProvider>::enum_def(self, name)
     }
@@ -327,7 +327,7 @@ impl From<PlaceType> for rty::RefinedType<Var> {
     }
 }
 
-impl<'a, 'b, D> Pretty<'a, D, termcolor::ColorSpec> for &'b PlaceType
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &PlaceType
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
     D::Doc: Clone,
@@ -1036,7 +1036,7 @@ where
 
 #[derive(Debug, Clone)]
 enum Path {
-    PlaceTy(PlaceType),
+    PlaceTy(Box<PlaceType>),
     Local(Local),
     Deref(Box<Path>),
     TupleProj(Box<Path>, usize),
@@ -1081,7 +1081,7 @@ where
 {
     fn path_type(&self, path: &Path) -> PlaceType {
         match path {
-            Path::PlaceTy(pty) => pty.clone(),
+            Path::PlaceTy(pty) => *pty.clone(),
             Path::Local(local) => self.local_type(*local),
             Path::Deref(path) => self.path_type(path).deref(),
             Path::TupleProj(path, idx) => self.path_type(path).tuple_proj(*idx),
@@ -1160,7 +1160,7 @@ where
                 let Assumption {
                     existentials: assumption_existentials,
                     body: assumption_body,
-                } = self.dropping_assumption(&Path::PlaceTy(field_pty));
+                } = self.dropping_assumption(&Path::PlaceTy(Box::new(field_pty)));
                 // dropping assumption should not generate any existential
                 assert!(assumption_existentials.is_empty());
                 formula.push_conj(assumption_body);

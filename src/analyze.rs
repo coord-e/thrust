@@ -582,7 +582,7 @@ impl<'tcx> Analyzer<'tcx> {
         attr_path: &[Symbol],
     ) -> Option<DefId> {
         let map = self.tcx.hir();
-        let body = map.maybe_body_owned_by(local_def_id)?;
+        let body = self.tcx.hir_maybe_body_owned_by(local_def_id)?;
 
         let rustc_hir::ExprKind::Block(block, _) = body.value.kind else {
             return None;

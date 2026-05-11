@@ -71,7 +71,7 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
-    param_env: mir_ty::ParamEnv<'tcx>,
+    typing_env: mir_ty::TypingEnv<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
     /// These indices may differ because we skip lifetime parameters and they always need to be
     /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
@@ -93,11 +93,11 @@ impl<'tcx> TypeBuilder<'tcx> {
                 mir_ty::GenericParamDefKind::Const { .. } => {}
             }
         }
-        let param_env = tcx.param_env_reveal_all_normalized(def_id);
+        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, def_id);
         Self {
             tcx,
             def_ids,
-            param_env,
+            typing_env,
             param_idx_mapping,
         }
     }
@@ -161,7 +161,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         let projection_ty = mir_ty::Ty::new_projection(self.tcx, model_ty_def_id, args);
         if let Ok(normalized_ty) = self
             .tcx
-            .try_normalize_erasing_regions(self.param_env, projection_ty)
+            .try_normalize_erasing_regions(self.typing_env, projection_ty)
         {
             return normalized_ty;
         }
@@ -279,8 +279,8 @@ impl<'tcx> TypeBuilder<'tcx> {
         sig: mir_ty::FnSig<'tcx>,
     ) -> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         let abi = match sig.abi {
-            rustc_target::spec::abi::Abi::Rust => rty::FunctionAbi::Rust,
-            rustc_target::spec::abi::Abi::RustCall => rty::FunctionAbi::RustCall,
+            rustc_abi::ExternAbi::Rust => rty::FunctionAbi::Rust,
+            rustc_abi::ExternAbi::RustCall => rty::FunctionAbi::RustCall,
             _ => unimplemented!("unsupported function ABI: {:?}", sig.abi),
         };
         FunctionTemplateTypeBuilder {

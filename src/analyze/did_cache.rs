@@ -3,10 +3,10 @@
 use std::cell::OnceCell;
 use std::rc::Rc;
 
+use rustc_abi::FieldIdx;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::Symbol;
-use rustc_target::abi::FieldIdx;
 
 #[derive(Debug, Clone, Default)]
 struct DefIds {
@@ -80,14 +80,13 @@ impl<'tcx> DefIdCache<'tcx> {
     }
 
     fn annotated_def(&self, path: &[Symbol]) -> Option<DefId> {
-        let map = self.tcx.hir();
-        for item_id in map.items() {
+        for item_id in self.tcx.hir_free_items() {
             let def_id = item_id.owner_id.to_def_id();
             if self.tcx.get_attrs_by_path(def_id, path).next().is_some() {
                 return Some(def_id);
             }
 
-            let item = map.item(item_id);
+            let item = self.tcx.hir_item(item_id);
             if let rustc_hir::ItemKind::Trait(_, _, _, _, trait_item_refs) = item.kind {
                 for trait_item_ref in trait_item_refs {
                     let def_id = trait_item_ref.id.owner_id.to_def_id();
