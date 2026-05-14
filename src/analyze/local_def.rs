@@ -822,23 +822,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 })
                 .collect();
             // TODO: ad-hoc
-            if bb == mir::START_BLOCK {
-                for a in self.body.args_iter() {
-                    if live_locals.iter().any(|(l, _)| *l == a) {
-                        continue;
-                    }
-                    let decl = &self.body.local_decls[a];
-                    let type_and_mut = TypeAndMut {
-                        ty: decl.ty,
-                        mutbl: decl.mutability,
-                    };
-                    live_locals.push((a, type_and_mut));
-                    self.drop_points
-                        .get_mut(&bb)
-                        .unwrap()
-                        .before_statements
-                        .push(a);
+            // Function args must be available at all BBs so that Return BBs can reference them
+            // when generating the return type constraint (via entry_expected_ret).
+            for a in self.body.args_iter() {
+                if live_locals.iter().any(|(l, _)| *l == a) {
+                    continue;
                 }
+                let decl = &self.body.local_decls[a];
+                let type_and_mut = TypeAndMut {
+                    ty: decl.ty,
+                    mutbl: decl.mutability,
+                };
+                live_locals.push((a, type_and_mut));
             }
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
