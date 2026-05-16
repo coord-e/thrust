@@ -854,7 +854,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let rty = self
                 .type_builder
                 .for_template(&mut self.ctx)
-                .build_basic_block(live_locals, ret_ty);
+                .build_basic_block(&self.body, live_locals, ret_ty);
             self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
         }
     }
@@ -969,7 +969,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn assert_entry(&mut self, expected: &rty::RefinedType) {
-        let entry_ty = self
+        let mut entry_ty = self
             .ctx
             .basic_block_ty(self.local_def_id, mir::START_BLOCK)
             .clone();
@@ -977,6 +977,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut expected = expected.ty.as_function().cloned().unwrap();
         self.elaborate_mut_params(&mut expected);
 
+        entry_ty.truncate_outer_fn_params();
         self.drop_unused_expected_params(&mut expected, &entry_ty);
         let entry_ty = self.drop_bb_zst_params(&entry_ty);
 
