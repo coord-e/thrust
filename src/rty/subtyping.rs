@@ -1,9 +1,11 @@
 //! Translation of subtyping relations into CHC constraints.
 
+use rustc_index::IndexVec;
+
 use crate::chc;
 use crate::pretty::PrettyDisplayExt;
 
-use super::{ClauseBuilderExt as _, Closed, PointerKind, RefKind, RefinedType, Type};
+use super::{ClauseBuilderExt as _, FunctionParamIdx, PointerKind, RefKind, RefinedType, Type};
 
 /// A scope for building clauses.
 ///
@@ -170,7 +172,26 @@ where
 }
 
 #[must_use]
-pub fn relate_sub_closed_type(got: &Type<Closed>, expected: &Type<Closed>) -> Vec<chc::Clause> {
-    tracing::debug!(got = %got.display(), expected = %expected.display(), "relate_sub_closed_type");
-    chc::ClauseBuilder::default().relate_sub_type(got, expected)
+pub fn relate_sub_param_types(
+    got: &IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
+    expected: &IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
+) -> Vec<chc::Clause> {
+    assert_eq!(got.len(), expected.len());
+
+    let mut clauses = Vec::new();
+    let mut builder = chc::ClauseBuilder::default();
+
+    for (param_idx, param_rty) in got.iter_enumerated() {
+        let param_sort = param_rty.ty.to_sort();
+        if !param_sort.is_singleton() {
+            builder.add_mapped_var(param_idx, param_sort);
+        }
+    }
+
+    for (got_ty, expected_ty) in got.iter().zip(expected.iter()) {
+        let cs = builder.relate_sub_refined_type(expected_ty, got_ty);
+        clauses.extend(cs);
+    }
+
+    clauses
 }

@@ -508,28 +508,70 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.type_rvalue(Rvalue::Use(operand), expected);
     }
 
-    fn type_return(&mut self, expected: &rty::RefinedType<Var>) {
-        self.type_operand(Operand::Move(mir::RETURN_PLACE.into()), expected);
+    fn type_return(
+        &mut self,
+        expected_fn: &rty::FunctionType,
+        outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
+    ) {
+        let mut builder = self.env.build_clause();
+        let mut clauses = Vec::new();
+
+        for (&param_idx, &param_var) in outer_fn_param_vars {
+            let sort = expected_fn.params[param_idx].ty.to_sort();
+            if sort.is_singleton() {
+                continue;
+            }
+            builder.add_mapped_var(param_idx, sort);
+            let tv_param_idx = builder.mapped_var(param_idx);
+            let tv_param_var = builder.mapped_var(param_var);
+            builder.add_body(chc::Term::var(tv_param_idx).equal_to(chc::Term::var(tv_param_var)));
+        }
+
+        let ret_rty = self.operand_refined_type(Operand::Move(mir::RETURN_PLACE.into()));
+
+        let cs = builder
+            .with_value_var(&expected_fn.ret.ty)
+            .add_body(ret_rty.refinement)
+            .head(expected_fn.ret.refinement.clone());
+        clauses.extend(cs);
+        clauses.extend(builder.relate_sub_type(&ret_rty.ty, &expected_fn.ret.ty));
+
+        self.ctx.extend_clauses(clauses);
     }
 
-    fn type_goto(&mut self, bb: BasicBlock, expected_ret: &rty::RefinedType<Var>) {
-        tracing::debug!(bb = ?bb, "type_goto");
+    fn type_goto(
+        &mut self,
+        bb: BasicBlock,
+        expected_ret: &rty::RefinedType<Var>,
+        outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
+    ) {
         let bty = self.basic_block_ty(bb);
         let expected_args: IndexVec<_, _> = bty
             .as_ref()
             .params
             .iter_enumerated()
             .map(|(param_idx, rty)| {
-                if let Some(arg_local) = bty.local_of_param(param_idx) {
-                    let arg_local_ty = self.env.local_type(arg_local);
-                    // TODO: should we cover "is_singleton" ness in relate_* methods or here?
-                    if !rty.ty.to_sort().is_singleton() {
-                        arg_local_ty.into()
-                    } else {
-                        rty::RefinedType::unrefined(arg_local_ty.ty)
+                match bty.param_kind(param_idx) {
+                    BasicBlockTypeParamKind::Local(arg_local, _) => {
+                        let arg_local_ty = self.env.local_type(arg_local);
+                        // TODO: should we cover "is_singleton" ness in relate_* methods or here?
+                        if !rty.ty.to_sort().is_singleton() {
+                            arg_local_ty.into()
+                        } else {
+                            rty::RefinedType::unrefined(arg_local_ty.ty)
+                        }
                     }
-                } else {
-                    rty::RefinedType::unrefined(rty.ty.clone().assert_closed().vacuous())
+                    BasicBlockTypeParamKind::OuterFnParam(outer_idx) => {
+                        let outer_fn_param_var = outer_fn_param_vars[&outer_idx];
+                        let pty = PlaceType::with_ty_and_term(
+                            rty.ty.clone().assert_closed().vacuous(),
+                            chc::Term::var(outer_fn_param_var),
+                        );
+                        pty.into()
+                    }
+                    BasicBlockTypeParamKind::Synthetic => {
+                        rty::RefinedType::unrefined(rty.ty.clone().assert_closed().vacuous())
+                    }
                 }
             })
             .collect();
@@ -565,6 +607,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         discr: Operand<'tcx>,
         targets: mir::SwitchTargets,
         expected_ret: &rty::RefinedType<Var>,
+        outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
         mut callback: F,
     ) where
         F: FnMut(&mut Self, BasicBlock),
@@ -588,7 +631,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             };
             self.with_assumption(pos_assumption, |ecx| {
                 callback(ecx, bb);
-                ecx.type_goto(bb, expected_ret);
+                ecx.type_goto(bb, expected_ret, outer_fn_param_vars);
             });
             let neg_assumption = {
                 let mut builder = PlaceTypeBuilder::default();
@@ -600,7 +643,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         self.with_assumptions(negations, |ecx| {
             callback(ecx, targets.otherwise());
-            ecx.type_goto(targets.otherwise(), expected_ret);
+            ecx.type_goto(targets.otherwise(), expected_ret, outer_fn_param_vars);
         });
     }
 
@@ -877,26 +920,34 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    #[tracing::instrument(skip(self, expected_ret), fields(term = ?term.kind))]
+    #[tracing::instrument(skip(self, expected_ret, expected_fn, outer_fn_param_vars), fields(term = ?term.kind))]
     fn analyze_terminator_goto(
         &mut self,
         term: &mir::Terminator<'tcx>,
         expected_ret: &rty::RefinedType<Var>,
+        expected_fn: &rty::FunctionType,
+        outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
         match &term.kind {
             TerminatorKind::Return => {
-                self.type_return(expected_ret);
+                self.type_return(expected_fn, outer_fn_param_vars);
             }
             TerminatorKind::Goto { target } => {
-                self.type_goto(*target, expected_ret);
+                self.type_goto(*target, expected_ret, outer_fn_param_vars);
             }
             TerminatorKind::SwitchInt { discr, targets } => {
-                self.type_switch_int(discr.clone(), targets.clone(), expected_ret, |a, target| {
-                    for local in a.drop_points.after_terminator(&target).iter() {
-                        tracing::info!(?local, ?target, "implicitly dropped for target");
-                        a.drop_local(local);
-                    }
-                });
+                self.type_switch_int(
+                    discr.clone(),
+                    targets.clone(),
+                    expected_ret,
+                    outer_fn_param_vars,
+                    |a, target| {
+                        for local in a.drop_points.after_terminator(&target).iter() {
+                            tracing::info!(?local, ?target, "implicitly dropped for target");
+                            a.drop_local(local);
+                        }
+                    },
+                );
             }
             TerminatorKind::Call { target, .. } => {
                 if let Some(target) = target {
@@ -904,7 +955,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         tracing::info!(?local, "implicitly dropped after call");
                         self.drop_local(local);
                     }
-                    self.type_goto(*target, expected_ret);
+                    self.type_goto(*target, expected_ret, outer_fn_param_vars);
                 }
             }
             TerminatorKind::Drop { target, .. } => {
@@ -912,7 +963,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     tracing::info!(?local, "dropped");
                     self.drop_local(local);
                 }
-                self.type_goto(*target, expected_ret);
+                self.type_goto(*target, expected_ret, outer_fn_param_vars);
             }
             TerminatorKind::Assert {
                 cond,
@@ -931,7 +982,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         chc::Term::bool(*expected),
                     ),
                 );
-                self.type_goto(*target, expected_ret);
+                self.type_goto(*target, expected_ret, outer_fn_param_vars);
             }
             TerminatorKind::UnwindResume {} => {}
             TerminatorKind::Unreachable {} => {}
@@ -1085,9 +1136,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn bind_locals(
         &mut self,
         expected_params: &IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
-    ) {
+    ) -> HashMap<rty::FunctionParamIdx, Var> {
         let mut param_terms = HashMap::<rty::FunctionParamIdx, chc::Term<PlaceTypeVar>>::new();
         let mut assumption = Assumption::default();
+
+        let mut outer_fn_param_vars = HashMap::new();
 
         let bb_ty = self.basic_block_ty(self.basic_block).clone();
         let params = &bb_ty.as_ref().params;
@@ -1102,35 +1155,38 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         _ => unimplemented!(),
                     })
                 }));
-            if let Some(local) = bb_ty.local_of_param(param_idx) {
-                if bb_ty.mutbl_of_param(param_idx).unwrap().is_mut()
-                    || param_unrefined_rty.ty.is_mut()
-                {
-                    self.env.mut_bind(local, param_unrefined_rty);
-                } else {
-                    self.env.immut_bind(local, param_unrefined_rty);
-                }
-                let param_sort = param_ty.to_sort();
-                if param_sort.is_singleton() {
-                    continue;
-                }
+            match bb_ty.param_kind(param_idx) {
+                BasicBlockTypeParamKind::Local(local, _) => {
+                    if bb_ty.mutbl_of_param(param_idx).unwrap().is_mut()
+                        || param_unrefined_rty.ty.is_mut()
+                    {
+                        self.env.mut_bind(local, param_unrefined_rty);
+                    } else {
+                        self.env.immut_bind(local, param_unrefined_rty);
+                    }
+                    let param_sort = param_ty.to_sort();
+                    if param_sort.is_singleton() {
+                        continue;
+                    }
 
-                let local_ty = self.env.local_type(local);
-                assumption.body.push_conj(
-                    local_ty
-                        .formula
-                        .map_var(|v| v.shift_existential(assumption.existentials.len())),
-                );
-                let term = local_ty
-                    .term
-                    .map_var(|v| v.shift_existential(assumption.existentials.len()));
-                assumption.existentials.extend(local_ty.existentials);
-                param_terms.insert(param_idx, term);
-            } else {
-                if !param_ty.to_sort().is_singleton() {
+                    let local_ty = self.env.local_type(local);
+                    assumption.body.push_conj(
+                        local_ty
+                            .formula
+                            .map_var(|v| v.shift_existential(assumption.existentials.len())),
+                    );
+                    let term = local_ty
+                        .term
+                        .map_var(|v| v.shift_existential(assumption.existentials.len()));
+                    assumption.existentials.extend(local_ty.existentials);
+                    param_terms.insert(param_idx, term);
+                }
+                BasicBlockTypeParamKind::OuterFnParam(outer_idx) => {
                     let var = self.env.immut_bind_tmp(param_unrefined_rty);
                     param_terms.insert(param_idx, chc::Term::var(var.into()));
+                    outer_fn_param_vars.insert(outer_idx, var);
                 }
+                BasicBlockTypeParamKind::Synthetic => {}
             }
         }
 
@@ -1147,6 +1203,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         self.env.assume(assumption);
+
+        outer_fn_param_vars
     }
 
     fn unbind_atoms(&self) -> UnbindAtoms<rty::FunctionParamIdx> {
@@ -1212,13 +1270,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self
     }
 
-    pub fn run(&mut self, expected: &BasicBlockType) {
+    pub fn run(&mut self, expected: &BasicBlockType, expected_fn: &rty::FunctionType) {
         let span = tracing::info_span!("bb", bb = ?self.basic_block);
         let _guard = span.enter();
         self.register_enum_defs();
 
         let params = expected.as_ref().params.clone();
-        self.bind_locals(&params);
+        let outer_fn_param_vars = self.bind_locals(&params);
         let unbind_atoms = self.unbind_atoms();
         self.alloc_prophecies();
         self.analyze_statements();
@@ -1226,7 +1284,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let term = self.elaborated_terminator();
         self.analyze_terminator_binds(&term);
         let ret_template = self.ret_template();
-        self.analyze_terminator_goto(&term, &ret_template);
+        self.analyze_terminator_goto(&term, &ret_template, expected_fn, &outer_fn_param_vars);
 
         let got_ret_ty = unbind_atoms.unbind(&self.env, ret_template);
         let got_ty = rty::FunctionType::new(params, got_ret_ty).into_closed_ty();
