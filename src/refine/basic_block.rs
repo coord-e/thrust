@@ -26,17 +26,16 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         let separator = allocator.text(",").append(allocator.line());
-        let params = self
-            .ty
-            .params
-            .iter()
-            .zip(&self.locals)
-            .map(|(ty, (local, mutbl))| {
+        let params = self.ty.params.iter_enumerated().map(|(idx, ty)| {
+            if let Some((local, mutbl)) = self.locals.get(idx) {
                 allocator
                     .text(format!("{}{:?}:", mutbl.prefix_str(), local))
                     .append(allocator.space())
                     .append(ty.pretty(allocator))
-            });
+            } else {
+                ty.pretty(allocator)
+            }
+        });
         allocator
             .intersperse(params, separator)
             .parens()
