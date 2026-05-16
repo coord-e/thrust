@@ -126,14 +126,14 @@ impl<'tcx> TypeBuilder<'tcx> {
             closure_model_id: DefId,
         }
 
-        use mir_ty::fold::TypeFoldable;
-        impl<'tcx> mir_ty::fold::TypeFolder<mir_ty::TyCtxt<'tcx>> for ReplaceClosureModel<'tcx> {
+        use mir_ty::TypeFoldable;
+        impl<'tcx> mir_ty::TypeFolder<mir_ty::TyCtxt<'tcx>> for ReplaceClosureModel<'tcx> {
             fn cx(&self) -> mir_ty::TyCtxt<'tcx> {
                 self.tcx
             }
 
             fn fold_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
-                use mir_ty::fold::TypeSuperFoldable;
+                use mir_ty::TypeSuperFoldable;
                 if let mir_ty::TyKind::Closure(_, args) = ty.kind() {
                     let args = self
                         .tcx

@@ -330,7 +330,7 @@ where
         if t.kind == expected {
             Ok(())
         } else {
-            Err(ParseAttrError::unexpected_token(expected_str, t.clone()))
+            Err(ParseAttrError::unexpected_token(expected_str, *t))
         }
     }
 
@@ -339,7 +339,7 @@ where
         if let Some((ident, _)) = t.ident() {
             Ok(ident)
         } else {
-            Err(ParseAttrError::unexpected_token("ident", t.clone()))
+            Err(ParseAttrError::unexpected_token("ident", *t))
         }
     }
 
@@ -418,7 +418,7 @@ where
                     if segments.is_empty() {
                         return Err(ParseAttrError::unexpected_token(
                             "path segment before <",
-                            t.clone(),
+                            *t,
                         ));
                     }
                     let mut generic_args = Vec::new();
@@ -434,7 +434,7 @@ where
                                 kind: TokenKind::Gt,
                                 ..
                             } => break,
-                            t => return Err(ParseAttrError::unexpected_token(", or >", t.clone())),
+                            t => return Err(ParseAttrError::unexpected_token(", or >", *t)),
                         }
                     }
                     segments.last_mut().unwrap().generic_args = generic_args;
@@ -449,7 +449,7 @@ where
                         generic_args: Vec::new(),
                     });
                 }
-                t => return Err(ParseAttrError::unexpected_token("ident or <", t.clone())),
+                t => return Err(ParseAttrError::unexpected_token("ident or <", *t)),
             }
         }
         Ok(AnnotPath { segments })
@@ -623,13 +623,13 @@ where
                             self.expect_next_token(TokenKind::Gt, ">")?;
                             FormulaOrTerm::Term(chc::Term::mut_(t1, t2), chc::Sort::mut_(s1))
                         }
-                        t => return Err(ParseAttrError::unexpected_token("> or ,", t.clone())),
+                        t => return Err(ParseAttrError::unexpected_token("> or ,", *t)),
                     }
                 }
                 _ => {
                     return Err(ParseAttrError::unexpected_token(
                         "identifier, or literal",
-                        t.clone(),
+                        *t,
                     ));
                 }
             }
@@ -654,7 +654,7 @@ where
         }) = self.look_ahead_token(0)
         {
             self.consume();
-            let t = self.next_token("field")?.clone();
+            let t = *self.next_token("field")?;
             if let Token {
                 kind: TokenKind::Literal(lit),
                 ..
@@ -694,7 +694,7 @@ where
                     }
                 }
             }
-            return Err(ParseAttrError::unexpected_token("field", t.clone()));
+            return Err(ParseAttrError::unexpected_token("field", t));
         }
 
         if fields.is_empty() {
@@ -947,7 +947,7 @@ where
                             kind: TokenKind::Dot,
                             ..
                         } => break,
-                        t => return Err(ParseAttrError::unexpected_token(". or ,", t.clone())),
+                        t => return Err(ParseAttrError::unexpected_token(". or ,", *t)),
                     }
                 }
                 self.formula_existentials.extend(vars.iter().cloned());
@@ -1035,7 +1035,7 @@ where
                             parser.consume();
                         }
                         None => break,
-                        Some(t) => return Err(ParseAttrError::unexpected_token(",", t.clone())),
+                        Some(t) => return Err(ParseAttrError::unexpected_token(",", *t)),
                     }
                 }
                 parser.end_of_input()?;
@@ -1068,33 +1068,31 @@ where
                     }
                     s => {
                         let sym = chc::DatatypeSymbol::new(s.to_owned());
-                        let tys =
-                            if self.look_ahead_token(0).map(|t| &t.kind) == Some(&TokenKind::Lt) {
-                                self.consume();
-                                let mut tys = IndexVec::new();
-                                loop {
-                                    tys.push(self.parse_rty()?);
-                                    match self.next_token("> or ,")? {
-                                        Token {
-                                            kind: TokenKind::Comma,
-                                            ..
-                                        } => {}
-                                        Token {
-                                            kind: TokenKind::Gt,
-                                            ..
-                                        } => break,
-                                        t => {
-                                            return Err(ParseAttrError::unexpected_token(
-                                                ">, or ,",
-                                                t.clone(),
-                                            ))
-                                        }
+                        let tys = if self.look_ahead_token(0).map(|t| &t.kind)
+                            == Some(&TokenKind::Lt)
+                        {
+                            self.consume();
+                            let mut tys = IndexVec::new();
+                            loop {
+                                tys.push(self.parse_rty()?);
+                                match self.next_token("> or ,")? {
+                                    Token {
+                                        kind: TokenKind::Comma,
+                                        ..
+                                    } => {}
+                                    Token {
+                                        kind: TokenKind::Gt,
+                                        ..
+                                    } => break,
+                                    t => {
+                                        return Err(ParseAttrError::unexpected_token(">, or ,", *t))
                                     }
                                 }
-                                tys
-                            } else {
-                                Default::default()
-                            };
+                            }
+                            tys
+                        } else {
+                            Default::default()
+                        };
                         rty::EnumType::new(sym, tys).into()
                     }
                 };
@@ -1142,7 +1140,7 @@ where
                             parser.consume();
                         }
                         None => break,
-                        Some(t) => return Err(ParseAttrError::unexpected_token(",", t.clone())),
+                        Some(t) => return Err(ParseAttrError::unexpected_token(",", *t)),
                     }
                 }
                 parser.end_of_input()?;
@@ -1177,7 +1175,7 @@ where
         ) {
             let h = parser.next_token("ident")?;
             let Some((ident, _)) = h.ident() else {
-                return Err(ParseAttrError::unexpected_token("ident", h.clone()));
+                return Err(ParseAttrError::unexpected_token("ident", *h));
             };
             parser.consume();
             Some(ident)

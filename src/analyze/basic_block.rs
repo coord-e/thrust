@@ -233,7 +233,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn const_value_ty(&self, val: &mir::ConstValue<'tcx>, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
+    fn const_value_ty(&self, val: &mir::ConstValue, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
         use mir::{interpret::Scalar, ConstValue, Mutability};
         match (ty.kind(), val) {
             (
@@ -262,9 +262,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                 ConstValue::Scalar(Scalar::Ptr(ptr, _)),
             ) => {
-                // Pointer::into_parts is OK for CtfeProvenance
-                // in a later version of rustc it has prov_and_relative_offset that ensures this
-                let (prov, offset) = ptr.into_parts();
+                let (prov, offset) = ptr.prov_and_relative_offset();
                 let global_alloc = self.tcx.global_alloc(prov.alloc_id());
                 match global_alloc {
                     mir::interpret::GlobalAlloc::Memory(alloc) => {
@@ -281,9 +279,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!("const ptr alloc: {:?}", global_alloc),
                 }
             }
-            (mir_ty::TyKind::Ref(_, elem, Mutability::Not), ConstValue::Slice { data, meta }) => {
+            (
+                mir_ty::TyKind::Ref(_, elem, Mutability::Not),
+                ConstValue::Slice { alloc_id, meta },
+            ) => {
                 let end = (*meta).try_into().unwrap();
-                self.const_bytes_ty(*elem, *data, 0..end).immut()
+                let global_alloc = self.tcx.global_alloc(*alloc_id);
+                let mir::interpret::GlobalAlloc::Memory(alloc) = global_alloc else {
+                    unimplemented!("const slice alloc: {:?}", global_alloc);
+                };
+                self.const_bytes_ty(*elem, alloc, 0..end).immut()
             }
             _ => unimplemented!("const: {:?}, ty: {:?}", val, ty),
         }

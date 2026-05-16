@@ -37,7 +37,7 @@ pub use did_cache::DefIdCache;
 pub fn mir_borrowck_skip_formula_fn(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_def_id: rustc_span::def_id::LocalDefId,
-) -> rustc_middle::query::queries::mir_borrowck::ProvidedValue {
+) -> rustc_middle::query::queries::mir_borrowck::ProvidedValue<'_> {
     // TODO: unify impl with local_def::Analyzer
     // if the def is closure defined in formula_fn
     let root_def_id = tcx.typeck_root_def_id(local_def_id.to_def_id());
@@ -52,13 +52,8 @@ pub fn mir_borrowck_skip_formula_fn(
 
     if is_annotated_as_formula_fn {
         tracing::debug!(?local_def_id, "skipping borrow check for formula fn");
-        let dummy_result = rustc_middle::mir::BorrowCheckResult {
-            concrete_opaque_types: Default::default(),
-            closure_requirements: None,
-            used_mut_upvars: Default::default(),
-            tainted_by_errors: None,
-        };
-        return tcx.arena.alloc(dummy_result);
+        let dummy_result = rustc_middle::mir::ConcreteOpaqueTypes(Default::default());
+        return Ok(tcx.arena.alloc(dummy_result));
     }
 
     (rustc_interface::DEFAULT_QUERY_PROVIDERS
@@ -511,7 +506,9 @@ impl<'tcx> Analyzer<'tcx> {
             let ret = rty::RefinedType::new(rty::Type::never(), rty::Refinement::bottom());
             rty::FunctionType::new([param.vacuous()].into_iter().collect(), ret)
         };
-        let panic_def_id = self.tcx.require_lang_item(LangItem::Panic, None);
+        let panic_def_id = self
+            .tcx
+            .require_lang_item(LangItem::Panic, rustc_span::DUMMY_SP);
         self.register_def(panic_def_id, rty::RefinedType::unrefined(panic_ty.into()));
     }
 
@@ -581,15 +578,15 @@ impl<'tcx> Analyzer<'tcx> {
         local_def_id: LocalDefId,
         attr_path: &[Symbol],
     ) -> Option<DefId> {
-        let map = self.tcx.hir();
         let body = self.tcx.hir_maybe_body_owned_by(local_def_id)?;
 
         let rustc_hir::ExprKind::Block(block, _) = body.value.kind else {
             return None;
         };
         for stmt in block.stmts {
-            if map
-                .attrs(stmt.hir_id)
+            if self
+                .tcx
+                .hir_attrs(stmt.hir_id)
                 .iter()
                 .all(|attr| !attr.path_matches(attr_path))
             {
@@ -724,7 +721,8 @@ impl<'tcx> Analyzer<'tcx> {
     /// Whether the given `def_id` corresponds to a method of one of the `Fn` traits.
     fn is_fn_trait_method(&self, def_id: DefId) -> bool {
         self.tcx
-            .trait_of_item(def_id)
+            .opt_associated_item(def_id)
+            .and_then(|item| item.trait_container(self.tcx))
             .and_then(|trait_did| self.tcx.fn_trait_kind_from_def_id(trait_did))
             .is_some()
     }
