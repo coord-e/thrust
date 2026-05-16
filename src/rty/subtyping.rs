@@ -98,8 +98,9 @@ where
                     }
                 }
             }
-            (Type::Function(got), Type::Function(expected)) => {
-                // TODO: check length is equal
+            (Type::Function(got), Type::Function(expected))
+                if got.params.len() == expected.params.len() =>
+            {
                 let mut builder = chc::ClauseBuilder::default();
                 for (param_idx, param_rty) in got.params.iter_enumerated() {
                     let param_sort = param_rty.ty.to_sort();
