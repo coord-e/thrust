@@ -459,7 +459,10 @@ where
             ret_ty,
             param_rtys: Default::default(),
             param_refinement: None,
-            ret_rty: None,
+            //ret_rty: None,
+            ret_rty: Some(rty::RefinedType::unrefined(
+                self.inner.build(ret_ty).vacuous(),
+            )),
             abi: Default::default(),
         }
         .build();

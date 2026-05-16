@@ -859,7 +859,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn analyze_basic_blocks(&mut self) {
+    fn analyze_basic_blocks(&mut self, expected_fn_ty: &rty::RefinedType) {
+        let expected_fn_ty = expected_fn_ty.ty.as_function().unwrap();
         for bb in self.body.basic_blocks.indices() {
             let rty = self.ctx.basic_block_ty(self.local_def_id, bb).clone();
             let drop_points = self.drop_points[&bb].clone();
@@ -867,7 +868,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
-                .run(&rty);
+                .run(&rty, &expected_fn_ty);
         }
     }
 
@@ -1042,6 +1043,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.truncate_entry_ty(&mut entry_ty);
         self.drop_unused_expected_params(&mut expected, &entry_ty);
         let entry_ty = self.drop_bb_zst_params(&entry_ty);
+        expected.ret.refinement = rty::Refinement::top();
 
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry after");
         let clauses = rty::relate_sub_closed_type(&entry_ty.into(), &expected.into());
@@ -1081,7 +1083,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.unelaborate_derefs();
         self.reassign_local_mutabilities();
         self.refine_basic_blocks();
-        self.analyze_basic_blocks();
+        self.analyze_basic_blocks(expected);
         self.assert_entry(expected);
     }
 }
