@@ -14,9 +14,8 @@ use crate::rty;
 /// from function parameters to [`Local`]s, along with the underlying function type.
 #[derive(Debug, Clone)]
 pub struct BasicBlockType {
-    // TODO: make this completely private by exposing appropriate ctor
-    pub(super) ty: rty::FunctionType,
-    pub(super) locals: IndexVec<rty::FunctionParamIdx, (Local, mir_ty::Mutability)>,
+    pub ty: rty::FunctionType,
+    pub locals: IndexVec<rty::FunctionParamIdx, (Local, mir_ty::Mutability)>,
 }
 
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &BasicBlockType
@@ -71,6 +70,12 @@ impl BasicBlockType {
             .params
             .iter_enumerated()
             .filter_map(|(idx, _)| self.local_of_param(idx))
+    }
+
+    pub fn param_of_local(&self, local: Local) -> Option<rty::FunctionParamIdx> {
+        self.locals
+            .iter_enumerated()
+            .find_map(|(idx, (l, _))| if *l == local { Some(idx) } else { None })
     }
 
     pub fn to_function_ty(&self) -> rty::FunctionType {

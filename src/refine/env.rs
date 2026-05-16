@@ -872,6 +872,12 @@ where
         tracing::debug!(local = ?local, rty = %rty_disp.display(), place_type = %self.local_type(local).display(), "immut_bind");
     }
 
+    pub fn immut_bind_tmp(&mut self, rty: rty::RefinedType<Var>) -> Var {
+        let idx = self.temp_vars.push(TempVarBinding::Type(rty.clone()));
+        tracing::debug!(temp = ?idx, rty = %rty.display(), "immut_bind_tmp");
+        Var::Temp(idx)
+    }
+
     pub fn assume(&mut self, assumption: impl Into<Assumption>) {
         let assumption = assumption.into();
         tracing::debug!(assumption = %assumption.display(), "assume");

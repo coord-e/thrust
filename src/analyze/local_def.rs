@@ -854,7 +854,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let rty = self
                 .type_builder
                 .for_template(&mut self.ctx)
-                .build_basic_block(live_locals, ret_ty);
+                .build_basic_block(&self.body, live_locals, ret_ty);
             self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
         }
     }
@@ -968,8 +968,70 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    // Inner function type of BasicBlockType contains a extra parameters that carries original
+    // function parameter values. `trucate_entry_ty` removes these extra parameters to subtype
+    // entry_ty against the function type.
+    //
+    // before: (_1: int, _2: int, int, { int |  p4 ν $0 $1 $2 }) → { int | p5 ν $0 $1 $2 $3 }
+    // after:  (_1: int, _2: { int | p4 v $0 $1 $0 }) → { int | p5 ν $0 $1 _1 _2 }
+    fn truncate_entry_ty(&self, entry_ty: &mut BasicBlockType) {
+        let last_param_idx = entry_ty.as_ref().params.last_index().unwrap();
+        let last_param_ty = entry_ty.as_ref().params.raw.last().unwrap();
+
+        let mut mapping = HashMap::new();
+        for (idx, param_ty) in entry_ty.as_ref().params.iter_enumerated() {
+            let mapped_idx = if idx >= entry_ty.locals.next_index() {
+                let outer_fn_param_idx =
+                    rty::FunctionParamIdx::from(idx.index() - entry_ty.locals.len());
+                let corresponding_local = analyze::local_of_function_param(outer_fn_param_idx);
+                entry_ty
+                    .param_of_local(corresponding_local)
+                    .unwrap_or_else(|| {
+                        // XXX: if local-param is empty and there are some outer fn param,
+                        //      idx == $0, corresponding_local is _1 and param_of_local returns None
+                        assert!(idx.index() == 0);
+                        idx
+                    })
+            } else {
+                idx
+            };
+            mapping.insert(idx, mapped_idx);
+
+            // to be sure
+            if idx != last_param_idx {
+                assert!(param_ty.refinement.is_top());
+            }
+        }
+
+        let last_param_refinement = last_param_ty.refinement.clone().map_var(|v| {
+            let idx = match v {
+                rty::RefinedTypeVar::Free(idx) => idx,
+                rty::RefinedTypeVar::Value => last_param_idx,
+                v => return v,
+            };
+            let mapped_idx = mapping[&idx];
+            if Some(mapped_idx) == entry_ty.locals.last_index() {
+                rty::RefinedTypeVar::Value
+            } else {
+                rty::RefinedTypeVar::Free(mapped_idx)
+            }
+        });
+
+        if entry_ty.locals.len() != 0 {
+            entry_ty.ty.params.truncate(entry_ty.locals.len());
+        }
+
+        entry_ty.ty.params.raw.last_mut().unwrap().refinement = last_param_refinement;
+        entry_ty.ty.ret.refinement = entry_ty
+            .ty
+            .ret
+            .refinement
+            .clone()
+            .map_free_var(|idx| mapping[&idx]);
+    }
+
     fn assert_entry(&mut self, expected: &rty::RefinedType) {
-        let entry_ty = self
+        let mut entry_ty = self
             .ctx
             .basic_block_ty(self.local_def_id, mir::START_BLOCK)
             .clone();
@@ -977,6 +1039,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut expected = expected.ty.as_function().cloned().unwrap();
         self.elaborate_mut_params(&mut expected);
 
+        self.truncate_entry_ty(&mut entry_ty);
         self.drop_unused_expected_params(&mut expected, &entry_ty);
         let entry_ty = self.drop_bb_zst_params(&entry_ty);
 

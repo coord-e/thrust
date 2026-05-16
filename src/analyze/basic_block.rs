@@ -1094,18 +1094,21 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         assert!(!params.is_empty());
         for (param_idx, param_rty) in params.iter_enumerated() {
             let param_ty = &param_rty.ty;
-            if let Some(local) = bb_ty.local_of_param(param_idx) {
-                let rty = rty::RefinedType::unrefined(param_ty.clone().subst_var(|v| {
+            let param_unrefined_rty =
+                rty::RefinedType::unrefined(param_ty.clone().subst_var(|v| {
                     param_terms[&v].clone().map_var(|v| match v {
                         PlaceTypeVar::Var(v) => v,
                         // TODO
                         _ => unimplemented!(),
                     })
                 }));
-                if bb_ty.mutbl_of_param(param_idx).unwrap().is_mut() || rty.ty.is_mut() {
-                    self.env.mut_bind(local, rty);
+            if let Some(local) = bb_ty.local_of_param(param_idx) {
+                if bb_ty.mutbl_of_param(param_idx).unwrap().is_mut()
+                    || param_unrefined_rty.ty.is_mut()
+                {
+                    self.env.mut_bind(local, param_unrefined_rty);
                 } else {
-                    self.env.immut_bind(local, rty);
+                    self.env.immut_bind(local, param_unrefined_rty);
                 }
                 let param_sort = param_ty.to_sort();
                 if param_sort.is_singleton() {
@@ -1123,6 +1126,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .map_var(|v| v.shift_existential(assumption.existentials.len()));
                 assumption.existentials.extend(local_ty.existentials);
                 param_terms.insert(param_idx, term);
+            } else {
+                if !param_ty.to_sort().is_singleton() {
+                    let var = self.env.immut_bind_tmp(param_unrefined_rty);
+                    param_terms.insert(param_idx, chc::Term::var(var.into()));
+                }
             }
         }
 
