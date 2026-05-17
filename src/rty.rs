@@ -1270,6 +1270,26 @@ impl<V> Formula<V> {
     pub fn bottom() -> Self {
         Formula::new(IndexVec::new(), chc::Body::bottom())
     }
+
+    pub fn subst_var<F, W>(self, mut f: F) -> Formula<W>
+    where
+        F: FnMut(V) -> chc::Term<W>,
+    {
+        Formula {
+            existentials: self.existentials,
+            body: self.body.subst_var(&mut f),
+        }
+    }
+
+    pub fn map_var<F, W>(self, mut f: F) -> Formula<W>
+    where
+        F: FnMut(V) -> W,
+    {
+        Formula {
+            existentials: self.existentials,
+            body: self.body.map_var(&mut f),
+        }
+    }
 }
 
 impl<V> Formula<V>
@@ -1305,46 +1325,37 @@ where
 pub type Refinement<FV = Closed> = Formula<RefinedTypeVar<FV>>;
 
 impl<FV> Refinement<FV> {
-    pub fn subst_var<F, W>(self, mut f: F) -> Refinement<W>
+    pub fn subst_free_var<F, W>(self, mut f: F) -> Refinement<W>
     where
         F: FnMut(FV) -> chc::Term<W>,
     {
-        Refinement {
-            existentials: self.existentials,
-            body: self.body.subst_var(|v| match v {
-                RefinedTypeVar::Value => chc::Term::var(RefinedTypeVar::Value),
-                RefinedTypeVar::Existential(v) => chc::Term::var(RefinedTypeVar::Existential(v)),
-                RefinedTypeVar::Free(v) => f(v).map_var(RefinedTypeVar::Free),
-            }),
-        }
+        self.subst_var(|v| match v {
+            RefinedTypeVar::Value => chc::Term::var(RefinedTypeVar::Value),
+            RefinedTypeVar::Existential(v) => chc::Term::var(RefinedTypeVar::Existential(v)),
+            RefinedTypeVar::Free(v) => f(v).map_var(RefinedTypeVar::Free),
+        })
     }
 
     pub fn subst_value_var<F>(self, mut f: F) -> Self
     where
         F: FnMut() -> chc::Term<RefinedTypeVar<FV>>,
     {
-        Refinement {
-            existentials: self.existentials,
-            body: self.body.subst_var(|v| match v {
-                RefinedTypeVar::Value => f(),
-                RefinedTypeVar::Existential(v) => chc::Term::var(RefinedTypeVar::Existential(v)),
-                RefinedTypeVar::Free(v) => chc::Term::var(RefinedTypeVar::Free(v)),
-            }),
-        }
+        self.subst_var(|v| match v {
+            RefinedTypeVar::Value => f(),
+            RefinedTypeVar::Existential(v) => chc::Term::var(RefinedTypeVar::Existential(v)),
+            RefinedTypeVar::Free(v) => chc::Term::var(RefinedTypeVar::Free(v)),
+        })
     }
 
-    pub fn map_var<F, W>(self, mut f: F) -> Refinement<W>
+    pub fn map_free_var<F, W>(self, mut f: F) -> Refinement<W>
     where
         F: FnMut(FV) -> W,
     {
-        Refinement {
-            existentials: self.existentials,
-            body: self.body.map_var(|v| match v {
-                RefinedTypeVar::Value => RefinedTypeVar::Value,
-                RefinedTypeVar::Existential(v) => RefinedTypeVar::Existential(v),
-                RefinedTypeVar::Free(v) => RefinedTypeVar::Free(f(v)),
-            }),
-        }
+        self.map_var(|v| match v {
+            RefinedTypeVar::Value => RefinedTypeVar::Value,
+            RefinedTypeVar::Existential(v) => RefinedTypeVar::Existential(v),
+            RefinedTypeVar::Free(v) => RefinedTypeVar::Free(f(v)),
+        })
     }
 
     pub fn instantiate(self) -> Instantiator<FV> {
@@ -1514,7 +1525,7 @@ impl<FV> RefinedType<FV> {
             ty: self
                 .ty
                 .subst_var(Box::new(&mut f) as Box<dyn FnMut(FV) -> chc::Term<W>>),
-            refinement: self.refinement.subst_var(&mut f),
+            refinement: self.refinement.subst_free_var(&mut f),
         }
     }
 
@@ -1524,7 +1535,7 @@ impl<FV> RefinedType<FV> {
     {
         RefinedType {
             ty: self.ty.map_var(Box::new(&mut f) as Box<dyn FnMut(FV) -> W>),
-            refinement: self.refinement.map_var(&mut f),
+            refinement: self.refinement.map_free_var(&mut f),
         }
     }
 

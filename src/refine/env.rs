@@ -549,7 +549,7 @@ where
             let mut instantiator = rty
                 .refinement
                 .clone()
-                .map_var(|v| builder.mapped_var(v))
+                .map_free_var(|v| builder.mapped_var(v))
                 .instantiate();
             for (ev, sort) in rty.refinement.existentials() {
                 let tv = builder.add_var(sort.clone());
