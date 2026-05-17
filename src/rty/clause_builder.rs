@@ -62,7 +62,7 @@ impl<'a> RefinementClauseBuilder<'a> {
             .map(|(ev, sort)| (ev, sort.clone()))
             .collect();
         let mut instantiator = refinement
-            .map_var(|v| self.builder.mapped_var(v))
+            .map_free_var(|v| self.builder.mapped_var(v))
             .instantiate();
         for (ev, sort) in existentials {
             let tv = self.builder.add_var(sort);
@@ -87,7 +87,7 @@ impl<'a> RefinementClauseBuilder<'a> {
             panic!("head refinement must not contain existentials");
         }
         let mut instantiator = refinement
-            .map_var(|v| self.builder.mapped_var(v))
+            .map_free_var(|v| self.builder.mapped_var(v))
             .instantiate();
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);

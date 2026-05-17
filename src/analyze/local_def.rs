@@ -895,7 +895,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             chc::Term::var(rty::RefinedTypeVar::Value)
                         }
                     })
-                    .subst_var(|v| {
+                    .subst_free_var(|v| {
                         if self.is_mut_param(v) {
                             chc::Term::var(v).box_current()
                         } else {
@@ -905,7 +905,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             );
         }
 
-        fn_ty.ret.refinement = fn_ty.ret.refinement.clone().subst_var(|v| {
+        fn_ty.ret.refinement = fn_ty.ret.refinement.clone().subst_free_var(|v| {
             if self.is_mut_param(v) {
                 chc::Term::var(v).box_current()
             } else {
