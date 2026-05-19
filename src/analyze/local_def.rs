@@ -925,14 +925,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut fn_ty = bb_ty.to_function_ty();
 
         let arg_locals: HashSet<_> = self.body.args_iter().collect();
+        let mut dropped_any = false;
         for idx in bb_ty.local_params().rev() {
             let local = bb_ty.local_of_param(idx).unwrap();
             if !arg_locals.contains(&local) {
                 fn_ty.remove_param(idx);
+                dropped_any = true;
             }
         }
 
-        if self.body.arg_count == 0 {
+        if self.body.arg_count == 0 && dropped_any {
             if let Some(last_param_ty) = bb_ty.as_ref().last_param() {
                 fn_ty.params.push(rty::RefinedType::new(
                     rty::Type::unit(),
