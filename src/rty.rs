@@ -200,6 +200,32 @@ impl FunctionType {
         tys2.push(*other.ret);
         unify_tys_params(tys1, tys2)
     }
+
+    /// Removes the parameter at the given index from this function type.
+    ///
+    /// References to the remaining parameters in other parameters' refinements and the
+    /// return type are shifted down by one. Panics if any reference to the removed
+    /// parameter remains.
+    pub fn remove_param(&mut self, idx: FunctionParamIdx) -> RefinedType<FunctionParamIdx> {
+        let shift = |v: FunctionParamIdx| -> FunctionParamIdx {
+            if v == idx {
+                panic!("variable {v} references the parameter being removed");
+            } else if v > idx {
+                FunctionParamIdx::from_usize(v.index() - 1)
+            } else {
+                v
+            }
+        };
+        let removed = self.params.raw.remove(idx.index());
+        let old_params = std::mem::take(&mut self.params);
+        self.params = old_params.into_iter().map(|p| p.map_var(shift)).collect();
+        let old_ret = std::mem::replace(
+            &mut self.ret,
+            Box::new(RefinedType::unrefined(Type::unit())),
+        );
+        self.ret = Box::new(old_ret.map_var(shift));
+        removed
+    }
 }
 
 /// The kind of a reference, which is either mutable or immutable.
