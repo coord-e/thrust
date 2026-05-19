@@ -923,27 +923,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     /// parameter carrying the refinement of the last dropped one.
     fn drop_bb_zst_params(&self, bb_ty: &BasicBlockType) -> rty::FunctionType {
         let mut fn_ty = bb_ty.to_function_ty();
-        let excessive: Vec<rty::FunctionParamIdx> = bb_ty
-            .as_ref()
-            .params
-            .iter_enumerated()
-            .filter_map(|(idx, _)| {
-                let local = bb_ty.local_of_param(idx)?;
-                (local == mir::RETURN_PLACE || local > self.body.arg_count.into())
-                    .then_some(idx)
-            })
-            .collect();
-        let synthetic_refinement = (self.body.arg_count == 0)
-            .then(|| excessive.last().map(|idx| fn_ty.params[*idx].refinement.clone()))
-            .flatten();
-        for idx in excessive.into_iter().rev() {
-            fn_ty.remove_param(idx);
+
+        let arg_locals: HashSet<_> = self.body.args_iter().collect();
+        for idx in bb_ty.local_params().rev() {
+            let local = bb_ty.local_of_param(idx).unwrap();
+            if !arg_locals.contains(&local) {
+                fn_ty.remove_param(idx);
+            }
         }
-        if let Some(refinement) = synthetic_refinement {
-            fn_ty
-                .params
-                .push(rty::RefinedType::new(rty::Type::unit(), refinement));
+
+        if self.body.arg_count == 0 {
+            if let Some(last_param_ty) = bb_ty.as_ref().last_param() {
+                fn_ty.params.push(rty::RefinedType::new(
+                    rty::Type::unit(),
+                    last_param_ty.refinement.clone(),
+                ));
+            }
         }
+
         fn_ty
     }
 
@@ -957,14 +954,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if self.body.arg_count == 0 {
             return;
         }
-        let present_arg_locals: HashSet<Local> = bb_ty
-            .as_ref()
-            .params
-            .iter_enumerated()
-            .filter_map(|(idx, _)| bb_ty.local_of_param(idx))
-            .filter(|local| {
-                *local != mir::RETURN_PLACE && *local <= self.body.arg_count.into()
-            })
+        let arg_locals: HashSet<_> = self.body.args_iter().collect();
+        let present_arg_locals: HashSet<_> = bb_ty
+            .locals()
+            .filter(|local| arg_locals.contains(local))
             .collect();
         for idx in expected_ty.params.indices().rev() {
             let arg_local = analyze::local_of_function_param(idx);

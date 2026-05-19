@@ -170,6 +170,11 @@ impl FunctionType {
         self
     }
 
+    pub fn last_param(&self) -> Option<&RefinedType<FunctionParamIdx>> {
+        let last_index = self.params.last_index()?;
+        self.params.get(last_index)
+    }
+
     /// Because function types are always closed in Thrust, we can convert this into
     /// [`Type<Closed>`].
     pub fn into_closed_ty(self) -> Type<Closed> {
