@@ -87,7 +87,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn relate_fn_sub_type(
         &mut self,
         got: rty::FunctionType,
-        mut expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
+        expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
         expected_ret: rty::RefinedType<Var>,
     ) -> Vec<chc::Clause> {
         let mut clauses = Vec::new();
@@ -98,7 +98,49 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             "fn_sub_type"
         );
 
-        match got.abi {
+        let mut builder = self.env.build_clause();
+        let cs = self.relate_fn_param_sub_types_with_builder(
+            got.params,
+            expected_args,
+            &mut builder,
+            got.abi,
+        );
+        clauses.extend(cs);
+
+        let cs = builder
+            .with_value_var(&got.ret.ty)
+            .add_body(got.ret.refinement)
+            .head(expected_ret.refinement);
+        clauses.extend(cs);
+
+        clauses.extend(builder.relate_sub_type(&got.ret.ty, &expected_ret.ty));
+        clauses
+    }
+
+    fn relate_fn_param_sub_types(
+        &mut self,
+        got_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
+        expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
+    ) -> Vec<chc::Clause> {
+        let mut builder = self.env.build_clause();
+        self.relate_fn_param_sub_types_with_builder(
+            got_args,
+            expected_args,
+            &mut builder,
+            rty::FunctionAbi::Rust,
+        )
+    }
+
+    fn relate_fn_param_sub_types_with_builder(
+        &mut self,
+        got_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
+        mut expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
+        builder: &mut chc::ClauseBuilder,
+        abi: rty::FunctionAbi,
+    ) -> Vec<chc::Clause> {
+        let mut clauses = Vec::new();
+
+        match abi {
             rty::FunctionAbi::Rust => {
                 if expected_args.is_empty() {
                     // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
@@ -135,21 +177,21 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
 
                 tracing::info!(
-                    expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
+                    expected = %crate::pretty::FunctionParams::new(&expected_args).display(),
                     "rust-call expanded",
                 );
             }
         }
 
-        // TODO: check sty and length is equal
-        let mut builder = self.env.build_clause();
-        for (param_idx, param_rty) in got.params.iter_enumerated() {
+        assert!(got_args.len() == expected_args.len());
+        // TODO: check stys are equal
+        for (param_idx, param_rty) in got_args.iter_enumerated() {
             let param_sort = param_rty.ty.to_sort();
             if !param_sort.is_singleton() {
                 builder.add_mapped_var(param_idx, param_sort);
             }
         }
-        for ((param_idx, got_ty), expected_ty) in got.params.iter_enumerated().zip(&expected_args) {
+        for ((param_idx, got_ty), expected_ty) in got_args.iter_enumerated().zip(&expected_args) {
             // TODO we can use relate_sub_refined_type here when we implemenented builder-aware relate_*
             let cs = builder
                 .clone()
@@ -163,12 +205,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             clauses.extend(builder.relate_sub_type(&expected_ty.ty, &got_ty.ty));
         }
 
-        let cs = builder
-            .with_value_var(&got.ret.ty)
-            .add_body(got.ret.refinement)
-            .head(expected_ret.refinement);
-        clauses.extend(cs);
-        clauses.extend(builder.relate_sub_type(&got.ret.ty, &expected_ret.ty));
         clauses
     }
 
@@ -542,7 +578,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn type_goto(
         &mut self,
         bb: BasicBlock,
-        expected_ret: &rty::RefinedType<Var>,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
         let bty = self.basic_block_ty(bb);
@@ -575,8 +610,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
             })
             .collect();
-        let clauses =
-            self.relate_fn_sub_type(bty.to_function_ty(), expected_args, expected_ret.clone());
+        let clauses = self.relate_fn_param_sub_types(bty.as_ref().params.clone(), expected_args);
         self.ctx.extend_clauses(clauses);
     }
 
@@ -606,7 +640,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         &mut self,
         discr: Operand<'tcx>,
         targets: mir::SwitchTargets,
-        expected_ret: &rty::RefinedType<Var>,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
         mut callback: F,
     ) where
@@ -631,7 +664,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             };
             self.with_assumption(pos_assumption, |ecx| {
                 callback(ecx, bb);
-                ecx.type_goto(bb, expected_ret, outer_fn_param_vars);
+                ecx.type_goto(bb, outer_fn_param_vars);
             });
             let neg_assumption = {
                 let mut builder = PlaceTypeBuilder::default();
@@ -643,7 +676,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         self.with_assumptions(negations, |ecx| {
             callback(ecx, targets.otherwise());
-            ecx.type_goto(targets.otherwise(), expected_ret, outer_fn_param_vars);
+            ecx.type_goto(targets.otherwise(), outer_fn_param_vars);
         });
     }
 
@@ -920,11 +953,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    #[tracing::instrument(skip(self, expected_ret, expected_fn, outer_fn_param_vars), fields(term = ?term.kind))]
+    #[tracing::instrument(skip(self, expected_fn, outer_fn_param_vars), fields(term = ?term.kind))]
     fn analyze_terminator_goto(
         &mut self,
         term: &mir::Terminator<'tcx>,
-        expected_ret: &rty::RefinedType<Var>,
         expected_fn: &rty::FunctionType,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
@@ -933,13 +965,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.type_return(expected_fn, outer_fn_param_vars);
             }
             TerminatorKind::Goto { target } => {
-                self.type_goto(*target, expected_ret, outer_fn_param_vars);
+                self.type_goto(*target, outer_fn_param_vars);
             }
             TerminatorKind::SwitchInt { discr, targets } => {
                 self.type_switch_int(
                     discr.clone(),
                     targets.clone(),
-                    expected_ret,
                     outer_fn_param_vars,
                     |a, target| {
                         for local in a.drop_points.after_terminator(&target).iter() {
@@ -955,7 +986,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         tracing::info!(?local, "implicitly dropped after call");
                         self.drop_local(local);
                     }
-                    self.type_goto(*target, expected_ret, outer_fn_param_vars);
+                    self.type_goto(*target, outer_fn_param_vars);
                 }
             }
             TerminatorKind::Drop { target, .. } => {
@@ -963,7 +994,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     tracing::info!(?local, "dropped");
                     self.drop_local(local);
                 }
-                self.type_goto(*target, expected_ret, outer_fn_param_vars);
+                self.type_goto(*target, outer_fn_param_vars);
             }
             TerminatorKind::Assert {
                 cond,
@@ -982,7 +1013,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         chc::Term::bool(*expected),
                     ),
                 );
-                self.type_goto(*target, expected_ret, outer_fn_param_vars);
+                self.type_goto(*target, outer_fn_param_vars);
             }
             TerminatorKind::UnwindResume {} => {}
             TerminatorKind::Unreachable {} => {}
@@ -1275,22 +1306,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let _guard = span.enter();
         self.register_enum_defs();
 
-        let params = expected.as_ref().params.clone();
-        let outer_fn_param_vars = self.bind_locals(&params);
-        let unbind_atoms = self.unbind_atoms();
+        let outer_fn_param_vars = self.bind_locals(&expected.as_ref().params);
         self.alloc_prophecies();
         self.analyze_statements();
 
         let term = self.elaborated_terminator();
         self.analyze_terminator_binds(&term);
-        let ret_template = self.ret_template();
-        self.analyze_terminator_goto(&term, &ret_template, expected_fn, &outer_fn_param_vars);
-
-        let got_ret_ty = unbind_atoms.unbind(&self.env, ret_template);
-        let got_ty = rty::FunctionType::new(params, got_ret_ty).into_closed_ty();
-        let clauses = self
-            .env
-            .relate_sub_type(&got_ty, &expected.to_function_ty().into_closed_ty());
-        self.ctx.extend_clauses(clauses);
+        self.analyze_terminator_goto(&term, expected_fn, &outer_fn_param_vars);
     }
 }
