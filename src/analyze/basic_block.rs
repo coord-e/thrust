@@ -510,12 +510,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn type_return(
         &mut self,
-        expected: &rty::RefinedType<Var>,
         expected_fn: &rty::FunctionType,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
-        //self.type_operand(Operand::Move(mir::RETURN_PLACE.into()), expected);
-
         let mut builder = self.env.build_clause();
         // env.build_clause() で env の Var は既に mapped_var として登録済み
 
@@ -950,7 +947,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) {
         match &term.kind {
             TerminatorKind::Return => {
-                self.type_return(expected_ret, expected_fn, outer_fn_param_vars);
+                self.type_return(expected_fn, outer_fn_param_vars);
             }
             TerminatorKind::Goto { target } => {
                 self.type_goto(*target, expected_ret, outer_fn_param_vars);
@@ -1199,16 +1196,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .map_var(|v| v.shift_existential(assumption.existentials.len()));
                 assumption.existentials.extend(local_ty.existentials);
                 param_terms.insert(param_idx, term);
-            } else {
-                if param_idx >= bb_ty.locals.next_index() {
-                    if !param_ty.to_sort().is_singleton() {
-                        let var = self.env.immut_bind_tmp(param_unrefined_rty);
-                        param_terms.insert(param_idx, chc::Term::var(var.into()));
-                        let outer_fn_param_idx =
-                            rty::FunctionParamIdx::from(param_idx.index() - bb_ty.locals.len());
-                        outer_fn_param_vars.insert(outer_fn_param_idx, var);
-                    }
-                }
+            } else if param_idx >= bb_ty.locals.next_index() && !param_ty.to_sort().is_singleton() {
+                let var = self.env.immut_bind_tmp(param_unrefined_rty);
+                param_terms.insert(param_idx, chc::Term::var(var.into()));
+                let outer_fn_param_idx =
+                    rty::FunctionParamIdx::from(param_idx.index() - bb_ty.locals.len());
+                outer_fn_param_vars.insert(outer_fn_param_idx, var);
             }
         }
 
