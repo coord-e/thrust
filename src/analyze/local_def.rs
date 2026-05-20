@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 
 use rustc_index::bit_set::DenseBitSet;
-use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeAndMut};
 use rustc_span::def_id::{DefId, LocalDefId};
@@ -914,53 +913,72 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         });
     }
 
-    // TODO: remove this
-    fn elaborate_unused_args(
-        &self,
-        bb_ty: &BasicBlockType,
-        expected_ty: &rty::FunctionType,
-    ) -> rty::FunctionType {
-        let mut params = IndexVec::new();
-        let mut subst = HashMap::new();
-        for (param_idx, param_ty) in bb_ty.as_ref().params.iter_enumerated() {
-            if let Some(param_local) = bb_ty.local_of_param(param_idx) {
-                // BBs may use locals without preceding def when they're ZST
-                if param_local == mir::RETURN_PLACE || param_local > self.body.arg_count.into() {
-                    subst.extend(
-                        bb_ty
-                            .as_ref()
-                            .params
-                            .indices()
-                            .skip_while(|idx| idx.index() <= param_idx.index())
-                            .map(|idx| (idx, idx + 1)),
-                    );
-                    if bb_ty.as_ref().params.len() - 1 == param_idx.index() {
-                        params.push(rty::RefinedType::new(
-                            rty::Type::unit(),
-                            param_ty.refinement.clone(),
-                        ));
-                    }
-                    continue;
-                }
-                while analyze::local_of_function_param(params.next_index()) != param_local {
-                    tracing::debug!(next_idx = ?params.next_index(), param_local = ?param_local, "elaborate_unused_args");
-                    let mock_ty = expected_ty.params[params.next_index()].ty.clone();
-                    params.push(rty::RefinedType::unrefined(mock_ty));
-                }
+    /// Drop excessive parameters from the BB-side entry function type that do not
+    /// correspond to any function argument. These are introduced by ZST locals whose
+    /// liveness analysis treats them as live without an explicit def.
+    fn drop_bb_zst_params(&self, bb_ty: &BasicBlockType) -> rty::FunctionType {
+        let mut fn_ty = bb_ty.to_function_ty();
+        let arg_locals: HashSet<_> = self.body.args_iter().collect();
+
+        for idx in bb_ty.local_params().rev() {
+            let local = bb_ty.local_of_param(idx).unwrap();
+            if !arg_locals.contains(&local) {
+                fn_ty.remove_param(idx);
             }
-            subst.insert(param_idx, params.next_index());
-            params.push(param_ty.clone().map_var(|v| subst[&v]));
         }
-        rty::FunctionType::new(params, bb_ty.as_ref().ret.clone().map_var(|v| subst[&v]))
+
+        // A function type must keep at least one parameter to host the precondition
+        // predicate. When the function has no real argument, both the expected type and
+        // the BB type carry a synthetic unit parameter (see
+        // `crate::refine::TypeBuilder::build_basic_block`). That synthetic has no
+        // backing local, so it survives the drop loop untouched. If instead the entry
+        // block exposed only ZST-local parameters (e.g. `RETURN_PLACE`), dropping them
+        // empties the type, and we re-introduce the synthetic unit parameter carrying
+        // the precondition refinement of the last dropped parameter.
+        if self.body.arg_count == 0 && fn_ty.params.is_empty() {
+            let refinement = bb_ty.as_ref().last_param().unwrap().refinement.clone();
+            fn_ty
+                .params
+                .push(rty::RefinedType::new(rty::Type::unit(), refinement));
+        }
+
+        fn_ty
+    }
+
+    /// Drop function parameters from `expected_ty` whose corresponding local is unused
+    /// (and thus not represented) in the BB-side entry function type.
+    fn drop_unused_expected_params(
+        &self,
+        expected_ty: &mut rty::FunctionType,
+        bb_ty: &BasicBlockType,
+    ) {
+        if self.body.arg_count == 0 {
+            return;
+        }
+        let arg_locals: HashSet<_> = self.body.args_iter().collect();
+        let present_arg_locals: HashSet<_> = bb_ty
+            .locals()
+            .filter(|local| arg_locals.contains(local))
+            .collect();
+        for idx in expected_ty.params.indices().rev() {
+            let arg_local = analyze::local_of_function_param(idx);
+            if !present_arg_locals.contains(&arg_local) {
+                expected_ty.remove_param(idx);
+            }
+        }
     }
 
     fn assert_entry(&mut self, expected: &rty::RefinedType) {
-        let entry_ty = self.ctx.basic_block_ty(self.local_def_id, mir::START_BLOCK);
+        let entry_ty = self
+            .ctx
+            .basic_block_ty(self.local_def_id, mir::START_BLOCK)
+            .clone();
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry before");
         let mut expected = expected.ty.as_function().cloned().unwrap();
         self.elaborate_mut_params(&mut expected);
 
-        let entry_ty = self.elaborate_unused_args(entry_ty, &expected);
+        self.drop_unused_expected_params(&mut expected, &entry_ty);
+        let entry_ty = self.drop_bb_zst_params(&entry_ty);
 
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry after");
         let clauses = rty::relate_sub_closed_type(&entry_ty.into(), &expected.into());

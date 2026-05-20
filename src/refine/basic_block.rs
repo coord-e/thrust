@@ -63,6 +63,17 @@ impl BasicBlockType {
         self.locals.get(idx).map(|(_, mutbl)| *mutbl)
     }
 
+    pub fn local_params(&self) -> impl DoubleEndedIterator<Item = rty::FunctionParamIdx> + '_ {
+        self.locals.indices()
+    }
+
+    pub fn locals(&self) -> impl Iterator<Item = Local> + '_ {
+        self.ty
+            .params
+            .iter_enumerated()
+            .filter_map(|(idx, _)| self.local_of_param(idx))
+    }
+
     pub fn to_function_ty(&self) -> rty::FunctionType {
         self.ty.clone()
     }
