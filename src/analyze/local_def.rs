@@ -917,30 +917,30 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     /// correspond to any function argument. These are introduced by ZST locals whose
     /// liveness analysis treats them as live without an explicit def.
     ///
-    /// When the function has no real argument (`arg_count == 0`), the expected
-    /// function type carries a synthetic unit parameter that hosts the function's
-    /// precondition. Drop all excessive BB parameters and append a synthetic unit
-    /// parameter carrying the refinement of the last dropped one.
+    /// A function type must keep at least one parameter to host the precondition
+    /// predicate: when the function has no real argument, both the expected type and
+    /// the BB type carry a synthetic unit parameter (see
+    /// [`crate::refine::TypeBuilder::build_basic_block`]). That synthetic has no
+    /// backing local, so it survives the drop loop untouched. If instead the entry
+    /// block exposed only ZST-local parameters (e.g. `RETURN_PLACE`), dropping them
+    /// empties the type, and we re-introduce the synthetic unit parameter carrying
+    /// the precondition refinement of the last dropped parameter.
     fn drop_bb_zst_params(&self, bb_ty: &BasicBlockType) -> rty::FunctionType {
         let mut fn_ty = bb_ty.to_function_ty();
-
         let arg_locals: HashSet<_> = self.body.args_iter().collect();
-        let mut dropped_any = false;
+
         for idx in bb_ty.local_params().rev() {
             let local = bb_ty.local_of_param(idx).unwrap();
             if !arg_locals.contains(&local) {
                 fn_ty.remove_param(idx);
-                dropped_any = true;
             }
         }
 
-        if self.body.arg_count == 0 && dropped_any {
-            if let Some(last_param_ty) = bb_ty.as_ref().last_param() {
-                fn_ty.params.push(rty::RefinedType::new(
-                    rty::Type::unit(),
-                    last_param_ty.refinement.clone(),
-                ));
-            }
+        if self.body.arg_count == 0 && fn_ty.params.is_empty() {
+            let refinement = bb_ty.as_ref().last_param().unwrap().refinement.clone();
+            fn_ty
+                .params
+                .push(rty::RefinedType::new(rty::Type::unit(), refinement));
         }
 
         fn_ty
