@@ -164,6 +164,12 @@ enum DefTy<'tcx> {
     Deferred(DeferredDefTy<'tcx>),
 }
 
+#[derive(Debug, Clone)]
+struct BasicBlockDef {
+    ty: BasicBlockType,
+    has_precondition: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EnumDefs {
     defs: HashMap<DefId, rty::EnumDatatypeDef>,
@@ -213,7 +219,7 @@ pub struct Analyzer<'tcx> {
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
 
-    basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockType>>,
+    basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockDef>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
     enum_defs: Rc<RefCell<EnumDefs>>,
@@ -483,18 +489,84 @@ impl<'tcx> Analyzer<'tcx> {
         );
     }
 
-    pub fn register_basic_block_ty(
+    pub fn register_basic_block_ty_with_precondition(
         &mut self,
         def_id: LocalDefId,
         bb: BasicBlock,
         rty: BasicBlockType,
     ) {
-        tracing::debug!(def_id = ?def_id, ?bb, rty = %rty.display(), "register_basic_block_ty");
-        self.basic_blocks.entry(def_id).or_default().insert(bb, rty);
+        self.register_basic_block_def(
+            def_id,
+            bb,
+            BasicBlockDef {
+                ty: rty,
+                has_precondition: true,
+            },
+        );
+    }
+
+    pub fn register_basic_block_ty_without_precondition(
+        &mut self,
+        def_id: LocalDefId,
+        bb: BasicBlock,
+        rty: BasicBlockType,
+    ) {
+        self.register_basic_block_def(
+            def_id,
+            bb,
+            BasicBlockDef {
+                ty: rty,
+                has_precondition: false,
+            },
+        );
+    }
+
+    fn register_basic_block_def(&mut self, def_id: LocalDefId, bb: BasicBlock, def: BasicBlockDef) {
+        tracing::debug!(
+            def_id = ?def_id,
+            ?bb,
+            rty = %def.ty.display(),
+            has_precondition = def.has_precondition,
+            "register_basic_block_def",
+        );
+        self.basic_blocks.entry(def_id).or_default().insert(bb, def);
+    }
+
+    pub fn register_basic_block_precondition(
+        &mut self,
+        def_id: LocalDefId,
+        bb: BasicBlock,
+        precondition: rty::Refinement<rty::FunctionParamIdx>,
+    ) {
+        let bb_def = &mut self
+            .basic_blocks
+            .get_mut(&def_id)
+            .unwrap()
+            .get_mut(&bb)
+            .unwrap();
+        assert!(
+            !bb_def.has_precondition,
+            "precondition is already registered for basic block"
+        );
+        bb_def.has_precondition = true;
+        bb_def.ty.set_precondition(precondition);
     }
 
     pub fn basic_block_ty(&self, def_id: LocalDefId, bb: BasicBlock) -> &BasicBlockType {
-        &self.basic_blocks[&def_id][&bb]
+        &self.basic_blocks[&def_id][&bb].ty
+    }
+
+    pub fn basic_block_ty_with_precondition(
+        &self,
+        def_id: LocalDefId,
+        bb: BasicBlock,
+    ) -> &BasicBlockType {
+        let def = &self.basic_blocks[&def_id][&bb];
+        assert!(
+            def.has_precondition,
+            "basic block does not have precondition"
+        );
+        &def.ty
     }
 
     pub fn register_well_known_defs(&mut self) {

@@ -902,7 +902,7 @@ where
             )
     }
 
-    fn vars(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
+    pub fn vars(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
         self.locals
             .iter()
             .map(|(local, rty)| (Var::Local(*local), rty))
@@ -912,6 +912,10 @@ where
                     .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), rty))),
             )
             .filter(|(_var, rty)| rty.is_refined())
+    }
+
+    pub fn assumptions(&self) -> &[Assumption] {
+        &self.assumptions
     }
 
     pub fn contains_local(&self, local: Local) -> bool {

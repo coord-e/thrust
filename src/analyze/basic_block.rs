@@ -24,6 +24,113 @@ mod drop_point;
 mod visitor;
 pub use drop_point::DropPoints;
 
+/// Whether a basic block needs a precondition of its own, rather than
+/// inheriting its predecessor's outgoing env state.
+///
+/// This holds for `START_BLOCK` (whose precondition comes from the function
+/// signature, not a predecessor) and for every block reached by more than one
+/// CFG edge — i.e. join points with multiple predecessors, or multiple edges
+/// from a single predecessor (e.g. `SwitchInt` arms that share a target).
+///
+/// A block with a unique incoming edge can inherit that edge's env state, so it
+/// needs no precondition of its own. A block that does need one currently models
+/// it with a fresh predicate variable; this is also the set of CFG cutpoints, so
+/// it cuts every cycle (a loop header always has in-degree >= 2).
+pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
+    if bb == mir::START_BLOCK {
+        return true;
+    }
+    let preds = &body.basic_blocks.predecessors()[bb];
+    if preds.len() != 1 {
+        return true;
+    }
+    let pred = preds[0];
+    let pred_term = body.basic_blocks[pred].terminator();
+    pred_term.successors().filter(|s| *s == bb).count() > 1
+}
+
+/// Converts the current env state into a `Refinement<FunctionParamIdx>` to be
+/// used as the inherited precondition of a successor block.
+///
+/// Each [`push`](PrecondCapture::push) records that a function parameter (or the
+/// last param's value) equals an env-side [`PlaceType`];
+/// [`push_env_state`](PrecondCapture::push_env_state) folds in the env's refined
+/// vars and accumulated assumptions; [`finish`](PrecondCapture::finish)
+/// existentially closes over the env-side variables and emits the refinement.
+///
+/// This is the focused successor of the former `UnbindAtoms`, specialized to the
+/// only case that still needs it: capturing a predecessor's env into a goto
+/// target's precondition.
+#[derive(Default)]
+struct PrecondCapture {
+    existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+    body: chc::Body<rty::RefinedTypeVar<Var>>,
+    target_equations: Vec<(
+        rty::RefinedTypeVar<rty::FunctionParamIdx>,
+        chc::Term<rty::RefinedTypeVar<Var>>,
+    )>,
+}
+
+impl PrecondCapture {
+    fn push(&mut self, target: rty::RefinedTypeVar<rty::FunctionParamIdx>, var_ty: PlaceType) {
+        self.body.push_conj(
+            var_ty
+                .formula
+                .map_var(|v| v.shift_existential(self.existentials.len()).into()),
+        );
+        self.target_equations.push((
+            target,
+            var_ty
+                .term
+                .map_var(|v| v.shift_existential(self.existentials.len()).into()),
+        ));
+        self.existentials.extend(var_ty.existentials);
+    }
+
+    fn push_env_state(&mut self, env: &analyze::Env) {
+        for (var, rty) in env.vars() {
+            let base = self.existentials.len();
+            self.existentials
+                .extend(rty.refinement.existentials.iter().cloned());
+            let body = rty.refinement.body.clone().map_var(|v| match v {
+                rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Free(var),
+                rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Free(v),
+                rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev + base),
+            });
+            self.body.push_conj(body);
+        }
+        for assumption in env.assumptions() {
+            let base = self.existentials.len();
+            self.existentials
+                .extend(assumption.existentials.iter().cloned());
+            let body = assumption.body.clone().map_var(|v| match v {
+                PlaceTypeVar::Var(v) => rty::RefinedTypeVar::Free(v),
+                PlaceTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev + base),
+            });
+            self.body.push_conj(body);
+        }
+    }
+
+    fn finish(mut self, env: &analyze::Env) -> rty::Refinement<rty::FunctionParamIdx> {
+        let mut substs = HashMap::new();
+        for (v, sort) in env.dependencies() {
+            let ev = self.existentials.push(sort);
+            substs.insert(v, ev);
+        }
+
+        let map = |v| match v {
+            rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
+            rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
+            rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
+        };
+        let mut body = self.body.map_var(map);
+        for (t, term) in self.target_equations {
+            body.push_conj(chc::Term::var(t).equal_to(term.map_var(map)));
+        }
+        rty::Refinement::new(self.existentials, body)
+    }
+}
+
 pub struct Analyzer<'tcx, 'ctx> {
     ctx: &'ctx mut analyze::Analyzer<'tcx>,
     tcx: TyCtxt<'tcx>,
@@ -61,8 +168,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         visitor::RustCallVisitor::new(self)
     }
 
-    fn basic_block_ty(&self, bb: BasicBlock) -> &BasicBlockType {
-        self.ctx.basic_block_ty(self.local_def_id, bb)
+    fn basic_block_ty_with_precondition(&self, bb: BasicBlock) -> &BasicBlockType {
+        self.ctx
+            .basic_block_ty_with_precondition(self.local_def_id, bb)
     }
 
     fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>) {
@@ -580,7 +688,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         bb: BasicBlock,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
-        let bty = self.basic_block_ty(bb);
+        if !needs_own_precondition(&self.body, bb) {
+            self.install_inherited_bb_ty(bb, outer_fn_param_vars);
+            return;
+        }
+        let bty = self.basic_block_ty_with_precondition(bb);
         let expected_args: IndexVec<_, _> = bty
             .as_ref()
             .params
@@ -612,6 +724,41 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .collect();
         let clauses = self.relate_fn_param_sub_types(bty.as_ref().params.clone(), expected_args);
         self.ctx.extend_clauses(clauses);
+    }
+
+    /// Materializes the `BasicBlockType` for a target that inherits its
+    /// precondition by building its (pvar-free) layout and overwriting the last
+    /// param's refinement with the current env state.
+    fn install_inherited_bb_ty(
+        &mut self,
+        bb: BasicBlock,
+        outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
+    ) {
+        let bty = self.ctx.basic_block_ty(self.local_def_id, bb);
+
+        let mut capture = PrecondCapture::default();
+        for (param_idx, param_rty) in bty.as_ref().params.iter_enumerated() {
+            if param_rty.ty.to_sort().is_singleton() {
+                continue;
+            }
+            let pty = match bty.param_kind(param_idx) {
+                BasicBlockTypeParamKind::Local(local, _) => self.env.local_type(local),
+                BasicBlockTypeParamKind::OuterFnParam(outer_idx) => {
+                    let outer_var = outer_fn_param_vars[&outer_idx];
+                    PlaceType::with_ty_and_term(
+                        param_rty.ty.clone().assert_closed().vacuous(),
+                        chc::Term::var(outer_var),
+                    )
+                }
+                BasicBlockTypeParamKind::Synthetic => continue,
+            };
+            capture.push(rty::RefinedTypeVar::Free(param_idx), pty);
+        }
+        capture.push_env_state(&self.env);
+        let precondition = capture.finish(&self.env);
+
+        self.ctx
+            .register_basic_block_precondition(self.local_def_id, bb, precondition);
     }
 
     fn with_assumptions<F, T>(&mut self, assumptions: Vec<impl Into<Assumption>>, callback: F) -> T
@@ -1078,7 +1225,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let mut outer_fn_param_vars = HashMap::new();
 
-        let bb_ty = self.basic_block_ty(self.basic_block).clone();
+        let bb_ty = self
+            .basic_block_ty_with_precondition(self.basic_block)
+            .clone();
         let params = &bb_ty.as_ref().params;
         assert!(!params.is_empty());
         for (param_idx, param_rty) in params.iter_enumerated() {

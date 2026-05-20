@@ -851,18 +851,38 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             // function return type is basic block return type
             let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
-            let rty = self
-                .type_builder
-                .for_template(&mut self.ctx)
-                .build_basic_block(&self.body, live_locals, ret_ty);
-            self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
+            if analyze::basic_block::needs_own_precondition(&self.body, bb) {
+                let bty = self
+                    .type_builder
+                    .for_template(&mut self.ctx)
+                    .build_basic_block(&self.body, live_locals, ret_ty);
+                self.ctx
+                    .register_basic_block_ty_with_precondition(self.local_def_id, bb, bty);
+            } else {
+                // The block inherits its predecessor's outgoing env state as its
+                // precondition, materialized lazily during the predecessor's
+                // analysis. Record only unrefined type here.
+                let bty = self
+                    .type_builder
+                    .build_basic_block(&self.body, live_locals, ret_ty);
+                self.ctx
+                    .register_basic_block_ty_without_precondition(self.local_def_id, bb, bty);
+            };
         }
     }
 
     fn analyze_basic_blocks(&mut self, expected_fn_ty: &rty::RefinedType) {
         let expected_fn_ty = expected_fn_ty.ty.as_function().unwrap();
-        for bb in self.body.basic_blocks.indices() {
-            let rty = self.ctx.basic_block_ty(self.local_def_id, bb).clone();
+        // Reverse postorder guarantees each block that inherits its precondition
+        // is visited after the predecessor that lazily materialized its type.
+        for (bb, data) in mir::traversal::reverse_postorder(&self.body) {
+            if data.is_cleanup {
+                continue;
+            }
+            let rty = self
+                .ctx
+                .basic_block_ty_with_precondition(self.local_def_id, bb)
+                .clone();
             let drop_points = self.drop_points[&bb].clone();
             self.ctx
                 .basic_block_analyzer(self.local_def_id, bb)
@@ -972,7 +992,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn assert_entry(&mut self, expected: &rty::RefinedType) {
         let mut entry_ty = self
             .ctx
-            .basic_block_ty(self.local_def_id, mir::START_BLOCK)
+            .basic_block_ty_with_precondition(self.local_def_id, mir::START_BLOCK)
             .clone();
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry before");
         let mut expected = expected.ty.as_function().cloned().unwrap();
