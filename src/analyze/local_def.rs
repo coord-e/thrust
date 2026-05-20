@@ -916,15 +916,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     /// Drop excessive parameters from the BB-side entry function type that do not
     /// correspond to any function argument. These are introduced by ZST locals whose
     /// liveness analysis treats them as live without an explicit def.
-    ///
-    /// A function type must keep at least one parameter to host the precondition
-    /// predicate: when the function has no real argument, both the expected type and
-    /// the BB type carry a synthetic unit parameter (see
-    /// [`crate::refine::TypeBuilder::build_basic_block`]). That synthetic has no
-    /// backing local, so it survives the drop loop untouched. If instead the entry
-    /// block exposed only ZST-local parameters (e.g. `RETURN_PLACE`), dropping them
-    /// empties the type, and we re-introduce the synthetic unit parameter carrying
-    /// the precondition refinement of the last dropped parameter.
     fn drop_bb_zst_params(&self, bb_ty: &BasicBlockType) -> rty::FunctionType {
         let mut fn_ty = bb_ty.to_function_ty();
         let arg_locals: HashSet<_> = self.body.args_iter().collect();
@@ -936,6 +927,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
 
+        // A function type must keep at least one parameter to host the precondition
+        // predicate. When the function has no real argument, both the expected type and
+        // the BB type carry a synthetic unit parameter (see
+        // `crate::refine::TypeBuilder::build_basic_block`). That synthetic has no
+        // backing local, so it survives the drop loop untouched. If instead the entry
+        // block exposed only ZST-local parameters (e.g. `RETURN_PLACE`), dropping them
+        // empties the type, and we re-introduce the synthetic unit parameter carrying
+        // the precondition refinement of the last dropped parameter.
         if self.body.arg_count == 0 && fn_ty.params.is_empty() {
             let refinement = bb_ty.as_ref().last_param().unwrap().refinement.clone();
             fn_ty
