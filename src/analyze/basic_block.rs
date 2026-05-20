@@ -1021,15 +1021,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    #[tracing::instrument(skip(self))]
-    fn ret_template(&mut self) -> rty::RefinedType<Var> {
-        let ret_ty = self.body.local_decls[mir::RETURN_PLACE].ty;
-        self.type_builder
-            .for_template(&mut self.ctx)
-            .with_scope(&self.env)
-            .build_refined(ret_ty)
-    }
-
     // TODO: remove this
     fn alloc_prophecies(&mut self) {
         for (stmt_idx, stmt) in self.body.basic_blocks[self.basic_block]
@@ -1073,92 +1064,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.ctx.get_or_register_enum_def(def_id);
             }
         }
-    }
-}
-
-/// Turns [`rty::RefinedType<Var>`] into [`rty::RefinedType<T>`].
-///
-/// We sometimes need to replace [`rty::RefinedTypeVar<Var>`] with [`rty::RefinedTypeVar<T>`].
-/// In [`analyze::basic_block`] module, `T` is [`rty::FunctionParamIdx`]. The type we get as
-/// a function result is obtained as [`rty::RefinedTypeVar<Var>`], but we need to express it using
-/// only function parameters for the subtyping. [`UnbindAtoms`] holds the relation between
-/// the function parameters and their representaion under the environment and
-/// let the type in environment be expressed only under the function parameters using existentials.
-#[derive(Debug, Clone)]
-pub struct UnbindAtoms<T> {
-    existentials: IndexVec<rty::ExistentialVarIdx, chc::Sort>,
-    body: chc::Body<rty::RefinedTypeVar<Var>>,
-    target_equations: Vec<(rty::RefinedTypeVar<T>, chc::Term<rty::RefinedTypeVar<Var>>)>,
-}
-
-impl<T> Default for UnbindAtoms<T> {
-    fn default() -> Self {
-        UnbindAtoms {
-            existentials: Default::default(),
-            body: Default::default(),
-            target_equations: Default::default(),
-        }
-    }
-}
-
-impl<T> UnbindAtoms<T> {
-    pub fn push(&mut self, target: rty::RefinedTypeVar<T>, var_ty: PlaceType) {
-        self.body.push_conj(
-            var_ty
-                .formula
-                .map_var(|v| v.shift_existential(self.existentials.len()).into()),
-        );
-        self.target_equations.push((
-            target,
-            var_ty
-                .term
-                .map_var(|v| v.shift_existential(self.existentials.len()).into()),
-        ));
-        self.existentials.extend(var_ty.existentials);
-    }
-
-    pub fn unbind(mut self, env: &analyze::Env, ty: rty::RefinedType<Var>) -> rty::RefinedType<T> {
-        let rty::RefinedType {
-            ty: src_ty,
-            refinement,
-        } = ty;
-        let rty::Refinement { existentials, body } = refinement;
-
-        self.body
-            .push_conj(body.map_var(|v| v.shift_existential(self.existentials.len())));
-        self.existentials.extend(existentials);
-
-        let mut substs = HashMap::new();
-        for (v, sort) in env.dependencies() {
-            let ev = self.existentials.push(sort);
-            substs.insert(v, ev);
-        }
-
-        let mut body = self.body.map_var(|v| match v {
-            rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
-            rty::RefinedTypeVar::Free(v) => rty::RefinedTypeVar::Existential(substs[&v]),
-            rty::RefinedTypeVar::Existential(ev) => rty::RefinedTypeVar::Existential(ev),
-        });
-        body.push_conj(
-            self.target_equations
-                .into_iter()
-                .map(|(t, term)| {
-                    chc::Term::var(t).equal_to(term.map_var(|v| match v {
-                        rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
-                        rty::RefinedTypeVar::Free(v) => {
-                            rty::RefinedTypeVar::Existential(substs[&v])
-                        }
-                        rty::RefinedTypeVar::Existential(ev) => {
-                            rty::RefinedTypeVar::Existential(ev)
-                        }
-                    }))
-                })
-                .collect::<Vec<_>>(),
-        );
-
-        let refinement = rty::Refinement::new(self.existentials, body);
-        // TODO: polymorphic datatypes: template needed?
-        rty::RefinedType::new(src_ty.assert_closed().vacuous(), refinement)
     }
 }
 
@@ -1236,25 +1141,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.assume(assumption);
 
         outer_fn_param_vars
-    }
-
-    fn unbind_atoms(&self) -> UnbindAtoms<rty::FunctionParamIdx> {
-        let bb_ty = self.basic_block_ty(self.basic_block);
-        let mut atoms = UnbindAtoms::default();
-        if self.is_defined(mir::RETURN_PLACE) && !bb_ty.as_ref().ret.ty.to_sort().is_singleton() {
-            let r_ty = self.operand_type(Operand::Move(mir::RETURN_PLACE.into()));
-            atoms.push(rty::RefinedTypeVar::Value, r_ty);
-        }
-        for (param_idx, param_ty) in bb_ty.as_ref().params.iter_enumerated() {
-            if param_ty.ty.to_sort().is_singleton() {
-                continue;
-            }
-            if let Some(local) = bb_ty.local_of_param(param_idx) {
-                let local_ty = self.env.local_type(local);
-                atoms.push(rty::RefinedTypeVar::Free(param_idx), local_ty);
-            }
-        }
-        atoms
     }
 }
 
