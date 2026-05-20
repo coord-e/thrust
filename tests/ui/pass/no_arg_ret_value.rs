@@ -1,11 +1,8 @@
 //@check-pass
 
-// A zero-argument function with a non-ZST return value. Its `RETURN_PLACE` is
-// not live at entry and there is no live ZST local, so the entry basic block
-// exposes no local-backed parameter: its function type carries only the
-// synthetic unit parameter (with no backing local) that hosts the precondition.
-// This exercises the `arg_count == 0` alignment in `drop_bb_zst_params`, which
-// must keep exactly one parameter so the entry type matches the expected type.
+// A zero-argument function with a non-ZST return: its entry basic block has no
+// local-backed parameter, only the synthetic unit parameter that hosts the
+// precondition. Exercises the `arg_count == 0` alignment in `drop_bb_zst_params`.
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(result == 5)]
 fn five() -> i64 {
