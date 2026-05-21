@@ -57,6 +57,50 @@ pub struct DropPointsBuilder<'mir, 'tcx> {
     bb_ins_cache: HashMap<BasicBlock, DenseBitSet<Local>>,
 }
 
+/// Locals whose ownership is fully transferred away by the statement (or
+/// terminator) at `statement_index`. Such a local is left uninitialized, so its
+/// drop obligation (including resolving any mutable-borrow prophecies it owns)
+/// moves to the destination and it must not be dropped at the move site.
+///
+/// Only owned (non-reference) operands are reported: `move`d references are
+/// turned into reborrows by `ReborrowVisitor`/`RustCallVisitor`, so the source
+/// local remains live and must still be dropped.
+fn moved_locals<'tcx>(
+    body: &Body<'tcx>,
+    bb: BasicBlock,
+    statement_index: usize,
+) -> DenseBitSet<Local> {
+    struct Visitor<'a, 'tcx> {
+        body: &'a Body<'tcx>,
+        locals: DenseBitSet<Local>,
+    }
+    impl<'tcx> mir::visit::Visitor<'tcx> for Visitor<'_, 'tcx> {
+        fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, _location: mir::Location) {
+            if let mir::Operand::Move(place) = operand {
+                if place.projection.is_empty() && !self.body.local_decls[place.local].ty.is_ref() {
+                    self.locals.insert(place.local);
+                }
+            }
+        }
+    }
+    let mut visitor = Visitor {
+        body,
+        locals: DenseBitSet::new_empty(body.local_decls.len()),
+    };
+    let loc = mir::Location {
+        statement_index,
+        block: bb,
+    };
+    let data = &body.basic_blocks[bb];
+    use mir::visit::Visitor as _;
+    if statement_index < data.statements.len() {
+        visitor.visit_statement(&data.statements[statement_index], loc);
+    } else if let Some(tmnt) = &data.terminator {
+        visitor.visit_terminator(tmnt, loc);
+    }
+    visitor.locals
+}
+
 fn def_local<'tcx>(data: &mir::BasicBlockData<'tcx>, statement_index: usize) -> Option<Local> {
     struct Visitor {
         local: Option<Local>,
@@ -135,6 +179,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
                     t.insert(def);
                 }
                 t.subtract(&last_live_locals);
+                t.subtract(&moved_locals(self.body, bb, statement_index));
                 t
             };
             last_live_locals = live_locals;
