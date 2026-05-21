@@ -12,6 +12,33 @@ use rustc_index::{IndexSlice, IndexVec};
 
 use pretty::{termcolor, BuildDoc, DocAllocator, DocPtr, Pretty};
 
+pub struct FunctionParams<'a, FV> {
+    pub params:
+        &'a rustc_index::IndexVec<crate::rty::FunctionParamIdx, crate::rty::RefinedType<FV>>,
+}
+
+impl<'a, 'b, 'c, D, FV> Pretty<'a, D, termcolor::ColorSpec> for &'b FunctionParams<'c, FV>
+where
+    FV: crate::chc::Var,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let separator = allocator.text(",").append(allocator.line());
+        allocator
+            .intersperse(self.params.iter().map(|ty| ty.pretty(allocator)), separator)
+            .parens()
+    }
+}
+
+impl<'a, FV> FunctionParams<'a, FV> {
+    pub fn new(
+        params: &'a IndexVec<crate::rty::FunctionParamIdx, crate::rty::RefinedType<FV>>,
+    ) -> FunctionParams<'a, FV> {
+        FunctionParams { params }
+    }
+}
+
 /// A wrapper around a [`crate::rty::FunctionType`] that provides a [`Pretty`] implementation.
 pub struct FunctionType<'a, FV> {
     pub params:
@@ -26,10 +53,9 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let separator = allocator.text(",").append(allocator.line());
-        allocator
-            .intersperse(self.params.iter().map(|ty| ty.pretty(allocator)), separator)
-            .parens()
+        let params = FunctionParams::new(self.params);
+        params
+            .pretty(allocator)
             .append(allocator.space())
             .append(allocator.text("→"))
             .append(allocator.line())

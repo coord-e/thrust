@@ -426,6 +426,7 @@ where
 
     pub fn build_basic_block<I>(
         &mut self,
+        body: &rustc_middle::mir::Body<'tcx>,
         live_locals: I,
         ret_ty: mir_ty::Ty<'tcx>,
     ) -> BasicBlockType
@@ -442,6 +443,15 @@ where
             locals.push((local, ty.mutbl));
             tys.push(ty);
         }
+
+        for arg in body.args_iter() {
+            let decl = &body.local_decls[arg];
+            tys.push(mir_ty::TypeAndMut {
+                ty: decl.ty,
+                mutbl: decl.mutability,
+            });
+        }
+
         let ty = FunctionTemplateTypeBuilder {
             inner: self.inner.clone(),
             registry: self.registry,
@@ -449,11 +459,18 @@ where
             ret_ty,
             param_rtys: Default::default(),
             param_refinement: None,
-            ret_rty: None,
+            // not generating pvar of BB post
+            ret_rty: Some(rty::RefinedType::unrefined(
+                self.inner.build(ret_ty).vacuous(),
+            )),
             abi: Default::default(),
         }
         .build();
-        BasicBlockType { ty, locals }
+        BasicBlockType {
+            ty,
+            locals,
+            outer_fn_param_count: body.arg_count,
+        }
     }
 }
 

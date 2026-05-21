@@ -854,12 +854,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let rty = self
                 .type_builder
                 .for_template(&mut self.ctx)
-                .build_basic_block(live_locals, ret_ty);
+                .build_basic_block(&self.body, live_locals, ret_ty);
             self.ctx.register_basic_block_ty(self.local_def_id, bb, rty);
         }
     }
 
-    fn analyze_basic_blocks(&mut self) {
+    fn analyze_basic_blocks(&mut self, expected_fn_ty: &rty::RefinedType) {
+        let expected_fn_ty = expected_fn_ty.ty.as_function().unwrap();
         for bb in self.body.basic_blocks.indices() {
             let rty = self.ctx.basic_block_ty(self.local_def_id, bb).clone();
             let drop_points = self.drop_points[&bb].clone();
@@ -867,7 +868,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
-                .run(&rty);
+                .run(&rty, expected_fn_ty);
         }
     }
 
@@ -969,7 +970,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn assert_entry(&mut self, expected: &rty::RefinedType) {
-        let entry_ty = self
+        let mut entry_ty = self
             .ctx
             .basic_block_ty(self.local_def_id, mir::START_BLOCK)
             .clone();
@@ -977,11 +978,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut expected = expected.ty.as_function().cloned().unwrap();
         self.elaborate_mut_params(&mut expected);
 
+        entry_ty.truncate_outer_fn_params();
         self.drop_unused_expected_params(&mut expected, &entry_ty);
         let entry_ty = self.drop_bb_zst_params(&entry_ty);
 
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry after");
-        let clauses = rty::relate_sub_closed_type(&entry_ty.into(), &expected.into());
+        let clauses = rty::relate_sub_param_types(&entry_ty.params, &expected.params);
         self.ctx.extend_clauses(clauses);
     }
 }
@@ -1018,7 +1020,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.unelaborate_derefs();
         self.reassign_local_mutabilities();
         self.refine_basic_blocks();
-        self.analyze_basic_blocks();
+        self.analyze_basic_blocks(expected);
         self.assert_entry(expected);
     }
 }
