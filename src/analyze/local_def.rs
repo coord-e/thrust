@@ -612,6 +612,28 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.super_rvalue(rvalue, location);
             }
 
+            fn visit_terminator(
+                &mut self,
+                terminator: &mir::Terminator<'tcx>,
+                location: mir::Location,
+            ) {
+                if let mir::TerminatorKind::Call { func, args, .. } = &terminator.kind {
+                    if let Some((def_id, _generic_args)) = func.const_fn_def() {
+                        if let Some(trait_did) = self
+                            .tcx
+                            .opt_associated_item(def_id)
+                            .and_then(|item| item.trait_container(self.tcx))
+                        {
+                            if trait_did == self.tcx.lang_items().fn_once_trait().unwrap() {
+                                // TODO: check generic_args[0].0 fn sig is &mut
+                                self.locals.insert(args[0].node.place().unwrap().local);
+                            }
+                        }
+                    }
+                }
+                self.super_terminator(terminator, location);
+            }
+
             fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, location: mir::Location) {
                 if let mir::Operand::Move(place) = operand {
                     // to be reborrowed; see analyze::basic_block::visitor
