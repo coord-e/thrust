@@ -126,6 +126,17 @@ impl BasicBlockType {
         self.ty.clone()
     }
 
+    pub fn set_precondition(&mut self, refinement: rty::Refinement<rty::FunctionParamIdx>) {
+        let last_param_idx = self.ty.params.last_index().unwrap();
+        self.ty.params.raw.last_mut().unwrap().refinement = refinement.map_var(|v| {
+            if v == rty::RefinedTypeVar::Free(last_param_idx) {
+                rty::RefinedTypeVar::Value
+            } else {
+                v
+            }
+        });
+    }
+
     /// Inner function type of BasicBlockType contains extra parameters that carry original
     /// function parameter values. `truncate_outer_fn_params` removes these extra parameters
     /// to subtype output of [`BasicBlockType::to_function_ty`] against the function type.

@@ -262,6 +262,30 @@ impl<'tcx> TypeBuilder<'tcx> {
         }
     }
 
+    pub fn build_basic_block<I>(
+        &mut self,
+        body: &rustc_middle::mir::Body<'tcx>,
+        live_locals: I,
+        ret_ty: mir_ty::Ty<'tcx>,
+    ) -> BasicBlockType
+    where
+        I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
+    {
+        struct FakeRegistry;
+        impl TemplateRegistry for FakeRegistry {
+            fn register_template<V>(&mut self, _tmpl: rty::Template<V>) -> rty::RefinedType<V> {
+                panic!("unexpected template registration")
+            }
+        }
+        self.for_template(&mut FakeRegistry)
+            .build_basic_block_with_precondition(
+                body,
+                live_locals.into_iter().collect(),
+                ret_ty,
+                Some(rty::Refinement::top()),
+            )
+    }
+
     pub fn for_template<'a, R>(
         &self,
         registry: &'a mut R,
@@ -424,17 +448,14 @@ where
         self.registry.register_template(tmpl)
     }
 
-    pub fn build_basic_block<I>(
+    fn build_basic_block_with_precondition(
         &mut self,
         body: &rustc_middle::mir::Body<'tcx>,
-        live_locals: I,
+        mut live_locals: Vec<(Local, mir_ty::TypeAndMut<'tcx>)>,
         ret_ty: mir_ty::Ty<'tcx>,
-    ) -> BasicBlockType
-    where
-        I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
-    {
+        precondition: Option<rty::Refinement<rty::FunctionParamIdx>>,
+    ) -> BasicBlockType {
         // this is necessary for local_def::Analyzer::elaborate_unused_args
-        let mut live_locals: Vec<_> = live_locals.into_iter().collect();
         live_locals.sort_by_key(|(local, _)| *local);
 
         let mut locals = IndexVec::<rty::FunctionParamIdx, _>::new();
@@ -458,7 +479,7 @@ where
             param_tys: tys,
             ret_ty,
             param_rtys: Default::default(),
-            param_refinement: None,
+            param_refinement: precondition,
             // not generating pvar of BB post
             ret_rty: Some(rty::RefinedType::unrefined(
                 self.inner.build(ret_ty).vacuous(),
@@ -471,6 +492,23 @@ where
             locals,
             outer_fn_param_count: body.arg_count,
         }
+    }
+
+    pub fn build_basic_block<I>(
+        &mut self,
+        body: &rustc_middle::mir::Body<'tcx>,
+        live_locals: I,
+        ret_ty: mir_ty::Ty<'tcx>,
+    ) -> BasicBlockType
+    where
+        I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
+    {
+        self.build_basic_block_with_precondition(
+            body,
+            live_locals.into_iter().collect(),
+            ret_ty,
+            None,
+        )
     }
 }
 
