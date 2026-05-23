@@ -1637,7 +1637,11 @@ impl RefinedType<Closed> {
 /// Substitutes type parameters in a sort.
 fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
     match sort {
-        chc::Sort::Null | chc::Sort::Int | chc::Sort::Bool | chc::Sort::String => {}
+        chc::Sort::Null
+        | chc::Sort::Int
+        | chc::Sort::Bool
+        | chc::Sort::String
+        | chc::Sort::Forall(_) => {}
         chc::Sort::Param(idx) => {
             let type_param_idx = TypeParamIdx::from_usize(*idx);
             if let Some(rty) = subst.get(type_param_idx) {
