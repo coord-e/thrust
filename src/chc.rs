@@ -84,6 +84,45 @@ impl DatatypeSort {
     }
 }
 
+rustc_index::newtype_index! {
+    /// An index representing sort-level variable.
+    ///
+    /// We manage sort-level variables using indices that are unique in the whole CHC system.
+    /// [`System`] contains `Vec<ForallSortIdx>` that manages the indices of the variables.
+    #[orderable]
+    #[debug_format = "a{}"]
+    pub struct ForallSortIdx { }
+}
+
+impl Default for ForallSortIdx {
+    fn default() -> Self {
+        0_usize.into()
+    }
+}
+
+impl std::fmt::Display for ForallSortIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "a{}", self.index())
+    }
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ForallSortIdx
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator
+            .as_string(self)
+            .annotate(ForallSortIdx::color_spec())
+    }
+}
+
+impl ForallSortIdx {
+    fn color_spec() -> termcolor::ColorSpec {
+        termcolor::ColorSpec::new()
+    }
+}
+
 /// A sort is the type of a logical term.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
@@ -97,6 +136,7 @@ pub enum Sort {
     Tuple(Vec<Sort>),
     Array(Box<Sort>, Box<Sort>),
     Datatype(DatatypeSort),
+    Forall(ForallSortIdx),
 }
 
 impl From<DatatypeSort> for Sort {
@@ -154,6 +194,7 @@ where
                 }
             }
             Sort::Datatype(sort) => sort.pretty(allocator),
+            Sort::Forall(idx) => idx.pretty(allocator),
         }
     }
 }
@@ -180,7 +221,12 @@ impl Sort {
     fn walk_impl<'a, 'b>(&'a self, mut f: Box<dyn FnMut(&'a Sort) + 'b>) {
         f(self);
         match self {
-            Sort::Null | Sort::Int | Sort::Bool | Sort::String | Sort::Param(_) => {}
+            Sort::Null
+            | Sort::Int
+            | Sort::Bool
+            | Sort::String
+            | Sort::Param(_)
+            | Sort::Forall(_) => {}
             Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
             Sort::Tuple(ss) => {
                 for s in ss {
@@ -259,6 +305,10 @@ impl Sort {
 
     pub fn datatype(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
         Sort::Datatype(DatatypeSort { symbol, args })
+    }
+
+    pub fn forall(index: ForallSortIdx) -> Self {
+        Sort::Forall(index)
     }
 
     pub fn into_datatype(self) -> Option<DatatypeSort> {
@@ -1783,11 +1833,20 @@ pub struct System {
     pub user_defined_pred_defs: Vec<UserDefinedPredDef>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
+    pub forall_sorts: Vec<ForallSortIdx>,
+    pub num_forall_sort_idx: ForallSortIdx,
 }
 
 impl System {
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
+    }
+
+    pub fn new_forall_sort(&mut self) -> ForallSortIdx {
+        let new_idx = self.num_forall_sort_idx;
+        self.num_forall_sort_idx += 1;
+        self.forall_sorts.push(new_idx);
+        new_idx
     }
 
     pub fn push_raw_command(&mut self, raw_command: RawCommand) {

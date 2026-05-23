@@ -87,6 +87,7 @@ impl<'a> std::fmt::Display for SortSymbol<'a> {
                 write!(f, "Array{}", SortSymbols::new(&[*s1.clone(), *s2.clone()]))
             }
             chc::Sort::Datatype(s) => write!(f, "{}{}", s.symbol, SortSymbols::new(&s.args)),
+            chc::Sort::Forall(i) => write!(f, "{}", i),
         }
     }
 }

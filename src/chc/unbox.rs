@@ -72,6 +72,7 @@ fn unbox_sort(sort: Sort) -> Sort {
         Sort::Tuple(sorts) => Sort::Tuple(sorts.into_iter().map(unbox_sort).collect()),
         Sort::Array(s1, s2) => Sort::Array(Box::new(unbox_sort(*s1)), Box::new(unbox_sort(*s2))),
         Sort::Datatype(sort) => Sort::Datatype(unbox_datatype_sort(sort)),
+        Sort::Forall(i) => Sort::Forall(i),
     }
 }
 
@@ -174,6 +175,8 @@ pub fn unbox(system: System) -> System {
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        forall_sorts,
+        num_forall_sort_idx,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
@@ -188,5 +191,7 @@ pub fn unbox(system: System) -> System {
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        forall_sorts,
+        num_forall_sort_idx,
     }
 }
