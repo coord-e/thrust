@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Mutability};
@@ -6,7 +8,7 @@ use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
 use super::basic_block::BasicBlockType;
-use crate::analyze::DefIdCache;
+use crate::analyze::{DefIdCache, TypeParams};
 use crate::chc;
 use crate::refine;
 use crate::rty;
@@ -71,43 +73,37 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
+    def_id: DefId,
     typing_env: mir_ty::TypingEnv<'tcx>,
-    /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
-    /// These indices may differ because we skip lifetime parameters and they always need to be
-    /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
-    /// See [`rty::TypeParamIdx`] for more details.
-    param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
+    type_params: Rc<RefCell<TypeParams>>,
+    system: Rc<RefCell<chc::System>>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
-    pub fn new(tcx: mir_ty::TyCtxt<'tcx>, def_ids: DefIdCache<'tcx>, def_id: DefId) -> Self {
-        let generics = tcx.generics_of(def_id);
-        let mut param_idx_mapping: HashMap<u32, rty::TypeParamIdx> = Default::default();
-        for i in 0..generics.count() {
-            let generic_param = generics.param_at(i, tcx);
-            match generic_param.kind {
-                mir_ty::GenericParamDefKind::Lifetime => {}
-                mir_ty::GenericParamDefKind::Type { .. } => {
-                    param_idx_mapping.insert(i as u32, param_idx_mapping.len().into());
-                }
-                mir_ty::GenericParamDefKind::Const { .. } => {}
-            }
-        }
+    pub fn new(
+        tcx: mir_ty::TyCtxt<'tcx>,
+        def_ids: DefIdCache<'tcx>,
+        def_id: DefId,
+        type_params: Rc<RefCell<TypeParams>>,
+        system: Rc<RefCell<chc::System>>,
+    ) -> Self {
         let typing_env = mir_ty::TypingEnv::post_analysis(tcx, def_id);
         Self {
             tcx,
             def_ids,
+            def_id,
             typing_env,
-            param_idx_mapping,
+            type_params,
+            system,
         }
     }
 
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
-        let index = *self
-            .param_idx_mapping
-            .get(&ty.index)
-            .expect("unknown type param idx");
-        rty::ParamType::new(index).into()
+        let mut type_params = self.type_params.borrow_mut();
+        let index = type_params
+            .entry((self.def_id, ty.index))
+            .or_insert(self.system.borrow_mut().new_forall_sort());
+        rty::ParamType::new(*index).into()
     }
 
     /// Replaces {closure} types with thrust_models::Closure<{closure}>.
