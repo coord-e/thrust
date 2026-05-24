@@ -609,7 +609,7 @@ impl<T> EnumType<T> {
 /// A type parameter.
 #[derive(Debug, Clone)]
 pub struct ParamType {
-    pub idx: TypeParamIdx,
+    idx: TypeParamIdx,
 }
 
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ParamType
@@ -914,7 +914,7 @@ impl<T> Type<T> {
             //       currently String sort seems not available in HORN logic of Z3
             Type::String => chc::Sort::null(),
             Type::Never => chc::Sort::null(),
-            Type::Param(ty) => chc::Sort::param(ty.index().into()),
+            Type::Param(ty) => chc::Sort::forall(ty.index()),
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.ty.to_sort();
 

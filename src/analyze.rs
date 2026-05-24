@@ -190,6 +190,7 @@ impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
 }
 
 pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
+pub type TypeParams = HashMap<(DefId, u32), chc::ForallSortIdx>;
 
 #[derive(Debug, Clone)]
 struct DeferredFormulaFnDef<'tcx> {
@@ -217,6 +218,8 @@ pub struct Analyzer<'tcx> {
     def_ids: did_cache::DefIdCache<'tcx>,
 
     enum_defs: Rc<RefCell<EnumDefs>>,
+
+    type_params: Rc<RefCell<TypeParams>>,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
@@ -240,6 +243,7 @@ impl<'tcx> Analyzer<'tcx> {
         let system = Default::default();
         let basic_blocks = Default::default();
         let enum_defs = Default::default();
+        let type_params = Default::default();
         Self {
             tcx,
             defs,
@@ -248,6 +252,7 @@ impl<'tcx> Analyzer<'tcx> {
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
             enum_defs,
+            type_params,
         }
     }
 
@@ -281,7 +286,7 @@ impl<'tcx> Analyzer<'tcx> {
                     .iter()
                     .map(|field| {
                         let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                        TypeBuilder::new(self.tcx, self.def_ids(), def_id).build(field_ty)
+                        self.type_builder(self.def_ids(), def_id).build(field_ty)
                     })
                     .collect();
                 rty::EnumVariantDef {
@@ -409,9 +414,14 @@ impl<'tcx> Analyzer<'tcx> {
             return Some(formula_fn.clone());
         }
 
-        let translator = annot_fn::AnnotFnTranslator::new(self.tcx, local_def_id)
-            .with_generic_args(generic_args)
-            .with_def_id_cache(self.def_ids());
+        let translator = annot_fn::AnnotFnTranslator::new(
+            self.tcx,
+            local_def_id,
+            self.type_params.clone(),
+            self.system.clone(),
+        )
+        .with_generic_args(generic_args)
+        .with_def_id_cache(self.def_ids());
         let formula_fn = translator.to_formula_fn();
         deferred_formula_fn_cache
             .borrow_mut()
@@ -426,7 +436,7 @@ impl<'tcx> Analyzer<'tcx> {
         def_id: DefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<rty::RefinedType> {
-        let type_builder = TypeBuilder::new(self.tcx, self.def_ids(), def_id);
+        let type_builder = self.type_builder(self.def_ids(), def_id);
 
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
@@ -533,6 +543,16 @@ impl<'tcx> Analyzer<'tcx> {
         bb: BasicBlock,
     ) -> basic_block::Analyzer<'tcx, '_> {
         basic_block::Analyzer::new(self, local_def_id, bb)
+    }
+
+    pub fn type_builder(&self, def_ids: DefIdCache<'tcx>, def_id: DefId) -> TypeBuilder<'tcx> {
+        TypeBuilder::new(
+            self.tcx,
+            def_ids,
+            def_id,
+            self.type_params.clone(),
+            self.system.clone(),
+        )
     }
 
     pub fn solve(&mut self) {

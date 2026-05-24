@@ -1,13 +1,15 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use pretty::{termcolor, Pretty};
 use rustc_hir::{def_id::LocalDefId, HirId};
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
-use crate::analyze::{self, did_cache::DefIdCache};
+use crate::analyze::{self, did_cache::DefIdCache, TypeParams};
 use crate::annot::AnnotFormula;
-use crate::chc;
+use crate::chc::{self, System};
 use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
@@ -137,15 +139,29 @@ pub struct AnnotFnTranslator<'tcx> {
     def_ids: DefIdCache<'tcx>,
     type_builder: TypeBuilder<'tcx>,
     env: HashMap<HirId, chc::Term<rty::FunctionParamIdx>>,
+
+    type_params: Rc<RefCell<TypeParams>>,
+    system: Rc<RefCell<System>>,
 }
 
 impl<'tcx> AnnotFnTranslator<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, local_def_id: LocalDefId) -> Self {
+    pub fn new(
+        tcx: TyCtxt<'tcx>,
+        local_def_id: LocalDefId,
+        type_params: Rc<RefCell<TypeParams>>,
+        system: Rc<RefCell<System>>,
+    ) -> Self {
         let body = tcx.hir_body_owned_by(local_def_id);
         let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
         let def_ids = DefIdCache::new(tcx);
-        let type_builder = TypeBuilder::new(tcx, def_ids.clone(), local_def_id.to_def_id());
+        let type_builder = TypeBuilder::new(
+            tcx,
+            def_ids.clone(),
+            local_def_id.to_def_id(),
+            type_params.clone(),
+            system.clone(),
+        );
         let mut translator = Self {
             tcx,
             local_def_id,
@@ -155,6 +171,8 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
             def_ids,
             type_builder,
             env: HashMap::default(),
+            type_params,
+            system,
         };
         translator.build_env_from_params();
         translator
@@ -171,6 +189,8 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
             self.tcx,
             self.def_ids.clone(),
             self.local_def_id.to_def_id(),
+            self.type_params.clone(),
+            self.system.clone(),
         );
         self
     }
