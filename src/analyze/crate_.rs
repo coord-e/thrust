@@ -120,13 +120,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         };
 
         use mir_ty::TypeVisitableExt as _;
-        if sig.has_param() {
-            if self.skip_analysis.contains(&local_def_id) {
-                self.ctx
-                    .register_deferred_def_without_analysis(target_def_id, local_def_id);
-            } else {
-                self.ctx.register_deferred_def(local_def_id);
-            }
+        if sig.has_param() && self.skip_analysis.contains(&local_def_id) {
+            self.ctx
+                .register_deferred_def_without_analysis(target_def_id, local_def_id);
         } else {
             let expected = analyzer.expected_ty();
             self.ctx.register_def(target_def_id, expected);
