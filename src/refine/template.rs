@@ -102,7 +102,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         let mut type_params = self.type_params.borrow_mut();
         let index = type_params
             .entry((self.def_id, ty.index))
-            .or_insert(self.system.borrow_mut().new_forall_sort());
+            .or_insert_with(|| self.system.borrow_mut().new_forall_sort());
         rty::ParamType::new(*index).into()
     }
 
