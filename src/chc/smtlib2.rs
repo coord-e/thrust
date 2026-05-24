@@ -600,6 +600,10 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
 
+        for forall_sort_idx in &self.inner.forall_sorts {
+            writeln!(f, "(declare-forall-sort {})\n", forall_sort_idx)?;
+        }
+
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
