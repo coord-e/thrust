@@ -8,7 +8,7 @@ use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
 use super::basic_block::BasicBlockType;
-use crate::analyze::{DefIdCache, TypeParams};
+use crate::analyze::{DefIdCache, TypeParam, TypeParamMap};
 use crate::chc;
 use crate::refine;
 use crate::rty;
@@ -75,7 +75,7 @@ pub struct TypeBuilder<'tcx> {
     def_ids: DefIdCache<'tcx>,
     def_id: DefId,
     typing_env: mir_ty::TypingEnv<'tcx>,
-    type_params: Rc<RefCell<TypeParams>>,
+    type_params: Rc<RefCell<TypeParamMap>>,
     system: Rc<RefCell<chc::System>>,
 }
 
@@ -84,7 +84,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         tcx: mir_ty::TyCtxt<'tcx>,
         def_ids: DefIdCache<'tcx>,
         def_id: DefId,
-        type_params: Rc<RefCell<TypeParams>>,
+        type_params: Rc<RefCell<TypeParamMap>>,
         system: Rc<RefCell<chc::System>>,
     ) -> Self {
         let typing_env = mir_ty::TypingEnv::post_analysis(tcx, def_id);
@@ -101,7 +101,15 @@ impl<'tcx> TypeBuilder<'tcx> {
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
         let mut type_params = self.type_params.borrow_mut();
         let index = type_params
-            .entry((self.def_id, ty.index))
+            .entry(TypeParam::GenericType(self.def_id, ty.index))
+            .or_insert_with(|| self.system.borrow_mut().new_forall_sort());
+        rty::ParamType::new(*index).into()
+    }
+
+    fn translate_alias_type(&self, ty: &mir_ty::AliasTy) -> rty::Type<rty::Closed> {
+        let mut type_params = self.type_params.borrow_mut();
+        let index = type_params
+            .entry(TypeParam::AssocType(ty.def_id))
             .or_insert_with(|| self.system.borrow_mut().new_forall_sort());
         rty::ParamType::new(*index).into()
     }
@@ -254,6 +262,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
+            mir_ty::TyKind::Alias(_, ty) => self.translate_alias_type(ty),
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
     }

@@ -7,7 +7,7 @@ use rustc_hir::{def_id::LocalDefId, HirId};
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
-use crate::analyze::{self, did_cache::DefIdCache, TypeParams};
+use crate::analyze::{self, did_cache::DefIdCache, TypeParamMap};
 use crate::annot::AnnotFormula;
 use crate::chc::{self, System};
 use crate::refine::{self, TypeBuilder};
@@ -140,7 +140,7 @@ pub struct AnnotFnTranslator<'tcx> {
     type_builder: TypeBuilder<'tcx>,
     env: HashMap<HirId, chc::Term<rty::FunctionParamIdx>>,
 
-    type_params: Rc<RefCell<TypeParams>>,
+    type_params: Rc<RefCell<TypeParamMap>>,
     system: Rc<RefCell<System>>,
 }
 
@@ -148,7 +148,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
     pub fn new(
         tcx: TyCtxt<'tcx>,
         local_def_id: LocalDefId,
-        type_params: Rc<RefCell<TypeParams>>,
+        type_params: Rc<RefCell<TypeParamMap>>,
         system: Rc<RefCell<System>>,
     ) -> Self {
         let body = tcx.hir_body_owned_by(local_def_id);
