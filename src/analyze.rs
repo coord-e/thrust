@@ -392,9 +392,8 @@ impl<'tcx> Analyzer<'tcx> {
             ?mode,
             "register_deferred_def"
         );
-        self.defs.insert(
-            target_def_id,
-            DefTy::Deferred(DeferredDefTy {
+        self.defs.entry( target_def_id).or_insert_with(
+        || DefTy::Deferred(DeferredDefTy {
                 local_def_id,
                 cache: Rc::new(RefCell::new(HashMap::new())),
                 mode,
