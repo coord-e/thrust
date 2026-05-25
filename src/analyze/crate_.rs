@@ -119,17 +119,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             local_def_id.to_def_id()
         };
 
-        use mir_ty::TypeVisitableExt as _;
-        if sig.has_param() && self.skip_analysis.contains(&local_def_id) {
-            self.ctx
-                .register_deferred_def_without_analysis(target_def_id, local_def_id);
-        } else if sig.has_param() && !analyzer.is_fully_annotated() {
-            self.ctx
-                .register_deferred_def(local_def_id);
-        } else {
-            let expected = analyzer.expected_ty();
-            self.ctx.register_def(target_def_id, expected);
-        }
+        let expected = analyzer.expected_ty();
+        self.ctx.register_def(target_def_id, expected);
     }
 
     fn analyze_local_defs(&mut self) {
@@ -138,11 +129,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 continue;
             };
             if self.skip_analysis.contains(local_def_id) {
+                tracing::debug!("this is marked as skip analysis: {:?}", local_def_id);
                 continue;
             }
 
             let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
                 // when the local_def_id is deferred it would be skipped
+                tracing::debug!("this is marked as deferred type: {:?}", local_def_id);
                 continue;
             };
 
@@ -156,6 +149,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .map(|ty_param| (ty_param, rty::RefinedType::unrefined(rty::Type::int())))
                     .collect(),
             );
+            tracing::debug!("expected type of {:?} is {:#?}", local_def_id, expected);
             expected.subst_ty_params(&subst);
             let generic_args = self.placeholder_generic_args(*local_def_id);
             self.ctx
