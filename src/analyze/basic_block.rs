@@ -402,6 +402,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             (mir_ty::TyKind::Closure(_, args), _) if args.as_closure().upvar_tys().is_empty() => {
                 PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
+            (_, ConstValue::ZeroSized) => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                 ConstValue::Scalar(Scalar::Ptr(ptr, _)),
