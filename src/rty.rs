@@ -1548,6 +1548,67 @@ impl<FV> RefinedType<FV> {
         }
     }
 
+    /// Rewrites the type so that `own`-pointer pointees carry no refinement of
+    /// their own; any such refinement is folded into the enclosing refinement,
+    /// with the pointee value referred to via `box_current`.
+    ///
+    /// This is a semantics-preserving normalization (the inverse direction of
+    /// [`RefinedType::boxed`]) that matches the convention used throughout
+    /// Thrust: refinements on owned pointers live at the outer (box) level
+    /// rather than on the pointee. Subtyping relates the outer refinement with
+    /// the pointee value bound to `box_current` of the box, so a nested pointee
+    /// refinement that is left in place would be related against a value var
+    /// disconnected from the actual data.
+    pub fn lift_own_pointee_refinements(self) -> Self {
+        let RefinedType { ty, mut refinement } = self;
+        let ty = match ty {
+            Type::Pointer(p) if p.kind == PointerKind::Own => {
+                let RefinedType {
+                    ty: elem_ty,
+                    refinement: elem_refinement,
+                } = p.elem.lift_own_pointee_refinements();
+                refinement.push_conj(
+                    elem_refinement
+                        .subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).box_current()),
+                );
+                PointerType {
+                    kind: PointerKind::Own,
+                    elem: Box::new(RefinedType::unrefined(elem_ty)),
+                }
+                .into()
+            }
+            Type::Pointer(p) => PointerType {
+                kind: p.kind,
+                elem: Box::new(p.elem.lift_own_pointee_refinements()),
+            }
+            .into(),
+            Type::Tuple(t) => TupleType {
+                elems: t
+                    .elems
+                    .into_iter()
+                    .map(Self::lift_own_pointee_refinements)
+                    .collect(),
+            }
+            .into(),
+            Type::Array(a) => ArrayType {
+                index: Box::new(a.index.lift_own_pointee_refinements()),
+                elem: Box::new(a.elem.lift_own_pointee_refinements()),
+            }
+            .into(),
+            Type::Enum(e) => EnumType {
+                symbol: e.symbol,
+                args: e
+                    .args
+                    .into_iter()
+                    .map(Self::lift_own_pointee_refinements)
+                    .collect(),
+            }
+            .into(),
+            ty => ty,
+        };
+        RefinedType { ty, refinement }
+    }
+
     pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> chc::Term<W>,

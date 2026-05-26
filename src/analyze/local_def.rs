@@ -70,7 +70,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         {
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
             let (ident, ts) = analyze::annot::split_param(&ts);
-            let param = parser.parse_rty(ts).unwrap();
+            let param = parser.parse_rty(ts).unwrap().lift_own_pointee_refinements();
             param_annots.push((ident, param));
         }
         param_annots
@@ -94,7 +94,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 unimplemented!();
             }
             let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ret = parser.parse_rty(ts).unwrap();
+            let ret = parser.parse_rty(ts).unwrap().lift_own_pointee_refinements();
             ret_annot = Some(ret);
         }
         ret_annot
