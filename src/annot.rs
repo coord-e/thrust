@@ -1062,9 +1062,9 @@ where
                     "fn" => unimplemented!(),
                     "Box" => {
                         self.expect_next_token(TokenKind::Lt, "<")?;
-                        let ty = self.parse_ty()?;
+                        let ty = self.parse_rty()?;
                         self.expect_next_token(TokenKind::Gt, ">")?;
-                        rty::PointerType::own(ty).into()
+                        rty::PointerType::own_refined(ty).into()
                     }
                     s => {
                         let sym = chc::DatatypeSymbol::new(s.to_owned());
