@@ -83,6 +83,53 @@ where
     }
 }
 
+/// Selects a parameter or the return of a function type — the root of a
+/// [`TypePosition`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypePositionRoot {
+    Param(FunctionParamIdx),
+    Return,
+}
+
+impl std::fmt::Display for TypePositionRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TypePositionRoot::Param(idx) => write!(f, "{}", idx),
+            TypePositionRoot::Return => f.write_str("result"),
+        }
+    }
+}
+
+/// A position addressing a sub-type within a function type, used to attach a
+/// refinement.
+///
+/// The [`root`](Self::root) selects a parameter or the return; the
+/// [`projection`](Self::projection) then descends into nested type arguments
+/// (enum type-arguments, `Box` pointee). For example, `result.0` addresses the
+/// first type-argument of the return type, and `$1` addresses the second
+/// parameter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypePosition {
+    pub root: TypePositionRoot,
+    pub projection: Vec<usize>,
+}
+
+impl TypePosition {
+    pub fn new(root: TypePositionRoot, projection: Vec<usize>) -> Self {
+        TypePosition { root, projection }
+    }
+}
+
+impl std::fmt::Display for TypePosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.root)?;
+        for p in &self.projection {
+            write!(f, ".{}", p)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FunctionAbi {
     #[default]
@@ -1476,22 +1523,22 @@ where
 }
 
 impl RefinedType<FunctionParamIdx> {
-    /// Installs `refinement` at the given type position, descending through the
-    /// function type (parameters then return), enum type arguments, and `Box`
-    /// pointees. An empty path replaces the refinement at the current node.
+    /// Installs `refinement` at the given projection — a path of nested
+    /// type-argument indices descending through enum type arguments and `Box`
+    /// pointees. An empty projection replaces the refinement at this node.
     pub fn install_refinement_at(
         &mut self,
-        path: &[usize],
+        projection: &[usize],
         refinement: Refinement<FunctionParamIdx>,
     ) {
-        let Some((&step, rest)) = path.split_first() else {
+        let Some((&step, rest)) = projection.split_first() else {
             self.refinement = refinement;
             return;
         };
         match &mut self.ty {
             Type::Enum(e) => {
                 let arg = e.args.get_mut(TypeParamIdx::from(step)).unwrap_or_else(|| {
-                    panic!("refine position {} out of range for enum type", step)
+                    panic!("refine projection {} out of range for enum type", step)
                 });
                 arg.install_refinement_at(rest, refinement);
             }
@@ -1499,16 +1546,8 @@ impl RefinedType<FunctionParamIdx> {
                 assert_eq!(step, 0, "Box type position must be 0");
                 p.elem.install_refinement_at(rest, refinement);
             }
-            Type::Function(f) => {
-                let n = f.params.len();
-                if step < n {
-                    f.params[FunctionParamIdx::from(step)].install_refinement_at(rest, refinement);
-                } else {
-                    f.ret.install_refinement_at(rest, refinement);
-                }
-            }
             ty => panic!(
-                "unsupported type at refine position step {}: {:?}",
+                "unsupported type at refine projection step {}: {:?}",
                 step, ty
             ),
         }

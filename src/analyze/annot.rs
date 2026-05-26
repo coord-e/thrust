@@ -211,31 +211,53 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
     d.tokens
 }
 
-/// Parses a comma-separated list of integer literals (a "type position") from
-/// the tokens of a `#[thrust::refine(..)]` attribute.
-pub fn parse_position(ts: &TokenStream) -> Vec<usize> {
+/// Parses a [`rty::TypePosition`] from the tokens of a `#[thrust::refine(..)]`
+/// attribute.
+///
+/// The first token is the root: the keyword `result` for the return, or an
+/// integer for a parameter index. The remaining comma-separated integers form
+/// the projection into nested type arguments. For example `result, 0` is the
+/// first type-argument of the return, and `1` is the second parameter.
+pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
     use rustc_ast::token::{LitKind, TokenKind};
     use rustc_ast::tokenstream::TokenTree;
 
-    let mut out = Vec::new();
-    for tt in ts.iter() {
+    let parse_int = |lit: &rustc_ast::token::Lit| -> usize {
+        assert_eq!(
+            lit.kind,
+            LitKind::Integer,
+            "expected an integer in refine position"
+        );
+        lit.symbol
+            .as_str()
+            .parse()
+            .expect("invalid integer in refine position")
+    };
+
+    let mut iter = ts.iter();
+    let root = match iter.next() {
+        Some(TokenTree::Token(t, _)) => match &t.kind {
+            TokenKind::Ident(sym, _) if sym.as_str() == "result" => rty::TypePositionRoot::Return,
+            TokenKind::Literal(lit) => {
+                rty::TypePositionRoot::Param(rty::FunctionParamIdx::from(parse_int(lit)))
+            }
+            _ => panic!("unexpected refine position root: {:?}", t),
+        },
+        _ => panic!("empty refine position"),
+    };
+
+    let mut projection = Vec::new();
+    for tt in iter {
         match tt {
             TokenTree::Token(t, _) => match &t.kind {
                 TokenKind::Comma => {}
-                TokenKind::Literal(lit) if lit.kind == LitKind::Integer => {
-                    out.push(
-                        lit.symbol
-                            .as_str()
-                            .parse()
-                            .expect("invalid integer in refine position"),
-                    );
-                }
+                TokenKind::Literal(lit) => projection.push(parse_int(lit)),
                 _ => panic!("unexpected token in refine position: {:?}", t),
             },
             _ => panic!("unexpected token tree in refine position"),
         }
     }
-    out
+    rty::TypePosition::new(root, projection)
 }
 
 pub fn split_param(ts: &TokenStream) -> (Ident, TokenStream) {

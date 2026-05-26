@@ -792,7 +792,7 @@ impl<'tcx> Analyzer<'tcx> {
 
     /// Collects every `#[thrust::refine(..)]` path statement in the function
     /// body, returning each `(type position, formula_fn DefId)`.
-    fn extract_refine_paths(&self, local_def_id: LocalDefId) -> Vec<(Vec<usize>, DefId)> {
+    fn extract_refine_paths(&self, local_def_id: LocalDefId) -> Vec<(rty::TypePosition, DefId)> {
         let mut out = Vec::new();
         let Some(body) = self.tcx.hir_maybe_body_owned_by(local_def_id) else {
             return out;
@@ -812,7 +812,7 @@ impl<'tcx> Analyzer<'tcx> {
                 continue;
             };
             let ts = analyze::annot::extract_annot_tokens(attr.clone());
-            let position = analyze::annot::parse_position(&ts);
+            let position = analyze::annot::parse_type_position(&ts);
 
             let rustc_hir::StmtKind::Semi(expr) = stmt.kind else {
                 self.tcx.dcx().span_err(
@@ -846,7 +846,7 @@ impl<'tcx> Analyzer<'tcx> {
         &self,
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
-    ) -> Vec<(Vec<usize>, rty::Refinement<rty::FunctionParamIdx>)> {
+    ) -> Vec<(rty::TypePosition, rty::Refinement<rty::FunctionParamIdx>)> {
         let mut out = Vec::new();
         for (position, def_id) in self.extract_refine_paths(local_def_id) {
             let Some(formula_def_id) = def_id.as_local() else {

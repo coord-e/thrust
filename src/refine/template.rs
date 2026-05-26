@@ -566,35 +566,35 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         self
     }
 
-    /// Installs a refinement at a function-type position. The first index of
-    /// `path` selects a parameter (by index) or the return slot (when it equals
-    /// the parameter count); the remaining indices descend into the slot's type.
+    /// Installs a refinement at a [`rty::TypePosition`]. The root selects a
+    /// parameter or the return slot; the projection then descends into the
+    /// slot's nested type arguments.
     pub fn refine(
         &mut self,
-        path: &[usize],
+        position: &rty::TypePosition,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
     ) -> &mut Self {
-        let (&slot, sub) = path.split_first().expect("refine path must be non-empty");
-        let n = self.param_tys.len();
-        if slot < n {
-            let idx = rty::FunctionParamIdx::from(slot);
-            if !self.param_rtys.contains_key(&idx) {
-                let ty = self.inner.build(self.param_tys[slot].ty).vacuous();
-                self.param_rtys.insert(idx, rty::RefinedType::unrefined(ty));
+        match position.root {
+            rty::TypePositionRoot::Param(idx) => {
+                if !self.param_rtys.contains_key(&idx) {
+                    let ty = self.inner.build(self.param_tys[idx.index()].ty).vacuous();
+                    self.param_rtys.insert(idx, rty::RefinedType::unrefined(ty));
+                }
+                self.param_rtys
+                    .get_mut(&idx)
+                    .unwrap()
+                    .install_refinement_at(&position.projection, refinement);
             }
-            self.param_rtys
-                .get_mut(&idx)
-                .unwrap()
-                .install_refinement_at(sub, refinement);
-        } else {
-            if self.ret_rty.is_none() {
-                let ty = self.inner.build(self.ret_ty).vacuous();
-                self.ret_rty = Some(rty::RefinedType::unrefined(ty));
+            rty::TypePositionRoot::Return => {
+                if self.ret_rty.is_none() {
+                    let ty = self.inner.build(self.ret_ty).vacuous();
+                    self.ret_rty = Some(rty::RefinedType::unrefined(ty));
+                }
+                self.ret_rty
+                    .as_mut()
+                    .unwrap()
+                    .install_refinement_at(&position.projection, refinement);
             }
-            self.ret_rty
-                .as_mut()
-                .unwrap()
-                .install_refinement_at(sub, refinement);
         }
         self
     }
