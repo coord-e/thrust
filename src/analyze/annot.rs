@@ -61,6 +61,10 @@ pub fn ensures_path_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("ensures_path")]
 }
 
+pub fn refine_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("refine")]
+}
+
 pub fn model_ty_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
@@ -205,6 +209,33 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
         panic!("invalid attribute: expected delimited args");
     };
     d.tokens
+}
+
+/// Parses a comma-separated list of integer literals (a "type position") from
+/// the tokens of a `#[thrust::refine(..)]` attribute.
+pub fn parse_position(ts: &TokenStream) -> Vec<usize> {
+    use rustc_ast::token::{LitKind, TokenKind};
+    use rustc_ast::tokenstream::TokenTree;
+
+    let mut out = Vec::new();
+    for tt in ts.iter() {
+        match tt {
+            TokenTree::Token(t, _) => match &t.kind {
+                TokenKind::Comma => {}
+                TokenKind::Literal(lit) if lit.kind == LitKind::Integer => {
+                    out.push(
+                        lit.symbol
+                            .as_str()
+                            .parse()
+                            .expect("invalid integer in refine position"),
+                    );
+                }
+                _ => panic!("unexpected token in refine position: {:?}", t),
+            },
+            _ => panic!("unexpected token tree in refine position"),
+        }
+    }
+    out
 }
 
 pub fn split_param(ts: &TokenStream) -> (Ident, TokenStream) {

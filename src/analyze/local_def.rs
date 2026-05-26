@@ -406,6 +406,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         assert!(require_annot.is_none() || param_annots.is_empty());
         assert!(ensure_annot.is_none() || ret_annot.is_none());
 
+        let refine_annots = self
+            .ctx
+            .extract_refine_annots(self.local_def_id, self.generic_args);
+
         let trait_item_ty = self.trait_item_ty();
         let is_fully_annotated = self.is_fully_annotated();
 
@@ -430,6 +434,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         if let Some(ret_rty) = ret_annot {
             builder.ret_rty(ret_rty);
+        }
+        for (position, refinement) in refine_annots {
+            builder.refine(&position, refinement);
         }
 
         if is_fully_annotated {

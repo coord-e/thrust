@@ -1475,6 +1475,46 @@ where
     }
 }
 
+impl RefinedType<FunctionParamIdx> {
+    /// Installs `refinement` at the given type position, descending through the
+    /// function type (parameters then return), enum type arguments, and `Box`
+    /// pointees. An empty path replaces the refinement at the current node.
+    pub fn install_refinement_at(
+        &mut self,
+        path: &[usize],
+        refinement: Refinement<FunctionParamIdx>,
+    ) {
+        let Some((&step, rest)) = path.split_first() else {
+            self.refinement = refinement;
+            return;
+        };
+        match &mut self.ty {
+            Type::Enum(e) => {
+                let arg = e.args.get_mut(TypeParamIdx::from(step)).unwrap_or_else(|| {
+                    panic!("refine position {} out of range for enum type", step)
+                });
+                arg.install_refinement_at(rest, refinement);
+            }
+            Type::Pointer(p) => {
+                assert_eq!(step, 0, "Box type position must be 0");
+                p.elem.install_refinement_at(rest, refinement);
+            }
+            Type::Function(f) => {
+                let n = f.params.len();
+                if step < n {
+                    f.params[FunctionParamIdx::from(step)].install_refinement_at(rest, refinement);
+                } else {
+                    f.ret.install_refinement_at(rest, refinement);
+                }
+            }
+            ty => panic!(
+                "unsupported type at refine position step {}: {:?}",
+                step, ty
+            ),
+        }
+    }
+}
+
 impl<FV> RefinedType<FV> {
     fn pretty_atom<'a, 'b, D>(
         &'b self,

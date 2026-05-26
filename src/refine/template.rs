@@ -565,6 +565,39 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         self.ret_rty = Some(rty);
         self
     }
+
+    /// Installs a refinement at a function-type position. The first index of
+    /// `path` selects a parameter (by index) or the return slot (when it equals
+    /// the parameter count); the remaining indices descend into the slot's type.
+    pub fn refine(
+        &mut self,
+        path: &[usize],
+        refinement: rty::Refinement<rty::FunctionParamIdx>,
+    ) -> &mut Self {
+        let (&slot, sub) = path.split_first().expect("refine path must be non-empty");
+        let n = self.param_tys.len();
+        if slot < n {
+            let idx = rty::FunctionParamIdx::from(slot);
+            if !self.param_rtys.contains_key(&idx) {
+                let ty = self.inner.build(self.param_tys[slot].ty).vacuous();
+                self.param_rtys.insert(idx, rty::RefinedType::unrefined(ty));
+            }
+            self.param_rtys
+                .get_mut(&idx)
+                .unwrap()
+                .install_refinement_at(sub, refinement);
+        } else {
+            if self.ret_rty.is_none() {
+                let ty = self.inner.build(self.ret_ty).vacuous();
+                self.ret_rty = Some(rty::RefinedType::unrefined(ty));
+            }
+            self.ret_rty
+                .as_mut()
+                .unwrap()
+                .install_refinement_at(sub, refinement);
+        }
+        self
+    }
 }
 
 impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R>
