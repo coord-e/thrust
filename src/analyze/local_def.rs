@@ -1057,7 +1057,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .clone();
             let drop_points = self.drop_points[&bb].clone();
             self.ctx
-                .basic_block_analyzer(self.local_def_id, bb)
+                .basic_block_analyzer(self.local_def_id, bb, self.body.source.def_id())
                 .body(self.body.clone())
                 .drop_points(drop_points)
                 .run(&rty, expected_fn_ty);
