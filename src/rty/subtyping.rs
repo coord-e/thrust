@@ -94,8 +94,17 @@ where
                         let cs = self.relate_sub_refined_type(&got.elem, &expected.elem);
                         clauses.extend(cs);
                     }
-                    PointerKind::Own | PointerKind::Ref(RefKind::Mut) => {
+                    PointerKind::Ref(RefKind::Mut) => {
                         let cs = self.relate_equal_refined_type(&got.elem, &expected.elem);
+                        clauses.extend(cs);
+                    }
+                    PointerKind::Own => {
+                        // The pointee refinement is folded into the enclosing
+                        // obligation via `box_current` (see
+                        // `own_pointee_flattened_refinement`), so it is bound to
+                        // the box value rather than a fresh variable. Here we
+                        // only relate the pointee's structure.
+                        let cs = self.relate_sub_type(&got.elem.ty, &expected.elem.ty);
                         clauses.extend(cs);
                     }
                 }
@@ -148,8 +157,8 @@ where
         let cs = self
             .build_clause()
             .with_value_var(&got.ty)
-            .add_body(got.refinement.clone())
-            .head(expected.refinement.clone());
+            .add_body(got.own_pointee_flattened_refinement())
+            .head(expected.own_pointee_flattened_refinement());
         clauses.extend(cs);
         clauses
     }

@@ -217,8 +217,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let cs = builder
             .with_value_var(&got.ret.ty)
-            .add_body(got.ret.refinement)
-            .head(expected_ret.refinement);
+            .add_body(got.ret.own_pointee_flattened_refinement())
+            .head(expected_ret.own_pointee_flattened_refinement());
         clauses.extend(cs);
 
         clauses.extend(builder.relate_sub_type(&got.ret.ty, &expected_ret.ty));
@@ -304,12 +304,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let cs = builder
                 .clone()
                 .with_value_var(&got_ty.ty)
-                .add_body(expected_ty.refinement.clone())
-                .head(got_ty.refinement.clone());
+                .add_body(expected_ty.own_pointee_flattened_refinement())
+                .head(got_ty.own_pointee_flattened_refinement());
             clauses.extend(cs);
             builder
                 .with_mapped_value_var(param_idx)
-                .add_body(expected_ty.refinement.clone());
+                .add_body(expected_ty.own_pointee_flattened_refinement());
             clauses.extend(builder.relate_sub_type(&expected_ty.ty, &got_ty.ty));
         }
 
@@ -678,8 +678,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let cs = builder
             .with_value_var(&expected_fn.ret.ty)
-            .add_body(ret_rty.refinement)
-            .head(expected_fn.ret.refinement.clone());
+            .add_body(ret_rty.own_pointee_flattened_refinement())
+            .head(expected_fn.ret.own_pointee_flattened_refinement());
         clauses.extend(cs);
         clauses.extend(builder.relate_sub_type(&ret_rty.ty, &expected_fn.ret.ty));
 

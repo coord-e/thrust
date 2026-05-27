@@ -1548,6 +1548,33 @@ impl<FV> RefinedType<FV> {
         }
     }
 
+    /// Returns this type's refinement conjoined with the refinements carried by
+    /// any owned-pointer (`Box`) pointees reachable through `own` chains, each
+    /// rewritten to refer to the pointee value via `box_current` of the box.
+    ///
+    /// Refinements on owned pointers conventionally live at the outer (box)
+    /// level in Thrust (cf. [`RefinedType::boxed`]). A pointee refinement
+    /// written directly on the pointee (e.g. from a `Box<{v | v > 0}>`
+    /// annotation) only constrains the data once it is expressed in terms of
+    /// `box_current` of the box value; subtyping uses this to relate the
+    /// pointee refinement against the box value rather than a fresh,
+    /// disconnected variable.
+    pub fn own_pointee_flattened_refinement(&self) -> Refinement<FV>
+    where
+        FV: chc::Var,
+    {
+        let mut refinement = self.refinement.clone();
+        if let Type::Pointer(p) = &self.ty {
+            if p.kind == PointerKind::Own {
+                let pointee = p.elem.own_pointee_flattened_refinement();
+                refinement.push_conj(
+                    pointee.subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).box_current()),
+                );
+            }
+        }
+        refinement
+    }
+
     pub fn subst_var<F, W>(self, mut f: F) -> RefinedType<W>
     where
         F: FnMut(FV) -> chc::Term<W>,
