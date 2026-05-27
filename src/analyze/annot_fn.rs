@@ -5,7 +5,7 @@ use std::rc::Rc;
 use pretty::{termcolor, Pretty};
 use rustc_hir::{def_id::LocalDefId, HirId};
 use rustc_index::IndexVec;
-use rustc_middle::ty::{self as mir_ty, TyCtxt};
+use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeFoldable};
 
 use crate::analyze::{self, did_cache::DefIdCache, TypeParamMap};
 use crate::annot::AnnotFormula;
@@ -224,29 +224,48 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
         }
     }
 
+    fn instantiate_generics<T>(
+        &self,
+        ty: T,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Option<T>
+    where
+        T: TypeFoldable<TyCtxt<'tcx>>,
+    {
+        if !self.generic_args.is_empty() {
+            Some(mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, generic_args))
+        } else {
+            None
+        }
+    }
+
     fn expr_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.expr_ty(expr);
-        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
+        let instantiated = self
+            .instantiate_generics(ty, self.generic_args)
+            .unwrap_or(ty);
         let typing_env = mir_ty::TypingEnv::fully_monomorphized();
         self.tcx.normalize_erasing_regions(typing_env, instantiated)
     }
 
     fn pat_ty(&self, pat: &'tcx rustc_hir::Pat<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.pat_ty(pat);
-        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
+        let instantiated = self
+            .instantiate_generics(ty, self.generic_args)
+            .unwrap_or(ty);
         let typing_env = mir_ty::TypingEnv::fully_monomorphized();
         self.tcx.normalize_erasing_regions(typing_env, instantiated)
     }
 
     pub fn to_formula_fn(&self) -> FormulaFn<'tcx> {
         let formula = self.to_formula(self.body.value);
-        let params = self
-            .tcx
-            .fn_sig(self.local_def_id.to_def_id())
-            .instantiate(self.tcx, self.generic_args)
-            .skip_binder()
-            .inputs()
-            .to_vec();
+        let fn_sig = self.tcx.fn_sig(self.local_def_id.to_def_id());
+        let binder = if self.generic_args.is_empty() {
+            fn_sig.skip_binder()
+        } else {
+            fn_sig.instantiate(self.tcx, self.generic_args)
+        };
+        let params = binder.skip_binder().inputs().to_vec();
         FormulaFn {
             params: IndexVec::from_raw(params),
             formula,
@@ -515,8 +534,12 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                                 outer_generic_args = ?self.generic_args,
                                 "resolving predicate call in formula"
                             );
-                            let generic_args = mir_ty::EarlyBinder::bind(generic_args)
-                                .instantiate(self.tcx, self.generic_args);
+                            let (is_unresolved_args, generic_args) =
+                                match self.instantiate_generics(generic_args, self.generic_args) {
+                                    Some(args) => (false, args),
+                                    None => (true, generic_args),
+                                };
+
                             let instance = mir_ty::Instance::try_resolve(
                                 self.tcx,
                                 typing_env,
@@ -524,14 +547,15 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                                 generic_args,
                             )
                             .unwrap();
-                            let pred_def_id = if let Some(instance) = instance {
-                                instance.def_id()
+                            let pred_def_id = instance.map_or(def_id, |instance| instance.def_id());
+
+                            let pred = if is_unresolved_args {
+                                refine::user_defined_pred(self.tcx, pred_def_id).into()
                             } else {
-                                def_id
+                                refine::forall_pred(self.tcx, pred_def_id).into()
                             };
-                            let pred = refine::user_defined_pred(self.tcx, pred_def_id);
                             let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
-                            let atom = chc::Atom::new(pred.into(), arg_terms);
+                            let atom = chc::Atom::new(pred, arg_terms);
                             return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
                         }
                     }
