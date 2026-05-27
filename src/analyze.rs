@@ -547,15 +547,16 @@ impl<'tcx> Analyzer<'tcx> {
         &mut self,
         local_def_id: LocalDefId,
         bb: BasicBlock,
+        owner_fn_id: DefId
     ) -> basic_block::Analyzer<'tcx, '_> {
-        basic_block::Analyzer::new(self, local_def_id, bb)
+        basic_block::Analyzer::new(self, local_def_id, bb, owner_fn_id)
     }
 
-    pub fn type_builder(&self, def_ids: DefIdCache<'tcx>, def_id: DefId) -> TypeBuilder<'tcx> {
+    pub fn type_builder(&self, def_ids: DefIdCache<'tcx>, owner_fn_id: DefId) -> TypeBuilder<'tcx> {
         TypeBuilder::new(
             self.tcx,
             def_ids,
-            def_id,
+            owner_fn_id,
             self.type_params.clone(),
             self.system.clone(),
         )

@@ -1166,6 +1166,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ctx: &'ctx mut analyze::Analyzer<'tcx>,
         local_def_id: LocalDefId,
         basic_block: BasicBlock,
+        owner_fn_id: DefId,
     ) -> Self {
         let tcx = ctx.tcx;
         let drop_points = DropPoints::default();
@@ -1173,7 +1174,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let env = ctx.new_env();
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
-        let type_builder = ctx.type_builder(ctx.def_ids(), local_def_id.to_def_id());
+        let type_builder = ctx.type_builder(ctx.def_ids(), owner_fn_id);
         Self {
             ctx,
             tcx,

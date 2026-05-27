@@ -73,7 +73,7 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
-    def_id: DefId,
+    owner_fn_id: DefId,
     typing_env: mir_ty::TypingEnv<'tcx>,
     type_params: Rc<RefCell<TypeParamMap>>,
     system: Rc<RefCell<chc::System>>,
@@ -83,15 +83,16 @@ impl<'tcx> TypeBuilder<'tcx> {
     pub fn new(
         tcx: mir_ty::TyCtxt<'tcx>,
         def_ids: DefIdCache<'tcx>,
-        def_id: DefId,
+        owner_fn_id: DefId,
         type_params: Rc<RefCell<TypeParamMap>>,
         system: Rc<RefCell<chc::System>>,
     ) -> Self {
-        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, def_id);
+        tracing::debug!("TypeBuilder is created for {owner_fn_id:?}.");
+        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, owner_fn_id);
         Self {
             tcx,
             def_ids,
-            def_id,
+            owner_fn_id,
             typing_env,
             type_params,
             system,
@@ -101,8 +102,17 @@ impl<'tcx> TypeBuilder<'tcx> {
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
         let mut type_params = self.type_params.borrow_mut();
         let index = type_params
-            .entry(TypeParam::GenericType(self.def_id, ty.index))
-            .or_insert_with(|| self.system.borrow_mut().new_forall_sort());
+            .entry(TypeParam::GenericType(self.owner_fn_id, ty.index))
+            .or_insert_with(|| {
+                let idx = self.system.borrow_mut().new_forall_sort();
+                tracing::debug!(
+                    "issue the new ForallSortIdx {} for ParamTy {:?} at {:?}.",
+                    idx,
+                    ty,
+                    self.owner_fn_id
+                );
+                idx
+            });
         rty::ParamType::new(*index).into()
     }
 
@@ -110,7 +120,11 @@ impl<'tcx> TypeBuilder<'tcx> {
         let mut type_params = self.type_params.borrow_mut();
         let index = type_params
             .entry(TypeParam::AssocType(ty.def_id))
-            .or_insert_with(|| self.system.borrow_mut().new_forall_sort());
+            .or_insert_with(|| {
+                let idx = self.system.borrow_mut().new_forall_sort();
+                tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:#?}.", idx, ty);
+                idx
+            });
         rty::ParamType::new(*index).into()
     }
 
