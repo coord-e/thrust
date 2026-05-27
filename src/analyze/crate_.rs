@@ -8,7 +8,7 @@ use rustc_span::def_id::LocalDefId;
 
 use crate::analyze;
 use crate::chc;
-use crate::rty::{self, ClauseBuilderExt as _};
+use crate::rty::ClauseBuilderExt as _;
 
 /// An implementation of local crate analysis.
 ///
@@ -139,16 +139,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
             // check polymorphic function def by replacing type params with some opaque type
             // (and this is no-op if the function is mono)
-            let mut expected = expected.clone();
-            let subst = rty::TypeParamSubst::new(
-                expected
-                    .free_ty_params()
-                    .into_iter()
-                    .map(|ty_param| (ty_param, rty::RefinedType::unrefined(rty::Type::int())))
-                    .collect(),
-            );
+            let expected = expected.clone();
             tracing::debug!("expected type of {:?} is {:#?}", local_def_id, expected);
-            expected.subst_ty_params(&subst);
             let generic_args = self.placeholder_generic_args(*local_def_id);
             self.ctx
                 .local_def_analyzer(*local_def_id)
@@ -187,12 +179,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let arg = match param.kind {
                 mir_ty::GenericParamDefKind::Type { .. } => {
                     if constrained_params.contains(&param.index) {
-                        panic!(
-                            "unable to check generic function with constrained type parameter: {}",
-                            self.tcx.def_path_str(local_def_id)
-                        );
+                        mir_ty::Ty::new_param(self.tcx, param.index, param.name).into()
+                    } else {
+                        self.tcx.types.i32.into()
                     }
-                    self.tcx.types.i32.into()
                 }
                 mir_ty::GenericParamDefKind::Const { .. } => {
                     unimplemented!()
