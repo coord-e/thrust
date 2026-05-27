@@ -554,12 +554,13 @@ impl ExpandedTokens {
 // Refinement-type annotations: `param`, `ret`, `sig`.
 //
 // These lower refinement types (e.g. `List<{ v: i32 | v > 0 }>`) into
-// `#[thrust::formula_fn]`s plus positioned `#[thrust::refine(..)]` path
-// statements injected into the function body. The "type position" addresses
-// into the function type: its root selects a parameter (by index) or the
-// return (the `result` keyword), and the projection (the remaining indices)
-// descends into generic arguments (enum args / `Box` pointee). For example,
-// `#[thrust::refine(result, 0)]` is the first type-argument of the return.
+// `#[thrust::formula_fn]`s plus positioned `#[thrust::refinement_path(..)]`
+// path statements injected into the function body. The "type position"
+// addresses into the function type: a parameter (by index) or the return (the
+// `result` keyword) selects a function slot, and bracket steps (`[i]`) descend
+// into generic arguments (enum args / `Box` pointee). For example,
+// `#[thrust::refinement_path(result, [0])]` is the first type-argument of the
+// return.
 // ---------------------------------------------------------------------------
 
 /// One step in a refinement's type-position path.
@@ -980,7 +981,7 @@ fn refine_path_stmt(func: &FnItemWithSignature, r: &Refinement) -> TokenStream2 
         }
     });
     quote! {
-        #[thrust::refine(#(#encoded_steps),*)]
+        #[thrust::refinement_path(#(#encoded_steps),*)]
         #path_prefix #name #turbofish;
     }
 }

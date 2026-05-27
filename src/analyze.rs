@@ -790,8 +790,8 @@ impl<'tcx> Analyzer<'tcx> {
         ensure_annot
     }
 
-    /// Collects every `#[thrust::refine(..)]` path statement in the function
-    /// body, returning each `(type position, formula_fn DefId)`.
+    /// Collects every `#[thrust::refinement_path(..)]` path statement in the
+    /// function body, returning each `(type position, formula_fn DefId)`.
     fn extract_refine_paths(&self, local_def_id: LocalDefId) -> Vec<(rty::TypePosition, DefId)> {
         let mut out = Vec::new();
         let Some(body) = self.tcx.hir_maybe_body_owned_by(local_def_id) else {
@@ -800,7 +800,7 @@ impl<'tcx> Analyzer<'tcx> {
         let rustc_hir::ExprKind::Block(block, _) = body.value.kind else {
             return out;
         };
-        let attr_path = analyze::annot::refine_path();
+        let attr_path = analyze::annot::refinement_path_path();
         let typeck = self.tcx.typeck(local_def_id);
         for stmt in block.stmts {
             let Some(attr) = self
@@ -840,8 +840,8 @@ impl<'tcx> Analyzer<'tcx> {
         out
     }
 
-    /// Resolves every `#[thrust::refine(..)]` annotation into a positioned
-    /// refinement, by translating the referenced formula function.
+    /// Resolves every `#[thrust::refinement_path(..)]` annotation into a
+    /// positioned refinement, by translating the referenced formula function.
     pub fn extract_refine_annots(
         &self,
         local_def_id: LocalDefId,

@@ -61,8 +61,8 @@ pub fn ensures_path_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("ensures_path")]
 }
 
-pub fn refine_path() -> [Symbol; 2] {
-    [Symbol::intern("thrust"), Symbol::intern("refine")]
+pub fn refinement_path_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("refinement_path")]
 }
 
 pub fn model_ty_path() -> [Symbol; 3] {
@@ -211,8 +211,8 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
     d.tokens
 }
 
-/// Parses a [`rty::TypePosition`] from the tokens of a `#[thrust::refine(..)]`
-/// attribute.
+/// Parses a [`rty::TypePosition`] from the tokens of a
+/// `#[thrust::refinement_path(..)]` attribute.
 ///
 /// Tokens are comma-separated steps. Each step is one of:
 /// - The keyword `result` → [`rty::TypePositionStep::Return`] (navigate to a
