@@ -73,7 +73,8 @@ where
             (Type::Int, Type::Int)
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
-            | (Type::Never, Type::Never) => {}
+            | (Type::Never, Type::Never)
+            | (Type::Param(_), Type::Param(_)) => {}
             (Type::Enum(got), Type::Enum(expected)) if got.symbol() == expected.symbol() => {
                 for (got_ty, expected_ty) in got.args.iter().zip(expected.args.iter()) {
                     let cs = self.relate_sub_refined_type(got_ty, expected_ty);
