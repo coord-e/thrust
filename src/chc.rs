@@ -1044,6 +1044,32 @@ impl UserDefinedPred {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForallPred {
+    inner: String,
+}
+
+impl std::fmt::Display for ForallPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ForallPred
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator.text(self.inner.clone())
+    }
+}
+
+impl ForallPred {
+    pub fn new(inner: String) -> Self {
+        Self { inner }
+    }
+}
+
 /// A predicate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pred {
@@ -1051,6 +1077,7 @@ pub enum Pred {
     Var(PredVarId),
     Matcher(MatcherPred),
     UserDefined(UserDefinedPred),
+    ForallPred(ForallPred),
 }
 
 impl std::fmt::Display for Pred {
@@ -1060,6 +1087,7 @@ impl std::fmt::Display for Pred {
             Pred::Var(p) => p.fmt(f),
             Pred::Matcher(p) => p.fmt(f),
             Pred::UserDefined(p) => p.fmt(f),
+            Pred::ForallPred(p) => p.fmt(f),
         }
     }
 }
@@ -1075,6 +1103,7 @@ where
             Pred::Var(p) => p.pretty(allocator),
             Pred::Matcher(p) => p.pretty(allocator),
             Pred::UserDefined(p) => p.pretty(allocator),
+            Pred::ForallPred(p) => p.pretty(allocator),
         }
     }
 }
@@ -1103,6 +1132,12 @@ impl From<UserDefinedPred> for Pred {
     }
 }
 
+impl From<ForallPred> for Pred {
+    fn from(p: ForallPred) -> Self {
+        Pred::ForallPred(p)
+    }
+}
+
 impl Pred {
     pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
@@ -1110,6 +1145,7 @@ impl Pred {
             Pred::Var(p) => p.to_string().into(),
             Pred::Matcher(p) => p.name().into(),
             Pred::UserDefined(p) => p.to_string().into(),
+            Pred::ForallPred(p) => p.to_string().into(),
         }
     }
 
@@ -1119,6 +1155,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1128,6 +1165,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1137,6 +1175,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1146,6 +1185,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 }
