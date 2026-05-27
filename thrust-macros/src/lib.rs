@@ -6,7 +6,7 @@ use syn::{
     WherePredicate,
 };
 
-mod refine;
+mod rty;
 
 #[derive(Debug, Clone)]
 enum FnOuterItem {
@@ -554,17 +554,17 @@ impl ExpandedTokens {
 
 #[proc_macro_attribute]
 pub fn param(attr: TokenStream, item: TokenStream) -> TokenStream {
-    refine::expand(refine::AnnotationKind::Param, attr, item)
+    rty::expand(rty::AnnotationKind::Param, attr, item)
 }
 
 #[proc_macro_attribute]
 pub fn ret(attr: TokenStream, item: TokenStream) -> TokenStream {
-    refine::expand(refine::AnnotationKind::Ret, attr, item)
+    rty::expand(rty::AnnotationKind::Ret, attr, item)
 }
 
 #[proc_macro_attribute]
 pub fn sig(attr: TokenStream, item: TokenStream) -> TokenStream {
-    refine::expand(refine::AnnotationKind::Sig, attr, item)
+    rty::expand(rty::AnnotationKind::Sig, attr, item)
 }
 
 fn mentions_self(sig: &syn::Signature) -> bool {

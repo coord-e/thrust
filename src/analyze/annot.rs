@@ -233,19 +233,19 @@ pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
         assert_eq!(
             lit.kind,
             LitKind::Integer,
-            "expected an integer in refine position"
+            "expected an integer in type position"
         );
         lit.symbol
             .as_str()
             .parse()
-            .expect("invalid integer in refine position")
+            .expect("invalid integer in type position")
     };
 
     let mut steps = Vec::new();
     let mut iter = ts.iter();
     while let Some(tt) = iter.next() {
         let TokenTree::Token(t, _) = tt else {
-            panic!("unexpected token tree in refine position");
+            panic!("unexpected token tree in type position");
         };
         match &t.kind {
             TokenKind::Comma => {}
@@ -256,22 +256,20 @@ pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
                 let i = match iter.next() {
                     Some(TokenTree::Token(t, _)) => match &t.kind {
                         TokenKind::Literal(lit) => parse_int(lit),
-                        _ => panic!("expected integer after `$` in refine position: {:?}", t),
+                        _ => panic!("expected integer after `$` in type position: {:?}", t),
                     },
-                    _ => panic!("expected integer after `$` in refine position"),
+                    _ => panic!("expected integer after `$` in type position"),
                 };
                 steps.push(rty::TypePositionStep::Param(rty::FunctionParamIdx::from(i)));
             }
             TokenKind::Literal(lit) => {
                 steps.push(rty::TypePositionStep::TypeArg(parse_int(lit)));
             }
-            _ => panic!("unexpected token in refine position: {:?}", t),
+            _ => panic!("unexpected token in type position: {:?}", t),
         }
     }
 
-    assert!(!steps.is_empty(), "empty refine position");
-    let first = steps.remove(0);
-    rty::TypePosition::new(first, steps)
+    rty::TypePosition::new(steps)
 }
 
 pub fn split_param(ts: &TokenStream) -> (Ident, TokenStream) {

@@ -117,15 +117,14 @@ impl std::fmt::Display for TypePositionStep {
     }
 }
 
-/// A path addressing a sub-type in a function's type signature, used to attach
-/// a refinement.
+/// A path addressing a sub-type within a type, used to attach a refinement.
 ///
-/// The first step must be [`TypePositionStep::Param`] or
-/// [`TypePositionStep::Return`] (selecting which slot of the top-level function
-/// type to enter). Subsequent steps can freely combine
-/// [`TypePositionStep::Param`] / [`TypePositionStep::Return`] (for
-/// function-typed positions) and [`TypePositionStep::TypeArg`] (for generic
-/// types), enabling positions inside higher-order function types.
+/// An empty path addresses the type itself. Each step descends one level:
+/// [`TypePositionStep::Param`] / [`TypePositionStep::Return`] enter a function
+/// type's parameter or return slot, and [`TypePositionStep::TypeArg`] enters a
+/// generic type argument. Steps combine freely, so positions inside
+/// higher-order function types are expressible. A path applied to a function
+/// type is therefore non-empty, beginning with a `Param`/`Return` step.
 ///
 /// Examples (function `fn f(x: List<T>) -> Box<T>`):
 /// - `$0` — parameter `x`.
@@ -139,9 +138,7 @@ pub struct TypePosition {
 }
 
 impl TypePosition {
-    pub fn new(first: TypePositionStep, rest: Vec<TypePositionStep>) -> Self {
-        let mut steps = vec![first];
-        steps.extend(rest);
+    pub fn new(steps: Vec<TypePositionStep>) -> Self {
         TypePosition { steps }
     }
 

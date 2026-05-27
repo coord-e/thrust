@@ -578,7 +578,7 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     ) -> &mut Self {
         let (first, rest) = match position.steps().split_first() {
             Some(pair) => pair,
-            None => panic!("empty TypePosition"),
+            None => panic!("type position applied to a function type must not be empty"),
         };
         match first {
             rty::TypePositionStep::Param(idx) => {
@@ -603,7 +603,7 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
                     .install_refinement_at(rest, refinement);
             }
             rty::TypePositionStep::TypeArg(_) => {
-                panic!("TypePosition must start with Param or Return, not TypeArg");
+                panic!("type position applied to a function type must start with a param or result step, not a type argument");
             }
         }
         self

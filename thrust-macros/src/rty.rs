@@ -21,14 +21,14 @@ use super::{
 
 /// One step in a refinement's type-position path.
 ///
-/// Mirrors [`rty::TypePositionStep`] on the plugin side and uses the same
-/// attribute encoding:
+/// Mirrors the plugin's `rty::TypePositionStep` and uses the same attribute
+/// encoding:
 /// - [`Param`](Self::Param) / [`Return`](Self::Return) navigate into a function
 ///   type; encoded as `$i` / the `result` keyword.
 /// - [`TypeArg`](Self::TypeArg) navigates into a generic type argument; encoded
 ///   as a bare integer `i`.
 #[derive(Clone, Copy)]
-enum PositionStep {
+enum TypePositionStep {
     Param(usize),
     Return,
     TypeArg(usize),
@@ -37,7 +37,7 @@ enum PositionStep {
 #[derive(Clone)]
 struct Refinement {
     /// Full type-position path from the function root to the refined type.
-    steps: Vec<PositionStep>,
+    steps: Vec<TypePositionStep>,
     binder: syn::Ident,
     binder_ty: TokenStream2,
     formula: TokenStream2,
@@ -56,7 +56,7 @@ pub(crate) enum AnnotationKind {
 struct PositionedTypeExpr {
     /// Steps locating the root of `tokens` (e.g. `[Param(0)]` for the first
     /// parameter); [`scan_type`] appends `TypeArg` steps as it descends.
-    root: Vec<PositionStep>,
+    root: Vec<TypePositionStep>,
     tokens: Vec<TokenTree2>,
 }
 
@@ -143,14 +143,14 @@ fn annotated_type_exprs(
     let at_param = |func: &FnItemWithSignature, nt: NamedType| -> syn::Result<PositionedTypeExpr> {
         let idx = param_index(func, &nt.name)?;
         Ok(PositionedTypeExpr {
-            root: vec![PositionStep::Param(idx)],
+            root: vec![TypePositionStep::Param(idx)],
             tokens: nt.tokens,
         })
     };
     match kind {
         AnnotationKind::Param => Ok(vec![at_param(func, split_name_type(attr_tokens)?)?]),
         AnnotationKind::Ret => Ok(vec![PositionedTypeExpr {
-            root: vec![PositionStep::Return],
+            root: vec![TypePositionStep::Return],
             tokens: attr_tokens.to_vec(),
         }]),
         AnnotationKind::Sig => {
@@ -160,7 +160,7 @@ fn annotated_type_exprs(
                 exprs.push(at_param(func, param)?);
             }
             exprs.push(PositionedTypeExpr {
-                root: vec![PositionStep::Return],
+                root: vec![TypePositionStep::Return],
                 tokens: sig.ret,
             });
             Ok(exprs)
@@ -247,10 +247,10 @@ fn parse_sig_attr(tokens: &[TokenTree2]) -> syn::Result<SigAnnotation> {
 /// `steps` holds the path from the function root to the current type node.
 /// When a refinement `{binder: ty | formula}` is found the current `steps` are
 /// recorded; when descending into generic type arguments a
-/// [`PositionStep::TypeArg`]`(i)` step is appended to `steps`.
+/// [`TypePositionStep::TypeArg`]`(i)` step is appended to `steps`.
 fn scan_type(
     tokens: &[TokenTree2],
-    steps: Vec<PositionStep>,
+    steps: Vec<TypePositionStep>,
     out: &mut Vec<Refinement>,
 ) -> syn::Result<()> {
     if tokens.is_empty() {
@@ -285,7 +285,7 @@ fn scan_type(
                         continue;
                     }
                     let mut child = steps.clone();
-                    child.push(PositionStep::TypeArg(type_idx));
+                    child.push(TypePositionStep::TypeArg(type_idx));
                     scan_type(&arg, child, out)?;
                     type_idx += 1;
                 }
@@ -395,9 +395,9 @@ fn refine_fn_name(func: &FnItemWithSignature, r: &Refinement) -> syn::Ident {
         .steps
         .iter()
         .map(|s| match s {
-            PositionStep::Param(i) => format!("p{}", i),
-            PositionStep::Return => "ret".to_string(),
-            PositionStep::TypeArg(i) => format!("t{}", i),
+            TypePositionStep::Param(i) => format!("p{}", i),
+            TypePositionStep::Return => "ret".to_string(),
+            TypePositionStep::TypeArg(i) => format!("t{}", i),
         })
         .collect::<Vec<_>>()
         .join("_");
@@ -440,12 +440,12 @@ fn refine_path_stmt(func: &FnItemWithSignature, r: &Refinement) -> TokenStream2 
         quote!()
     };
     let encoded_steps = r.steps.iter().map(|s| match s {
-        PositionStep::Param(i) => {
+        TypePositionStep::Param(i) => {
             let lit = proc_macro2::Literal::usize_unsuffixed(*i);
             quote!($#lit)
         }
-        PositionStep::Return => quote!(result),
-        PositionStep::TypeArg(i) => {
+        TypePositionStep::Return => quote!(result),
+        TypePositionStep::TypeArg(i) => {
             let lit = proc_macro2::Literal::usize_unsuffixed(*i);
             quote!(#lit)
         }
