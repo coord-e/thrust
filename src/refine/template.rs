@@ -571,7 +571,7 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     /// The first step must be [`rty::TypePositionStep::Param`] or
     /// [`rty::TypePositionStep::Return`]; the remaining steps are forwarded to
     /// [`rty::RefinedType::install_refinement_at`].
-    pub fn refine(
+    pub fn install_refinement_at(
         &mut self,
         position: &rty::TypePosition,
         refinement: rty::Refinement<rty::FunctionParamIdx>,

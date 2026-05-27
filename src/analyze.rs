@@ -792,7 +792,10 @@ impl<'tcx> Analyzer<'tcx> {
 
     /// Collects every `#[thrust::refinement_path(..)]` path statement in the
     /// function body, returning each `(type position, formula_fn DefId)`.
-    fn extract_refine_paths(&self, local_def_id: LocalDefId) -> Vec<(rty::TypePosition, DefId)> {
+    fn extract_refinement_paths(
+        &self,
+        local_def_id: LocalDefId,
+    ) -> Vec<(rty::TypePosition, DefId)> {
         let mut out = Vec::new();
         let Some(body) = self.tcx.hir_maybe_body_owned_by(local_def_id) else {
             return out;
@@ -842,27 +845,27 @@ impl<'tcx> Analyzer<'tcx> {
 
     /// Resolves every `#[thrust::refinement_path(..)]` annotation into a
     /// positioned refinement, by translating the referenced formula function.
-    pub fn extract_refine_annots(
+    pub fn extract_refinement_annots(
         &self,
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Vec<(rty::TypePosition, rty::Refinement<rty::FunctionParamIdx>)> {
         let mut out = Vec::new();
-        for (position, def_id) in self.extract_refine_paths(local_def_id) {
+        for (position, def_id) in self.extract_refinement_paths(local_def_id) {
             let Some(formula_def_id) = def_id.as_local() else {
                 panic!(
-                    "refine annotation with path is expected to refer to a local def, but found: {:?}",
+                    "refinement_path annotation is expected to refer to a local def, but found: {:?}",
                     def_id
                 );
             };
             let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
                 panic!(
-                    "refine annotation {:?} is not a formula function",
+                    "refinement_path annotation {:?} is not a formula function",
                     formula_def_id
                 );
             };
             let AnnotFormula::Formula(formula) = formula_fn.to_ensure_annot() else {
-                panic!("refine annotation must lower to a plain formula");
+                panic!("refinement_path annotation must lower to a plain formula");
             };
             out.push((position, formula.into()));
         }

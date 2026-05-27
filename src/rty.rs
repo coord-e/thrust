@@ -95,7 +95,7 @@ where
 /// Using distinct variants for function navigation ([`Param`](Self::Param),
 /// [`Return`](Self::Return)) and generic-arg navigation
 /// ([`TypeArg`](Self::TypeArg)) allows the same path representation to address
-/// positions inside higher-order function types. For example, `$0.result`
+/// positions inside higher-order function types. For example, `$0, result`
 /// addresses the return type of a function-typed first parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypePositionStep {
@@ -130,9 +130,9 @@ impl std::fmt::Display for TypePositionStep {
 /// Examples (function `fn f(x: List<T>) -> Box<T>`):
 /// - `$0` — parameter `x`.
 /// - `result` — the return type.
-/// - `$0.0` — the first type arg of `x`.
-/// - `result.0` — the pointee of the `Box` return.
-/// - `$0.result` — the return of a function-typed param `x`.
+/// - `$0, 0` — the first type arg of `x`.
+/// - `result, 0` — the pointee of the `Box` return.
+/// - `$0, result` — the return of a function-typed param `x`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypePosition {
     steps: Vec<TypePositionStep>,
@@ -157,7 +157,7 @@ impl std::fmt::Display for TypePosition {
             write!(f, "{}", first)?;
         }
         for s in iter {
-            write!(f, ".{}", s)?;
+            write!(f, ", {}", s)?;
         }
         Ok(())
     }

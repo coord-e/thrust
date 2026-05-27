@@ -554,17 +554,17 @@ impl ExpandedTokens {
 
 #[proc_macro_attribute]
 pub fn param(attr: TokenStream, item: TokenStream) -> TokenStream {
-    refine::expand_refine(refine::RefineKind::Param, attr, item)
+    refine::expand(refine::AnnotationKind::Param, attr, item)
 }
 
 #[proc_macro_attribute]
 pub fn ret(attr: TokenStream, item: TokenStream) -> TokenStream {
-    refine::expand_refine(refine::RefineKind::Ret, attr, item)
+    refine::expand(refine::AnnotationKind::Ret, attr, item)
 }
 
 #[proc_macro_attribute]
 pub fn sig(attr: TokenStream, item: TokenStream) -> TokenStream {
-    refine::expand_refine(refine::RefineKind::Sig, attr, item)
+    refine::expand(refine::AnnotationKind::Sig, attr, item)
 }
 
 fn mentions_self(sig: &syn::Signature) -> bool {

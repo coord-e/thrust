@@ -28,7 +28,7 @@ use super::{
 /// - [`TypeArg`](Self::TypeArg) navigates into a generic type argument; encoded
 ///   as a bare integer `i`.
 #[derive(Clone, Copy)]
-enum RefineStep {
+enum PositionStep {
     Param(usize),
     Return,
     TypeArg(usize),
@@ -37,19 +37,37 @@ enum RefineStep {
 #[derive(Clone)]
 struct Refinement {
     /// Full type-position path from the function root to the refined type.
-    steps: Vec<RefineStep>,
+    steps: Vec<PositionStep>,
     binder: syn::Ident,
     binder_ty: TokenStream2,
     formula: TokenStream2,
 }
 
-pub(crate) enum RefineKind {
+/// Which refinement-type annotation is being expanded.
+pub(crate) enum AnnotationKind {
     Param,
     Ret,
     Sig,
 }
 
-pub(crate) fn expand_refine(kind: RefineKind, attr: TokenStream, item: TokenStream) -> TokenStream {
+/// A type expression from the annotation, paired with the position of its root
+/// within the function signature. [`scan_type`] walks each one to extract the
+/// refinements it contains.
+struct PositionedTypeExpr {
+    /// Steps locating the root of `tokens` (e.g. `[Param(0)]` for the first
+    /// parameter); [`scan_type`] appends `TypeArg` steps as it descends.
+    root: Vec<PositionStep>,
+    tokens: Vec<TokenTree2>,
+}
+
+/// A `name : type` binding, e.g. a parameter in a `sig` annotation or the
+/// binder of a refinement `{ name: type | .. }`.
+struct NamedType {
+    name: syn::Ident,
+    tokens: Vec<TokenTree2>,
+}
+
+pub(crate) fn expand(kind: AnnotationKind, attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut func = parse_macro_input!(item as FnItemWithSignature);
 
     let outer_context = match extract_outer_context(&func) {
@@ -61,8 +79,8 @@ pub(crate) fn expand_refine(kind: RefineKind, attr: TokenStream, item: TokenStre
     };
 
     let attr_tokens: Vec<TokenTree2> = TokenStream2::from(attr).into_iter().collect();
-    let jobs = match build_refine_jobs(kind, &func, &attr_tokens) {
-        Ok(jobs) => jobs,
+    let type_exprs = match annotated_type_exprs(kind, &func, &attr_tokens) {
+        Ok(exprs) => exprs,
         Err(e) => {
             let err = e.to_compile_error();
             return quote! { #err #func }.into();
@@ -70,8 +88,8 @@ pub(crate) fn expand_refine(kind: RefineKind, attr: TokenStream, item: TokenStre
     };
 
     let mut refinements = Vec::new();
-    for (root_steps, ty_tokens) in jobs {
-        if let Err(e) = scan_type(&ty_tokens, root_steps, &mut refinements) {
+    for expr in type_exprs {
+        if let Err(e) = scan_type(&expr.tokens, expr.root, &mut refinements) {
             let err = e.to_compile_error();
             return quote! { #err #func }.into();
         }
@@ -115,33 +133,37 @@ pub(crate) fn expand_refine(kind: RefineKind, attr: TokenStream, item: TokenStre
     .into()
 }
 
-/// Builds `(root_steps, type_tokens)` jobs to scan from the attribute tokens.
-///
-/// Each job's `root_steps` contains the initial [`RefineStep`]s that fix the
-/// position of the type expression within the function signature (e.g.
-/// `[Param(0)]` for the first parameter).  [`scan_type`] will append further
-/// [`RefineStep::TypeArg`] steps as it descends into generic type arguments.
-fn build_refine_jobs(
-    kind: RefineKind,
+/// Turns an annotation into the type expressions to scan, each anchored at its
+/// root position within the function signature.
+fn annotated_type_exprs(
+    kind: AnnotationKind,
     func: &FnItemWithSignature,
     attr_tokens: &[TokenTree2],
-) -> syn::Result<Vec<(Vec<RefineStep>, Vec<TokenTree2>)>> {
+) -> syn::Result<Vec<PositionedTypeExpr>> {
+    let at_param = |func: &FnItemWithSignature, nt: NamedType| -> syn::Result<PositionedTypeExpr> {
+        let idx = param_index(func, &nt.name)?;
+        Ok(PositionedTypeExpr {
+            root: vec![PositionStep::Param(idx)],
+            tokens: nt.tokens,
+        })
+    };
     match kind {
-        RefineKind::Param => {
-            let (name, ty_tokens) = split_name_type(attr_tokens)?;
-            let idx = param_index(func, &name)?;
-            Ok(vec![(vec![RefineStep::Param(idx)], ty_tokens)])
-        }
-        RefineKind::Ret => Ok(vec![(vec![RefineStep::Return], attr_tokens.to_vec())]),
-        RefineKind::Sig => {
-            let (args, ret_tokens) = parse_sig_attr(attr_tokens)?;
-            let mut jobs = Vec::new();
-            for (name, ty_tokens) in args {
-                let idx = param_index(func, &name)?;
-                jobs.push((vec![RefineStep::Param(idx)], ty_tokens));
+        AnnotationKind::Param => Ok(vec![at_param(func, split_name_type(attr_tokens)?)?]),
+        AnnotationKind::Ret => Ok(vec![PositionedTypeExpr {
+            root: vec![PositionStep::Return],
+            tokens: attr_tokens.to_vec(),
+        }]),
+        AnnotationKind::Sig => {
+            let sig = parse_sig_attr(attr_tokens)?;
+            let mut exprs = Vec::new();
+            for param in sig.params {
+                exprs.push(at_param(func, param)?);
             }
-            jobs.push((vec![RefineStep::Return], ret_tokens));
-            Ok(jobs)
+            exprs.push(PositionedTypeExpr {
+                root: vec![PositionStep::Return],
+                tokens: sig.ret,
+            });
+            Ok(exprs)
         }
     }
 }
@@ -157,7 +179,7 @@ fn param_index(func: &FnItemWithSignature, name: &syn::Ident) -> syn::Result<usi
 }
 
 /// Parses `name : <type tokens>` from a flat token slice.
-fn split_name_type(tokens: &[TokenTree2]) -> syn::Result<(syn::Ident, Vec<TokenTree2>)> {
+fn split_name_type(tokens: &[TokenTree2]) -> syn::Result<NamedType> {
     let name = match tokens.first() {
         Some(TokenTree2::Ident(id)) => id.clone(),
         _ => return Err(err_tokens(tokens, "expected a parameter name")),
@@ -166,14 +188,20 @@ fn split_name_type(tokens: &[TokenTree2]) -> syn::Result<(syn::Ident, Vec<TokenT
         Some(TokenTree2::Punct(p)) if p.as_char() == ':' => {}
         _ => return Err(err_tokens(tokens, "expected `:` after parameter name")),
     }
-    Ok((name, tokens[2..].to_vec()))
+    Ok(NamedType {
+        name,
+        tokens: tokens[2..].to_vec(),
+    })
 }
 
-/// Parses `fn ( n0: t0 , ... ) -> ret` into `((name, ty_tokens)*, ret_tokens)`.
-#[allow(clippy::type_complexity)]
-fn parse_sig_attr(
-    tokens: &[TokenTree2],
-) -> syn::Result<(Vec<(syn::Ident, Vec<TokenTree2>)>, Vec<TokenTree2>)> {
+/// The parsed parts of a `fn ( n0: t0 , ... ) -> ret` signature annotation.
+struct SigAnnotation {
+    params: Vec<NamedType>,
+    ret: Vec<TokenTree2>,
+}
+
+/// Parses `fn ( n0: t0 , ... ) -> ret`.
+fn parse_sig_attr(tokens: &[TokenTree2]) -> syn::Result<SigAnnotation> {
     match tokens.first() {
         Some(TokenTree2::Ident(id)) if id == "fn" => {}
         _ => return Err(err_tokens(tokens, "expected `fn` in sig annotation")),
@@ -183,13 +211,13 @@ fn parse_sig_attr(
         _ => return Err(err_tokens(tokens, "expected `(..)` after `fn`")),
     };
 
-    let mut args = Vec::new();
+    let mut params = Vec::new();
     let arg_tokens: Vec<TokenTree2> = arg_group.stream().into_iter().collect();
     for arg in split_top_level_commas(&arg_tokens) {
         if arg.is_empty() {
             continue;
         }
-        args.push(split_name_type(&arg)?);
+        params.push(split_name_type(&arg)?);
     }
 
     // expect `->` then the return type
@@ -207,7 +235,10 @@ fn parse_sig_attr(
             ))
         }
     }
-    Ok((args, rest.to_vec()))
+    Ok(SigAnnotation {
+        params,
+        ret: rest.to_vec(),
+    })
 }
 
 /// Scans a type expression and records every refinement node with its full
@@ -216,10 +247,10 @@ fn parse_sig_attr(
 /// `steps` holds the path from the function root to the current type node.
 /// When a refinement `{binder: ty | formula}` is found the current `steps` are
 /// recorded; when descending into generic type arguments a
-/// [`RefineStep::TypeArg`]`(i)` step is appended to `steps`.
+/// [`PositionStep::TypeArg`]`(i)` step is appended to `steps`.
 fn scan_type(
     tokens: &[TokenTree2],
-    steps: Vec<RefineStep>,
+    steps: Vec<PositionStep>,
     out: &mut Vec<Refinement>,
 ) -> syn::Result<()> {
     if tokens.is_empty() {
@@ -230,15 +261,15 @@ fn scan_type(
     if tokens.len() == 1 {
         if let TokenTree2::Group(g) = &tokens[0] {
             if g.delimiter() == proc_macro2::Delimiter::Brace {
-                let (binder, binder_ty, formula) = split_refinement(g.stream())?;
+                let (binder, formula) = split_refinement(g.stream())?;
                 out.push(Refinement {
                     steps: steps.clone(),
-                    binder,
-                    binder_ty: binder_ty.iter().cloned().collect(),
+                    binder: binder.name,
+                    binder_ty: binder.tokens.iter().cloned().collect(),
                     formula,
                 });
                 // Descend into the binder type for nested refinements.
-                scan_type(&binder_ty, steps, out)?;
+                scan_type(&binder.tokens, steps, out)?;
                 return Ok(());
             }
         }
@@ -254,7 +285,7 @@ fn scan_type(
                         continue;
                     }
                     let mut child = steps.clone();
-                    child.push(RefineStep::TypeArg(type_idx));
+                    child.push(PositionStep::TypeArg(type_idx));
                     scan_type(&arg, child, out)?;
                     type_idx += 1;
                 }
@@ -265,18 +296,16 @@ fn scan_type(
     Ok(())
 }
 
-/// Splits `{ binder : ty | formula }` contents into its parts.
-fn split_refinement(
-    stream: TokenStream2,
-) -> syn::Result<(syn::Ident, Vec<TokenTree2>, TokenStream2)> {
+/// Splits `{ binder : ty | formula }` into its binder and formula expression.
+fn split_refinement(stream: TokenStream2) -> syn::Result<(NamedType, TokenStream2)> {
     let toks: Vec<TokenTree2> = stream.into_iter().collect();
     let bar = toks
         .iter()
         .position(|tt| matches!(tt, TokenTree2::Punct(p) if p.as_char() == '|'))
         .ok_or_else(|| err_tokens(&toks, "refinement type must contain `|`"))?;
-    let (binder, binder_ty) = split_name_type(&toks[..bar])?;
+    let binder = split_name_type(&toks[..bar])?;
     let formula: TokenStream2 = toks[bar + 1..].iter().cloned().collect();
-    Ok((binder, binder_ty, formula))
+    Ok((binder, formula))
 }
 
 /// Splits the tokens following an opening `<` at top level by commas, stopping
@@ -366,9 +395,9 @@ fn refine_fn_name(func: &FnItemWithSignature, r: &Refinement) -> syn::Ident {
         .steps
         .iter()
         .map(|s| match s {
-            RefineStep::Param(i) => format!("p{}", i),
-            RefineStep::Return => "ret".to_string(),
-            RefineStep::TypeArg(i) => format!("t{}", i),
+            PositionStep::Param(i) => format!("p{}", i),
+            PositionStep::Return => "ret".to_string(),
+            PositionStep::TypeArg(i) => format!("t{}", i),
         })
         .collect::<Vec<_>>()
         .join("_");
@@ -411,12 +440,12 @@ fn refine_path_stmt(func: &FnItemWithSignature, r: &Refinement) -> TokenStream2 
         quote!()
     };
     let encoded_steps = r.steps.iter().map(|s| match s {
-        RefineStep::Param(i) => {
+        PositionStep::Param(i) => {
             let lit = proc_macro2::Literal::usize_unsuffixed(*i);
             quote!($#lit)
         }
-        RefineStep::Return => quote!(result),
-        RefineStep::TypeArg(i) => {
+        PositionStep::Return => quote!(result),
+        PositionStep::TypeArg(i) => {
             let lit = proc_macro2::Literal::usize_unsuffixed(*i);
             quote!(#lit)
         }
