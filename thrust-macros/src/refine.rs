@@ -3,10 +3,10 @@
 //! These lower refinement types (e.g. `List<{ v: i32 | v > 0 }>`) into
 //! `#[thrust::formula_fn]`s plus positioned `#[thrust::refinement_path(..)]`
 //! path statements injected into the function body. The "type position"
-//! addresses into the function type: a parameter (by index) or the return (the
-//! `result` keyword) selects a function slot, and bracket steps (`[i]`) descend
-//! into generic arguments (enum args / `Box` pointee). For example,
-//! `#[thrust::refinement_path(result, [0])]` is the first type-argument of the
+//! addresses into the function type: a parameter (`$i`) or the return (the
+//! `result` keyword) selects a function slot, and bare integer steps (`i`)
+//! descend into generic arguments (enum args / `Box` pointee). For example,
+//! `#[thrust::refinement_path(result, 0)]` is the first type-argument of the
 //! return.
 
 use proc_macro::TokenStream;
@@ -24,9 +24,9 @@ use super::{
 /// Mirrors [`rty::TypePositionStep`] on the plugin side and uses the same
 /// attribute encoding:
 /// - [`Param`](Self::Param) / [`Return`](Self::Return) navigate into a function
-///   type; encoded as an integer literal / the `result` keyword.
+///   type; encoded as `$i` / the `result` keyword.
 /// - [`TypeArg`](Self::TypeArg) navigates into a generic type argument; encoded
-///   as a bracket group `[i]`.
+///   as a bare integer `i`.
 #[derive(Clone, Copy)]
 enum RefineStep {
     Param(usize),
@@ -413,12 +413,12 @@ fn refine_path_stmt(func: &FnItemWithSignature, r: &Refinement) -> TokenStream2 
     let encoded_steps = r.steps.iter().map(|s| match s {
         RefineStep::Param(i) => {
             let lit = proc_macro2::Literal::usize_unsuffixed(*i);
-            quote!(#lit)
+            quote!($#lit)
         }
         RefineStep::Return => quote!(result),
         RefineStep::TypeArg(i) => {
             let lit = proc_macro2::Literal::usize_unsuffixed(*i);
-            quote!([#lit])
+            quote!(#lit)
         }
     });
     quote! {

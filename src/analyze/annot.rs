@@ -217,16 +217,16 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
 /// Tokens are comma-separated steps. Each step is one of:
 /// - The keyword `result` → [`rty::TypePositionStep::Return`] (navigate to a
 ///   function type's return slot).
-/// - An integer literal `i` → [`rty::TypePositionStep::Param`]`(i)` (navigate
-///   to the `i`-th parameter of a function type).
-/// - A bracket group `[i]` → [`rty::TypePositionStep::TypeArg`]`(i)` (navigate
-///   to the `i`-th type argument of a generic type such as an enum or `Box`).
+/// - `$i` (a `$` followed by an integer) → [`rty::TypePositionStep::Param`]`(i)`
+///   (navigate to the `i`-th parameter of a function type).
+/// - A bare integer `i` → [`rty::TypePositionStep::TypeArg`]`(i)` (navigate to
+///   the `i`-th type argument of a generic type such as an enum or `Box`).
 ///
-/// Examples: `result` is the return; `0` is the first parameter; `0, [0]` is
-/// the first type-argument of the first parameter; `0, result` is the return of
-/// a function-typed first parameter.
+/// Examples: `result` is the return; `$0` is the first parameter; `$0, 0` is
+/// the first type-argument of the first parameter; `$0, result` is the return
+/// of a function-typed first parameter.
 pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
-    use rustc_ast::token::{Delimiter, LitKind, TokenKind};
+    use rustc_ast::token::{LitKind, TokenKind};
     use rustc_ast::tokenstream::TokenTree;
 
     let parse_int = |lit: &rustc_ast::token::Lit| -> usize {
@@ -242,36 +242,30 @@ pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
     };
 
     let mut steps = Vec::new();
-    for tt in ts.iter() {
-        match tt {
-            TokenTree::Token(t, _) => match &t.kind {
-                TokenKind::Comma => {}
-                TokenKind::Ident(sym, _) if sym.as_str() == "result" => {
-                    steps.push(rty::TypePositionStep::Return);
-                }
-                TokenKind::Literal(lit) => {
-                    steps.push(rty::TypePositionStep::Param(rty::FunctionParamIdx::from(
-                        parse_int(lit),
-                    )));
-                }
-                _ => panic!("unexpected token in refine position: {:?}", t),
-            },
-            TokenTree::Delimited(_, _, Delimiter::Bracket, inner) => {
-                let mut inner_iter = inner.iter();
-                let i = match inner_iter.next() {
+    let mut iter = ts.iter();
+    while let Some(tt) = iter.next() {
+        let TokenTree::Token(t, _) = tt else {
+            panic!("unexpected token tree in refine position");
+        };
+        match &t.kind {
+            TokenKind::Comma => {}
+            TokenKind::Ident(sym, _) if sym.as_str() == "result" => {
+                steps.push(rty::TypePositionStep::Return);
+            }
+            TokenKind::Dollar => {
+                let i = match iter.next() {
                     Some(TokenTree::Token(t, _)) => match &t.kind {
                         TokenKind::Literal(lit) => parse_int(lit),
-                        _ => panic!("expected integer inside [..] refine step: {:?}", t),
+                        _ => panic!("expected integer after `$` in refine position: {:?}", t),
                     },
-                    _ => panic!("expected integer inside [..] refine step"),
+                    _ => panic!("expected integer after `$` in refine position"),
                 };
-                assert!(
-                    inner_iter.next().is_none(),
-                    "expected exactly one integer inside [..] refine step"
-                );
-                steps.push(rty::TypePositionStep::TypeArg(i));
+                steps.push(rty::TypePositionStep::Param(rty::FunctionParamIdx::from(i)));
             }
-            _ => panic!("unexpected token tree in refine position"),
+            TokenKind::Literal(lit) => {
+                steps.push(rty::TypePositionStep::TypeArg(parse_int(lit)));
+            }
+            _ => panic!("unexpected token in refine position: {:?}", t),
         }
     }
 
