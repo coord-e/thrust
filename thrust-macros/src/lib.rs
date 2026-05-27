@@ -562,17 +562,25 @@ impl ExpandedTokens {
 // `#[thrust::refine(result, 0)]` is the first type-argument of the return.
 // ---------------------------------------------------------------------------
 
-/// Root of a refinement's type position: a parameter (by index) or the return.
+/// One step in a refinement's type-position path.
+///
+/// Mirrors [`rty::TypePositionStep`] on the plugin side and uses the same
+/// attribute encoding:
+/// - [`Param`](Self::Param) / [`Return`](Self::Return) navigate into a function
+///   type; encoded as an integer literal / the `result` keyword.
+/// - [`TypeArg`](Self::TypeArg) navigates into a generic type argument; encoded
+///   as a bracket group `[i]`.
 #[derive(Clone, Copy)]
-enum RefineRoot {
+enum RefineStep {
     Param(usize),
     Return,
+    TypeArg(usize),
 }
 
 #[derive(Clone)]
 struct Refinement {
-    root: RefineRoot,
-    projection: Vec<usize>,
+    /// Full type-position path from the function root to the refined type.
+    steps: Vec<RefineStep>,
     binder: syn::Ident,
     binder_ty: TokenStream2,
     formula: TokenStream2,
@@ -620,8 +628,8 @@ fn expand_refine(kind: RefineKind, attr: TokenStream, item: TokenStream) -> Toke
     };
 
     let mut refinements = Vec::new();
-    for (root, ty_tokens) in jobs {
-        if let Err(e) = scan_type(&ty_tokens, root, &[], &mut refinements) {
+    for (root_steps, ty_tokens) in jobs {
+        if let Err(e) = scan_type(&ty_tokens, root_steps, &mut refinements) {
             let err = e.to_compile_error();
             return quote! { #err #func }.into();
         }
@@ -665,27 +673,32 @@ fn expand_refine(kind: RefineKind, attr: TokenStream, item: TokenStream) -> Toke
     .into()
 }
 
-/// Builds `(root, type_tokens)` jobs to scan from the attribute tokens.
+/// Builds `(root_steps, type_tokens)` jobs to scan from the attribute tokens.
+///
+/// Each job's `root_steps` contains the initial [`RefineStep`]s that fix the
+/// position of the type expression within the function signature (e.g.
+/// `[Param(0)]` for the first parameter).  [`scan_type`] will append further
+/// [`RefineStep::TypeArg`] steps as it descends into generic type arguments.
 fn build_refine_jobs(
     kind: RefineKind,
     func: &FnItemWithSignature,
     attr_tokens: &[TokenTree2],
-) -> syn::Result<Vec<(RefineRoot, Vec<TokenTree2>)>> {
+) -> syn::Result<Vec<(Vec<RefineStep>, Vec<TokenTree2>)>> {
     match kind {
         RefineKind::Param => {
             let (name, ty_tokens) = split_name_type(attr_tokens)?;
             let idx = param_index(func, &name)?;
-            Ok(vec![(RefineRoot::Param(idx), ty_tokens)])
+            Ok(vec![(vec![RefineStep::Param(idx)], ty_tokens)])
         }
-        RefineKind::Ret => Ok(vec![(RefineRoot::Return, attr_tokens.to_vec())]),
+        RefineKind::Ret => Ok(vec![(vec![RefineStep::Return], attr_tokens.to_vec())]),
         RefineKind::Sig => {
             let (args, ret_tokens) = parse_sig_attr(attr_tokens)?;
             let mut jobs = Vec::new();
             for (name, ty_tokens) in args {
                 let idx = param_index(func, &name)?;
-                jobs.push((RefineRoot::Param(idx), ty_tokens));
+                jobs.push((vec![RefineStep::Param(idx)], ty_tokens));
             }
-            jobs.push((RefineRoot::Return, ret_tokens));
+            jobs.push((vec![RefineStep::Return], ret_tokens));
             Ok(jobs)
         }
     }
@@ -755,13 +768,16 @@ fn parse_sig_attr(
     Ok((args, rest.to_vec()))
 }
 
-/// Scans a single type expression, recording every refinement node together
-/// with its type position (a fixed `root` plus the `projection` accumulated
-/// while descending into nested type arguments).
+/// Scans a type expression and records every refinement node with its full
+/// type-position path (`steps`).
+///
+/// `steps` holds the path from the function root to the current type node.
+/// When a refinement `{binder: ty | formula}` is found the current `steps` are
+/// recorded; when descending into generic type arguments a
+/// [`RefineStep::TypeArg`]`(i)` step is appended to `steps`.
 fn scan_type(
     tokens: &[TokenTree2],
-    root: RefineRoot,
-    projection: &[usize],
+    steps: Vec<RefineStep>,
     out: &mut Vec<Refinement>,
 ) -> syn::Result<()> {
     if tokens.is_empty() {
@@ -774,15 +790,13 @@ fn scan_type(
             if g.delimiter() == proc_macro2::Delimiter::Brace {
                 let (binder, binder_ty, formula) = split_refinement(g.stream())?;
                 out.push(Refinement {
-                    root,
-                    projection: projection.to_vec(),
+                    steps: steps.clone(),
                     binder,
                     binder_ty: binder_ty.iter().cloned().collect(),
                     formula,
                 });
-                // The refinement's own type sits at the same position; descend
-                // into it to find further nested refinements.
-                scan_type(&binder_ty, root, projection, out)?;
+                // Descend into the binder type for nested refinements.
+                scan_type(&binder_ty, steps, out)?;
                 return Ok(());
             }
         }
@@ -797,9 +811,9 @@ fn scan_type(
                     if is_lifetime(&arg) {
                         continue;
                     }
-                    let mut child = projection.to_vec();
-                    child.push(type_idx);
-                    scan_type(&arg, root, &child, out)?;
+                    let mut child = steps.clone();
+                    child.push(RefineStep::TypeArg(type_idx));
+                    scan_type(&arg, child, out)?;
                     type_idx += 1;
                 }
             }
@@ -906,13 +920,16 @@ fn rewrite_self_in_tokens(tokens: TokenStream2) -> TokenStream2 {
 }
 
 fn refine_fn_name(func: &FnItemWithSignature, r: &Refinement) -> syn::Ident {
-    let mut pos = match r.root {
-        RefineRoot::Param(i) => format!("p{}", i),
-        RefineRoot::Return => "ret".to_string(),
-    };
-    for p in &r.projection {
-        pos.push_str(&format!("_{}", p));
-    }
+    let pos = r
+        .steps
+        .iter()
+        .map(|s| match s {
+            RefineStep::Param(i) => format!("p{}", i),
+            RefineStep::Return => "ret".to_string(),
+            RefineStep::TypeArg(i) => format!("t{}", i),
+        })
+        .collect::<Vec<_>>()
+        .join("_");
     format_ident!("_thrust_refine_{}_{}", func.sig().ident, pos)
 }
 
@@ -951,19 +968,19 @@ fn refine_path_stmt(func: &FnItemWithSignature, r: &Refinement) -> TokenStream2 
     } else {
         quote!()
     };
-    let root = match r.root {
-        RefineRoot::Param(i) => {
-            let lit = proc_macro2::Literal::usize_unsuffixed(i);
+    let encoded_steps = r.steps.iter().map(|s| match s {
+        RefineStep::Param(i) => {
+            let lit = proc_macro2::Literal::usize_unsuffixed(*i);
             quote!(#lit)
         }
-        RefineRoot::Return => quote!(result),
-    };
-    let projection = r
-        .projection
-        .iter()
-        .map(|i| proc_macro2::Literal::usize_unsuffixed(*i));
+        RefineStep::Return => quote!(result),
+        RefineStep::TypeArg(i) => {
+            let lit = proc_macro2::Literal::usize_unsuffixed(*i);
+            quote!([#lit])
+        }
+    });
     quote! {
-        #[thrust::refine(#root #(, #projection)*)]
+        #[thrust::refine(#(#encoded_steps),*)]
         #path_prefix #name #turbofish;
     }
 }

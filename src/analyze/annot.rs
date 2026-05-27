@@ -214,12 +214,19 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
 /// Parses a [`rty::TypePosition`] from the tokens of a `#[thrust::refine(..)]`
 /// attribute.
 ///
-/// The first token is the root: the keyword `result` for the return, or an
-/// integer for a parameter index. The remaining comma-separated integers form
-/// the projection into nested type arguments. For example `result, 0` is the
-/// first type-argument of the return, and `1` is the second parameter.
+/// Tokens are comma-separated steps. Each step is one of:
+/// - The keyword `result` → [`rty::TypePositionStep::Return`] (navigate to a
+///   function type's return slot).
+/// - An integer literal `i` → [`rty::TypePositionStep::Param`]`(i)` (navigate
+///   to the `i`-th parameter of a function type).
+/// - A bracket group `[i]` → [`rty::TypePositionStep::TypeArg`]`(i)` (navigate
+///   to the `i`-th type argument of a generic type such as an enum or `Box`).
+///
+/// Examples: `result` is the return; `0` is the first parameter; `0, [0]` is
+/// the first type-argument of the first parameter; `0, result` is the return of
+/// a function-typed first parameter.
 pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
-    use rustc_ast::token::{LitKind, TokenKind};
+    use rustc_ast::token::{Delimiter, LitKind, TokenKind};
     use rustc_ast::tokenstream::TokenTree;
 
     let parse_int = |lit: &rustc_ast::token::Lit| -> usize {
@@ -234,30 +241,43 @@ pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
             .expect("invalid integer in refine position")
     };
 
-    let mut iter = ts.iter();
-    let root = match iter.next() {
-        Some(TokenTree::Token(t, _)) => match &t.kind {
-            TokenKind::Ident(sym, _) if sym.as_str() == "result" => rty::TypePositionRoot::Return,
-            TokenKind::Literal(lit) => {
-                rty::TypePositionRoot::Param(rty::FunctionParamIdx::from(parse_int(lit)))
-            }
-            _ => panic!("unexpected refine position root: {:?}", t),
-        },
-        _ => panic!("empty refine position"),
-    };
-
-    let mut projection = Vec::new();
-    for tt in iter {
+    let mut steps = Vec::new();
+    for tt in ts.iter() {
         match tt {
             TokenTree::Token(t, _) => match &t.kind {
                 TokenKind::Comma => {}
-                TokenKind::Literal(lit) => projection.push(parse_int(lit)),
+                TokenKind::Ident(sym, _) if sym.as_str() == "result" => {
+                    steps.push(rty::TypePositionStep::Return);
+                }
+                TokenKind::Literal(lit) => {
+                    steps.push(rty::TypePositionStep::Param(rty::FunctionParamIdx::from(
+                        parse_int(lit),
+                    )));
+                }
                 _ => panic!("unexpected token in refine position: {:?}", t),
             },
+            TokenTree::Delimited(_, _, Delimiter::Bracket, inner) => {
+                let mut inner_iter = inner.iter();
+                let i = match inner_iter.next() {
+                    Some(TokenTree::Token(t, _)) => match &t.kind {
+                        TokenKind::Literal(lit) => parse_int(lit),
+                        _ => panic!("expected integer inside [..] refine step: {:?}", t),
+                    },
+                    _ => panic!("expected integer inside [..] refine step"),
+                };
+                assert!(
+                    inner_iter.next().is_none(),
+                    "expected exactly one integer inside [..] refine step"
+                );
+                steps.push(rty::TypePositionStep::TypeArg(i));
+            }
             _ => panic!("unexpected token tree in refine position"),
         }
     }
-    rty::TypePosition::new(root, projection)
+
+    assert!(!steps.is_empty(), "empty refine position");
+    let first = steps.remove(0);
+    rty::TypePosition::new(first, steps)
 }
 
 pub fn split_param(ts: &TokenStream) -> (Ident, TokenStream) {

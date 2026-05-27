@@ -566,26 +566,33 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         self
     }
 
-    /// Installs a refinement at a [`rty::TypePosition`]. The root selects a
-    /// parameter or the return slot; the projection then descends into the
-    /// slot's nested type arguments.
+    /// Installs a refinement at a [`rty::TypePosition`].
+    ///
+    /// The first step must be [`rty::TypePositionStep::Param`] or
+    /// [`rty::TypePositionStep::Return`]; the remaining steps are forwarded to
+    /// [`rty::RefinedType::install_refinement_at`].
     pub fn refine(
         &mut self,
         position: &rty::TypePosition,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
     ) -> &mut Self {
-        match position.root {
-            rty::TypePositionRoot::Param(idx) => {
-                if !self.param_rtys.contains_key(&idx) {
+        let (first, rest) = match position.steps().split_first() {
+            Some(pair) => pair,
+            None => panic!("empty TypePosition"),
+        };
+        match first {
+            rty::TypePositionStep::Param(idx) => {
+                if !self.param_rtys.contains_key(idx) {
                     let ty = self.inner.build(self.param_tys[idx.index()].ty).vacuous();
-                    self.param_rtys.insert(idx, rty::RefinedType::unrefined(ty));
+                    self.param_rtys
+                        .insert(*idx, rty::RefinedType::unrefined(ty));
                 }
                 self.param_rtys
-                    .get_mut(&idx)
+                    .get_mut(idx)
                     .unwrap()
-                    .install_refinement_at(&position.projection, refinement);
+                    .install_refinement_at(rest, refinement);
             }
-            rty::TypePositionRoot::Return => {
+            rty::TypePositionStep::Return => {
                 if self.ret_rty.is_none() {
                     let ty = self.inner.build(self.ret_ty).vacuous();
                     self.ret_rty = Some(rty::RefinedType::unrefined(ty));
@@ -593,7 +600,10 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
                 self.ret_rty
                     .as_mut()
                     .unwrap()
-                    .install_refinement_at(&position.projection, refinement);
+                    .install_refinement_at(rest, refinement);
+            }
+            rty::TypePositionStep::TypeArg(_) => {
+                panic!("TypePosition must start with Param or Return, not TypeArg");
             }
         }
         self
