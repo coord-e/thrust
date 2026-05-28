@@ -441,8 +441,9 @@ impl<'tcx> Analyzer<'tcx> {
         &mut self,
         def_id: DefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        caller_def_id: DefId,
     ) -> Option<rty::RefinedType> {
-        let type_builder = self.type_builder(self.def_ids(), def_id);
+        let type_builder = self.type_builder(self.def_ids(), caller_def_id);
 
         let deferred_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => {
