@@ -649,7 +649,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 outer_generic_args = ?self.generic_args,
                                 "resolving predicate call in formula"
                             );
-                            let (is_unresolved_args, generic_args) =
+                            let (mut is_unresolved_args, generic_args) =
                                 match self.instantiate_generics(generic_args, self.generic_args) {
                                     Some(args) => (false, args),
                                     None => (true, generic_args),
@@ -662,13 +662,19 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 generic_args,
                             )
                             .unwrap();
-                            let pred_def_id = instance.map_or(def_id, |instance| instance.def_id());
+                            let pred_def_id = if let Some(instance) = instance {
+                                instance.def_id()
+                            } else {
+                                is_unresolved_args = true;
+                                def_id
+                            };
 
                             let pred = if is_unresolved_args {
-                                refine::user_defined_pred(self.tcx, pred_def_id).into()
-                            } else {
                                 refine::forall_pred(self.tcx, pred_def_id).into()
+                            } else {
+                                refine::user_defined_pred(self.tcx, pred_def_id).into()
                             };
+                            tracing::debug!("resolved predicate call in formula: {:?}", pred);
                             let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
                             let atom = chc::Atom::new(pred, arg_terms);
                             return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
