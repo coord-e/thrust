@@ -317,7 +317,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .associated_item(self.local_def_id.to_def_id())
             .trait_item_def_id
             .unwrap();
-        self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
+        self.ctx.def_ty_with_args(trait_item_did, trait_ref.args, trait_ref.def_id)
     }
 
     // TODO: Remove this eager precompute together with

@@ -73,7 +73,7 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
-    owner_fn_id: DefId,
+    pub owner_fn_id: DefId,
     typing_env: mir_ty::TypingEnv<'tcx>,
     type_params: Rc<RefCell<TypeParamMap>>,
     system: Rc<RefCell<chc::System>>,

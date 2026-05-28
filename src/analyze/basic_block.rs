@@ -868,7 +868,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         def_id: DefId,
         args: mir_ty::GenericArgsRef<'tcx>,
     ) -> rty::Type<rty::Closed> {
-        if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args) {
+        let caller_def_id = self.type_builder.owner_fn_id;
+        if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args, caller_def_id) {
             return def_ty.ty;
         }
 
@@ -880,7 +881,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             );
         }
         tracing::info!(?def_id, ?resolved_def_id, ?resolved_args, "resolved");
-        let Some(def_ty) = self.ctx.def_ty_with_args(resolved_def_id, resolved_args) else {
+        let Some(def_ty) = self.ctx.def_ty_with_args(resolved_def_id, resolved_args, caller_def_id) else {
             panic!(
                 "unknown def (resolved): {:?}, args: {:?}",
                 resolved_def_id, resolved_args
