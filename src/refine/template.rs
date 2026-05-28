@@ -170,19 +170,32 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     fn resolve_model_ty(&self, orig_ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        tracing::debug!("attempting to resolve the type {:#?}.", orig_ty);
         let ty = self.replace_closure_model(orig_ty);
 
         let Some(model_ty_def_id) = self.def_ids.model_ty() else {
             return ty;
         };
         let args = self.tcx.mk_args(&[ty.into()]);
+        tracing::debug!("generic args are {:#?}.", args);
         let projection_ty = mir_ty::Ty::new_projection(self.tcx, model_ty_def_id, args);
         if let Ok(normalized_ty) = self
             .tcx
             .try_normalize_erasing_regions(self.typing_env, projection_ty)
         {
-            return normalized_ty;
+            tracing::debug!("the type {:#?} is resolved as the type {:#?}.", orig_ty, ty);
+            let contains_model_ty_alias = normalized_ty.walk().any(|arg| {
+                if let mir_ty::GenericArgKind::Type(t) = arg.kind() {
+                    matches!(t.kind(), mir_ty::TyKind::Alias(_, alias_ty) if alias_ty.def_id == model_ty_def_id)
+                } else {
+                    false
+                }
+            });
+            if !contains_model_ty_alias {
+                return normalized_ty;
+            }
         }
+        tracing::debug!("the type {:#?} is replaced as the {:#?}.", orig_ty, ty);
         ty
     }
 
