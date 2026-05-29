@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use pretty::{termcolor, Pretty};
-use rustc_hir::{def_id::LocalDefId, HirId};
+use rustc_hir::{
+    def_id::{DefId, LocalDefId},
+    HirId,
+};
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeFoldable};
 
@@ -150,6 +153,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
         local_def_id: LocalDefId,
         type_params: Rc<RefCell<TypeParamMap>>,
         system: Rc<RefCell<System>>,
+        owner_fn_id: DefId,
     ) -> Self {
         let body = tcx.hir_body_owned_by(local_def_id);
         let generic_args = tcx.mk_args(&[]);
@@ -158,7 +162,7 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
         let type_builder = TypeBuilder::new(
             tcx,
             def_ids.clone(),
-            local_def_id.to_def_id(),
+            owner_fn_id,
             type_params.clone(),
             system.clone(),
         );

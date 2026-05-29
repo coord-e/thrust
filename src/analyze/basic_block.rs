@@ -649,7 +649,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             );
         }
         tracing::info!(?def_id, ?resolved_def_id, ?resolved_args, "resolved");
-        let Some(def_ty) = self.ctx.def_ty_with_args(resolved_def_id, resolved_args, caller_def_id) else {
+        let Some(def_ty) = self
+            .ctx
+            .def_ty_with_args(resolved_def_id, resolved_args, caller_def_id)
+        else {
             panic!(
                 "unknown def (resolved): {:?}, args: {:?}",
                 resolved_def_id, resolved_args
