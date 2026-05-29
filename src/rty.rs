@@ -43,7 +43,7 @@ use pretty::{termcolor, Pretty};
 use rustc_abi::VariantIdx;
 use rustc_index::IndexVec;
 
-use crate::chc;
+use crate::chc::{self, ForallSortIdx};
 
 mod template;
 pub use template::{Template, TemplateBuilder};
@@ -729,7 +729,8 @@ impl<T> EnumType<T> {
 /// A type parameter.
 #[derive(Debug, Clone)]
 pub struct ParamType {
-    idx: TypeParamIdx,
+    type_param_idx: TypeParamIdx,
+    forall_sort_idx: ForallSortIdx,
 }
 
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ParamType
@@ -737,17 +738,24 @@ where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        self.idx.pretty(allocator)
+        self.type_param_idx.pretty(allocator)
     }
 }
 
 impl ParamType {
-    pub fn new(idx: TypeParamIdx) -> Self {
-        ParamType { idx }
+    pub fn new(type_param_idx: TypeParamIdx, forall_sort_idx: ForallSortIdx) -> Self {
+        ParamType {
+            type_param_idx,
+            forall_sort_idx,
+        }
     }
 
-    pub fn index(&self) -> TypeParamIdx {
-        self.idx
+    pub fn type_param_index(&self) -> TypeParamIdx {
+        self.type_param_idx
+    }
+
+    pub fn forall_sort_index(&self) -> ForallSortIdx {
+        self.forall_sort_idx
     }
 
     pub fn into_closed_ty(self) -> Type<Closed> {
@@ -1034,7 +1042,7 @@ impl<T> Type<T> {
             //       currently String sort seems not available in HORN logic of Z3
             Type::String => chc::Sort::null(),
             Type::Never => chc::Sort::null(),
-            Type::Param(ty) => chc::Sort::forall(ty.index()),
+            Type::Param(ty) => chc::Sort::forall(ty.forall_sort_index()),
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.ty.to_sort();
 
@@ -1120,7 +1128,7 @@ impl<T> Type<T> {
     pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
         match self {
             Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
-            Type::Param(ty) => std::iter::once(ty.index()).collect(),
+            Type::Param(ty) => std::iter::once(ty.type_param_index()).collect(),
             Type::Pointer(ty) => ty.free_ty_params(),
             Type::Function(ty) => ty.free_ty_params(),
             Type::Tuple(ty) => ty.free_ty_params(),
@@ -1687,7 +1695,7 @@ impl<FV> RefinedType<FV> {
         match &mut self.ty {
             Type::Int | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
-                if let Some(rty) = subst.get(ty.index()) {
+                if let Some(rty) = subst.get(ty.type_param_index()) {
                     let RefinedType {
                         ty: replacement_ty,
                         refinement,
@@ -1723,15 +1731,15 @@ impl<FV> RefinedType<FV> {
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Never, Type::Never) => Default::default(),
-            (Type::Param(pty), ty) if !ty.free_ty_params().contains(&pty.index()) => {
+            (Type::Param(pty), ty) if !ty.free_ty_params().contains(&pty.type_param_index()) => {
                 TypeParamSubst::singleton(
-                    pty.index(),
+                    pty.type_param_index(),
                     RefinedType::new(ty.clone(), other.refinement.clone()),
                 )
             }
-            (ty, Type::Param(pty)) if !ty.free_ty_params().contains(&pty.index()) => {
+            (ty, Type::Param(pty)) if !ty.free_ty_params().contains(&pty.type_param_index()) => {
                 TypeParamSubst::singleton(
-                    pty.index(),
+                    pty.type_param_index(),
                     RefinedType::new(ty.clone(), self.refinement.clone()),
                 )
             }

@@ -2,57 +2,56 @@
 
 use std::collections::BTreeMap;
 
-// use pretty::{termcolor, Pretty};
+use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
 use crate::chc;
 
 use super::{Closed, RefinedType, Type};
 
-pub type TypeParamIdx = chc::ForallSortIdx;
-// rustc_index::newtype_index! {
-//     /// An index representing a type parameter.
-//     ///
-//     /// ## Note on indexing of type parameters
-//     ///
-//     /// The index of [`rustc_middle::ty::ParamTy`] is based on all generic parameters in
-//     /// the definition, including lifetimes. Given the following definition:
-//     ///
-//     /// ```rust
-//     /// struct X<'a, T> { f: &'a T }
-//     /// ```
-//     ///
-//     /// The type of field `f` is `&T1` (not `&T0`) in MIR. However, in Thrust, we ignore lifetime
-//     /// parameters and the index of [`rty::ParamType`](super::ParamType) is based on type parameters only, giving `f`
-//     /// the type `&T0`. [`TypeBuilder`](crate::refine::TypeBuilder) takes care of this difference when translating MIR
-//     /// types to Thrust types.
-//     #[orderable]
-//     #[debug_format = "T{}"]
-//     pub struct TypeParamIdx { }
-// }
+rustc_index::newtype_index! {
+    /// An index representing a type parameter.
+    ///
+    /// ## Note on indexing of type parameters
+    ///
+    /// The index of [`rustc_middle::ty::ParamTy`] is based on all generic parameters in
+    /// the definition, including lifetimes. Given the following definition:
+    ///
+    /// ```rust
+    /// struct X<'a, T> { f: &'a T }
+    /// ```
+    ///
+    /// The type of field `f` is `&T1` (not `&T0`) in MIR. However, in Thrust, we ignore lifetime
+    /// parameters and the index of [`rty::ParamType`](super::ParamType) is based on type parameters only, giving `f`
+    /// the type `&T0`. [`TypeBuilder`](crate::refine::TypeBuilder) takes care of this difference when translating MIR
+    /// types to Thrust types.
+    #[orderable]
+    #[debug_format = "T{}"]
+    pub struct TypeParamIdx { }
+}
 
-// impl std::fmt::Display for TypeParamIdx {
-//     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-//         write!(f, "T{}", self.index())
-//     }
-// }
+impl std::fmt::Display for TypeParamIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "T{}", self.index())
+    }
+}
 
-// impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &TypeParamIdx
-// where
-//     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-// {
-//     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-//         allocator
-//             .as_string(self)
-//             .annotate(TypeParamIdx::color_spec())
-//     }
-// }
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &TypeParamIdx
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator
+            .as_string(self)
+            .annotate(TypeParamIdx::color_spec())
+    }
+}
 
-// impl TypeParamIdx {
-//     fn color_spec() -> termcolor::ColorSpec {
-//         termcolor::ColorSpec::new()
-//     }
-// }
+impl TypeParamIdx {
+    fn color_spec() -> termcolor::ColorSpec {
+        termcolor::ColorSpec::new()
+    }
+}
 
 pub type RefinedTypeArgs<T = Closed> = IndexVec<TypeParamIdx, RefinedType<T>>;
 pub type TypeArgs<T = Closed> = IndexVec<TypeParamIdx, Type<T>>;
