@@ -6,6 +6,8 @@
 //! such as naming convention and solver-specific workarounds.
 //! The output of this module is what gets passed to the external CHC solver.
 
+use std::collections::HashSet;
+
 use crate::chc::{self, format_context::FormatContext};
 
 /// A helper struct to display a list of items.
@@ -617,6 +619,44 @@ impl<'ctx, 'a> ForallPredDef<'ctx, 'a> {
     }
 }
 
+pub struct DepExistsPredVarDef<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    id: &'a chc::PredVarId,
+    def: &'a chc::PredVarDef,
+    dependencies: &'a HashSet<chc::ForallPred>,
+}
+
+impl<'ctx, 'a> std::fmt::Display for DepExistsPredVarDef<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.def.debug_info.is_empty() {
+            writeln!(f, "{}", self.def.debug_info.display("; "))?;
+        }
+        writeln!(
+            f,
+            "(declare-dep-exists-fun {} {} {} Bool)",
+            self.id,
+            List::closed(self.dependencies),
+            List::closed(self.def.sig.iter().map(|s| self.ctx.fmt_sort(s))),
+        )
+    }
+}
+
+impl<'ctx, 'a> DepExistsPredVarDef<'ctx, 'a> {
+    pub fn new(
+        ctx: &'ctx FormatContext,
+        id: &'a chc::PredVarId,
+        def: &'a chc::PredVarDef,
+        dependencies: &'a HashSet<chc::ForallPred>,
+    ) -> Self {
+        Self {
+            ctx,
+            id,
+            def,
+            dependencies,
+        }
+    }
+}
+
 /// A wrapper around a [`chc::System`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct System<'a> {
@@ -656,16 +696,25 @@ impl<'a> std::fmt::Display for System<'a> {
         }
 
         writeln!(f)?;
+        let dependencies = self.inner.compute_dependency();
         for (p, def) in self.inner.pred_vars.iter_enumerated() {
-            if !def.debug_info.is_empty() {
-                writeln!(f, "{}", def.debug_info.display("; "))?;
+            if dependencies.contains_key(&p) && !dependencies[&p].is_empty() {
+                writeln!(
+                    f,
+                    "{}\n",
+                    DepExistsPredVarDef::new(&self.ctx, &p, def, &dependencies[&p])
+                )?;
+            } else {
+                if !def.debug_info.is_empty() {
+                    writeln!(f, "{}", def.debug_info.display("; "))?;
+                }
+                writeln!(
+                    f,
+                    "(declare-fun {} {} Bool)\n",
+                    p,
+                    List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
+                )?;
             }
-            writeln!(
-                f,
-                "(declare-fun {} {} Bool)\n",
-                p,
-                List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
-            )?;
         }
         for (id, clause) in self.inner.clauses.iter_enumerated() {
             writeln!(

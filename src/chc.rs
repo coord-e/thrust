@@ -1,6 +1,7 @@
 //! A multi-sorted CHC system with tuples.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
@@ -1192,6 +1193,19 @@ impl Pred {
     }
 }
 
+impl TryFrom<Pred> for ForallPred {
+    type Error = String;
+    fn try_from(value: Pred) -> Result<Self, Self::Error> {
+        if let Pred::ForallPred(forall_pred) = value {
+            Ok(forall_pred)
+        } else {
+            Err(format!(
+                "expected the variant `Pred::ForallPred`, got {value:#?}."
+            ))
+        }
+    }
+}
+
 /// An atom is a predicate applied to a list of terms.
 #[derive(Debug, Clone)]
 pub struct Atom<V = TermVarIdx> {
@@ -1867,6 +1881,33 @@ pub struct UserDefinedPredDef {
     body: String,
 }
 
+pub fn compute_transitive_closure<T>(direct_deps: &HashMap<T, HashSet<T>>) -> HashMap<T, HashSet<T>>
+where
+    T: Clone + Eq + Hash,
+{
+    let mut closure = HashMap::new();
+
+    for start_id in direct_deps.keys() {
+        let mut visited = HashSet::new();
+        let mut stack = vec![start_id.clone()];
+
+        // Search by DFS
+        while let Some(current_id) = stack.pop() {
+            if let Some(deps) = direct_deps.get(&current_id) {
+                for next_id in deps {
+                    if visited.insert(next_id.clone()) {
+                        stack.push(next_id.clone());
+                    }
+                }
+            }
+        }
+
+        closure.insert(start_id.clone(), visited);
+    }
+
+    closure
+}
+
 /// A CHC system.
 #[derive(Debug, Clone, Default)]
 pub struct System {
@@ -1916,6 +1957,70 @@ impl System {
         }
         tracing::debug!(clause = %clause.display(), id = ?self.clauses.next_index(), "push_clause");
         Some(self.clauses.push(clause))
+    }
+
+    fn compute_forall_dependency(clause: &Clause) -> HashSet<ForallPred> {
+        clause
+            .body
+            .iter_atoms()
+            .filter_map(|atom| atom.pred.clone().try_into().ok())
+            .collect()
+    }
+
+    fn compute_exists_dependency(clause: &Clause) -> HashSet<PredVarId> {
+        clause
+            .body
+            .iter_atoms()
+            .filter_map(|atom| match atom.pred {
+                Pred::Var(id) => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn compute_dependency(&self) -> HashMap<PredVarId, HashSet<ForallPred>> {
+        let mut exists_deps: HashMap<PredVarId, HashSet<PredVarId>> = HashMap::new();
+        let mut forall_deps: HashMap<PredVarId, HashSet<ForallPred>> = HashMap::new();
+
+        for (clause_idx, clause) in self.clauses.iter_enumerated() {
+            let Pred::Var(head_id) = clause.head.pred else {
+                continue;
+            };
+
+            let exists = Self::compute_exists_dependency(clause);
+            let forall = Self::compute_forall_dependency(clause);
+
+            tracing::debug!(
+                "exists deps for {:?} at {:?}: {:?}",
+                head_id,
+                clause_idx,
+                exists
+            );
+
+            exists_deps.entry(head_id).or_default().extend(exists);
+            forall_deps.entry(head_id).or_default().extend(forall);
+        }
+        tracing::debug!("direct forall dependencies: {:#?}", forall_deps);
+        tracing::debug!("direct exists dependencies: {:#?}", exists_deps);
+
+        let transitive_exists_deps = compute_transitive_closure(&exists_deps);
+        tracing::debug!("transitive exists dependencies: {:#?}", exists_deps);
+
+        let mut propagated_forall_deps = HashMap::new();
+
+        for (pred, reachable_preds) in transitive_exists_deps {
+            let mut deps = forall_deps.get(&pred).cloned().unwrap_or_default();
+
+            for reachable in reachable_preds {
+                if let Some(foralls) = forall_deps.get(&reachable) {
+                    deps.extend(foralls.iter().cloned());
+                }
+            }
+
+            propagated_forall_deps.insert(pred, deps);
+        }
+
+        propagated_forall_deps
     }
 
     pub fn smtlib2(&self) -> smtlib2::System<'_> {
