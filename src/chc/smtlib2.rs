@@ -589,6 +589,34 @@ impl<'ctx, 'a> UserDefinedPredDef<'ctx, 'a> {
         Self { ctx, inner }
     }
 }
+
+pub struct ForallPredDef<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    symbol: &'a chc::ForallPred,
+    sig: &'a chc::PredSig,
+}
+
+impl<'ctx, 'a> std::fmt::Display for ForallPredDef<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params = List::closed(self.sig.iter().map(|sort| self.ctx.fmt_sort(sort)));
+        write!(
+            f,
+            "(declare-forall-fun {name} {params} Bool)",
+            name = self.symbol,
+        )
+    }
+}
+
+impl<'ctx, 'a> ForallPredDef<'ctx, 'a> {
+    pub fn new(
+        ctx: &'ctx FormatContext,
+        symbol: &'a chc::ForallPred,
+        sig: &'a chc::PredSig,
+    ) -> Self {
+        Self { ctx, symbol, sig }
+    }
+}
+
 /// A wrapper around a [`chc::System`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct System<'a> {
@@ -602,6 +630,10 @@ impl<'a> std::fmt::Display for System<'a> {
 
         for forall_sort_idx in &self.inner.forall_sorts {
             writeln!(f, "(declare-forall-sort {})\n", forall_sort_idx)?;
+        }
+
+        for (symbol, sig) in &self.inner.forall_pred_vars {
+            writeln!(f, "{}\n", ForallPredDef::new(&self.ctx, symbol, sig))?;
         }
 
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
