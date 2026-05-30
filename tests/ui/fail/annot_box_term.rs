@@ -1,7 +1,7 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
 
-#[thrust::sig(fn(x: int) -> {r: Box<int> | r == <x>})]
+#[thrust_macros::sig(fn(x: i64) -> { r: Box<i64> | r == thrust_models::model::Box::new(x) })]
 fn box_create(x: i64) -> Box<i64> {
     Box::new(x)
 }

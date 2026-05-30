@@ -6,6 +6,8 @@ use syn::{
     WherePredicate,
 };
 
+mod rty;
+
 #[derive(Debug, Clone)]
 enum FnOuterItem {
     ItemImpl(syn::ItemImpl),
@@ -548,6 +550,21 @@ impl ExpandedTokens {
             #func_tokens
         }
     }
+}
+
+#[proc_macro_attribute]
+pub fn param(attr: TokenStream, item: TokenStream) -> TokenStream {
+    rty::expand(rty::AnnotationKind::Param, attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn ret(attr: TokenStream, item: TokenStream) -> TokenStream {
+    rty::expand(rty::AnnotationKind::Ret, attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn sig(attr: TokenStream, item: TokenStream) -> TokenStream {
+    rty::expand(rty::AnnotationKind::Sig, attr, item)
 }
 
 fn mentions_self(sig: &syn::Signature) -> bool {

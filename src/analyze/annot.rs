@@ -61,6 +61,10 @@ pub fn ensures_path_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("ensures_path")]
 }
 
+pub fn refinement_path_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("refinement_path")]
+}
+
 pub fn model_ty_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
@@ -205,6 +209,67 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
         panic!("invalid attribute: expected delimited args");
     };
     d.tokens
+}
+
+/// Parses a [`rty::TypePosition`] from the tokens of a
+/// `#[thrust::refinement_path(..)]` attribute.
+///
+/// Tokens are comma-separated steps. Each step is one of:
+/// - The keyword `result` → [`rty::TypePositionStep::Return`] (navigate to a
+///   function type's return slot).
+/// - `$i` (a `$` followed by an integer) → [`rty::TypePositionStep::Param`]`(i)`
+///   (navigate to the `i`-th parameter of a function type).
+/// - A bare integer `i` → [`rty::TypePositionStep::TypeArg`]`(i)` (navigate to
+///   the `i`-th type argument of a generic type such as an enum or `Box`).
+///
+/// Examples: `result` is the return; `$0` is the first parameter; `$0, 0` is
+/// the first type-argument of the first parameter; `$0, result` is the return
+/// of a function-typed first parameter.
+pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
+    use rustc_ast::token::{LitKind, TokenKind};
+    use rustc_ast::tokenstream::TokenTree;
+
+    let parse_int = |lit: &rustc_ast::token::Lit| -> usize {
+        assert_eq!(
+            lit.kind,
+            LitKind::Integer,
+            "expected an integer in type position"
+        );
+        lit.symbol
+            .as_str()
+            .parse()
+            .expect("invalid integer in type position")
+    };
+
+    let mut steps = Vec::new();
+    let mut iter = ts.iter();
+    while let Some(tt) = iter.next() {
+        let TokenTree::Token(t, _) = tt else {
+            panic!("unexpected token tree in type position");
+        };
+        match &t.kind {
+            TokenKind::Comma => {}
+            TokenKind::Ident(sym, _) if sym.as_str() == "result" => {
+                steps.push(rty::TypePositionStep::Return);
+            }
+            TokenKind::Dollar => {
+                let i = match iter.next() {
+                    Some(TokenTree::Token(t, _)) => match &t.kind {
+                        TokenKind::Literal(lit) => parse_int(lit),
+                        _ => panic!("expected integer after `$` in type position: {:?}", t),
+                    },
+                    _ => panic!("expected integer after `$` in type position"),
+                };
+                steps.push(rty::TypePositionStep::Param(rty::FunctionParamIdx::from(i)));
+            }
+            TokenKind::Literal(lit) => {
+                steps.push(rty::TypePositionStep::TypeArg(parse_int(lit)));
+            }
+            _ => panic!("unexpected token in type position: {:?}", t),
+        }
+    }
+
+    rty::TypePosition::new(steps)
 }
 
 pub fn split_param(ts: &TokenStream) -> (Ident, TokenStream) {

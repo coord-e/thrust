@@ -45,13 +45,33 @@ impl<'tcx> FormulaFn<'tcx> {
     }
 
     pub fn to_ensure_annot(&self) -> AnnotFormula<rty::RefinedTypeVar<rty::FunctionParamIdx>> {
-        AnnotFormula::Formula(self.formula.clone().map_var(|v| {
+        AnnotFormula::Formula(self.formula_with_value_binder())
+    }
+
+    /// Lowers this formula function into a [`rty::Refinement`] on the enclosing
+    /// function's parameters.
+    ///
+    /// The formula function's first parameter is treated as the bound value
+    /// ([`rty::RefinedTypeVar::Value`]); the remaining parameters are the free
+    /// variables, mapped to [`rty::RefinedTypeVar::Free`] of the enclosing
+    /// function's parameters.
+    pub fn to_refinement(&self) -> rty::Refinement<rty::FunctionParamIdx> {
+        self.formula_with_value_binder().into()
+    }
+
+    /// Re-maps this formula function's parameters as a refinement:
+    /// param 0 → [`rty::RefinedTypeVar::Value`], param `i > 0` → free variable
+    /// `i - 1` of the enclosing function.
+    fn formula_with_value_binder(
+        &self,
+    ) -> chc::Formula<rty::RefinedTypeVar<rty::FunctionParamIdx>> {
+        self.formula.clone().map_var(|v| {
             if v.as_usize() == 0 {
                 rty::RefinedTypeVar::Value
             } else {
                 rty::RefinedTypeVar::Free(rty::FunctionParamIdx::from(v.as_usize() - 1))
             }
-        }))
+        })
     }
 }
 
