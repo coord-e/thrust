@@ -558,8 +558,20 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                                 def_id
                             };
 
+                            let typeck_results = self.tcx.typeck(self.local_def_id);
                             let pred = if is_unresolved_args {
-                                refine::forall_pred(self.tcx, pred_def_id).into()
+                                let pred = refine::forall_pred(self.tcx, pred_def_id);
+                                let sig = args
+                                    .iter()
+                                    .map(|e| {
+                                        let ty = typeck_results.expr_ty(e);
+                                        self.type_builder.build(ty).to_sort()
+                                    })
+                                    .collect();
+                                self.system
+                                    .borrow_mut()
+                                    .register_forall_pred(pred.clone(), sig);
+                                pred.into()
                             } else {
                                 refine::user_defined_pred(self.tcx, pred_def_id).into()
                             };

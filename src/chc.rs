@@ -1,5 +1,7 @@
 //! A multi-sorted CHC system with tuples.
 
+use std::collections::HashMap;
+
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
@@ -1875,11 +1877,16 @@ pub struct System {
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
     pub forall_sorts: Vec<ForallSortIdx>,
     pub num_forall_sort_idx: ForallSortIdx,
+    forall_pred_vars: HashMap<ForallPred, PredSig>,
 }
 
 impl System {
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
+    }
+
+    pub fn register_forall_pred(&mut self, pred: ForallPred, sig: PredSig) {
+        self.forall_pred_vars.entry(pred).or_insert(sig);
     }
 
     pub fn new_forall_sort(&mut self) -> ForallSortIdx {

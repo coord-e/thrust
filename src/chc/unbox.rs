@@ -164,6 +164,11 @@ fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> Use
     UserDefinedPredDef { symbol, sig, body }
 }
 
+fn unbox_forall_pred_var_def((pred, sig): (ForallPred, PredSig)) -> (ForallPred, PredSig) {
+    let sig = sig.into_iter().map(unbox_sort).collect();
+    (pred, sig)
+}
+
 /// Remove all `Box` sorts and `Box`/`BoxCurrent` terms from the system.
 ///
 /// The box values in Thrust represent an owned pointer, but are logically equivalent to the inner type.
@@ -178,6 +183,7 @@ pub fn unbox(system: System) -> System {
         pred_vars,
         forall_sorts,
         num_forall_sort_idx,
+        forall_pred_vars,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
@@ -185,6 +191,10 @@ pub fn unbox(system: System) -> System {
     let user_defined_pred_defs = user_defined_pred_defs
         .into_iter()
         .map(unbox_user_defined_pred_def)
+        .collect();
+    let forall_pred_vars = forall_pred_vars
+        .into_iter()
+        .map(unbox_forall_pred_var_def)
         .collect();
     System {
         raw_commands,
@@ -194,5 +204,6 @@ pub fn unbox(system: System) -> System {
         pred_vars,
         forall_sorts,
         num_forall_sort_idx,
+        forall_pred_vars,
     }
 }
