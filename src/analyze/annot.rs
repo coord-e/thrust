@@ -141,6 +141,14 @@ pub fn exists_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn invariant_marker_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("invariant_marker"),
+    ]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via

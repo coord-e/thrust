@@ -1024,6 +1024,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         None
     }
 
+    /// Whether this block's terminator is a loop-invariant marker call.
+    fn terminator_is_invariant_marker(&self) -> Option<BasicBlock> {
+        let term = &self.body.basic_blocks[self.basic_block].terminator().kind;
+        if let TerminatorKind::Call { func, target, .. } = term {
+            if let Some((def_id, _)) = func.const_fn_def() {
+                if Some(def_id) == self.ctx.def_ids().invariant_marker() {
+                    return Some(target.expect("invariant marker call must have a target"));
+                }
+            }
+        }
+        None
+    }
+
     fn analyze_statements(&mut self) {
         for local in self.drop_points.before_statements.clone() {
             tracing::info!(?local, "implicitly dropped before statements");
@@ -1060,6 +1073,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .clone();
         if let Some(target) = self.terminator_is_drop_call() {
             tracing::warn!(?term, "skip std::ops::Drop");
+            return mir::Terminator {
+                kind: TerminatorKind::Goto { target },
+                source_info: term.source_info,
+            };
+        }
+        if let Some(target) = self.terminator_is_invariant_marker() {
+            tracing::debug!(?term, "skip invariant marker");
             return mir::Terminator {
                 kind: TerminatorKind::Goto { target },
                 source_info: term.source_info,
