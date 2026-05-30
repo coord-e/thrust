@@ -302,6 +302,13 @@ mod thrust_models {
     pub fn exists<T>(_x: T) -> bool {
         unimplemented!()
     }
+
+    #[thrust::def::invariant_marker]
+    #[thrust::ignored]
+    #[inline(never)]
+    pub fn __invariant_marker<F>(_f: F) {
+        unimplemented!()
+    }
 }
 
 #[thrust::extern_spec_fn]

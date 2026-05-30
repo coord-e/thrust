@@ -40,6 +40,10 @@ where
 }
 
 impl<'tcx> FormulaFn<'tcx> {
+    pub fn formula(&self) -> &chc::Formula<rty::FunctionParamIdx> {
+        &self.formula
+    }
+
     pub fn to_require_annot(&self) -> AnnotFormula<rty::FunctionParamIdx> {
         AnnotFormula::Formula(self.formula.clone())
     }

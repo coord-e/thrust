@@ -6,6 +6,8 @@ use syn::{
     WherePredicate,
 };
 
+mod invariant;
+
 #[derive(Debug, Clone)]
 enum FnOuterItem {
     ItemImpl(syn::ItemImpl),
@@ -60,6 +62,25 @@ impl FnOuterItem {
             FnOuterItem::ItemTrait(item_trait) => &item_trait.generics,
         }
     }
+}
+
+/// Declares a loop invariant inside a loop body:
+///
+/// ```ignore
+/// fn f() {
+///     while cond {
+///         thrust_macros::invariant!(|x: i64| x >= 1);
+///         ...
+///     }
+/// }
+/// ```
+///
+/// The argument is a closure whose parameters name the live variables the
+/// invariant refers to (with their types) and whose body is the invariant
+/// predicate.
+#[proc_macro]
+pub fn invariant(input: TokenStream) -> TokenStream {
+    invariant::expand(input)
 }
 
 #[proc_macro_attribute]
