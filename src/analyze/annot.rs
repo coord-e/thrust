@@ -214,17 +214,9 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
 /// Parses a [`rty::TypePosition`] from the tokens of a
 /// `#[thrust::refinement_path(..)]` attribute.
 ///
-/// Tokens are comma-separated steps. Each step is one of:
-/// - The keyword `result` → [`rty::TypePositionStep::Return`] (navigate to a
-///   function type's return slot).
-/// - `$i` (a `$` followed by an integer) → [`rty::TypePositionStep::Param`]`(i)`
-///   (navigate to the `i`-th parameter of a function type).
-/// - A bare integer `i` → [`rty::TypePositionStep::TypeArg`]`(i)` (navigate to
-///   the `i`-th type argument of a generic type such as an enum or `Box`).
-///
-/// Examples: `result` is the return; `$0` is the first parameter; `$0, 0` is
-/// the first type-argument of the first parameter; `$0, result` is the return
-/// of a function-typed first parameter.
+/// Tokens are comma-separated [`rty::TypePositionStep`]s, each encoded as
+/// `result` (→ `Return`), `$i` (→ `Param(i)`), or a bare integer `i` (→
+/// `TypeArg(i)`).
 pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
     use rustc_ast::token::{LitKind, TokenKind};
     use rustc_ast::tokenstream::TokenTree;

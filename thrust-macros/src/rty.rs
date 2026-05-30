@@ -19,14 +19,11 @@ use super::{
     generic_turbofish, model_where_predicates, FnItemWithSignature, FnOuterItem,
 };
 
-/// One step in a refinement's type-position path.
+/// One step in a refinement's type-position path; mirrors the plugin's
+/// `rty::TypePositionStep`.
 ///
-/// Mirrors the plugin's `rty::TypePositionStep` and uses the same attribute
-/// encoding:
-/// - [`Param`](Self::Param) / [`Return`](Self::Return) navigate into a function
-///   type; encoded as `$i` / the `result` keyword.
-/// - [`TypeArg`](Self::TypeArg) navigates into a generic type argument; encoded
-///   as a bare integer `i`.
+/// The attribute encoding emitted into `#[thrust::refinement_path(..)]` is:
+/// `Param(i)` → `$i`, `Return` → `result`, `TypeArg(i)` → a bare integer `i`.
 #[derive(Clone, Copy)]
 enum TypePositionStep {
     Param(usize),

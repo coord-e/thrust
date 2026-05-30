@@ -117,14 +117,11 @@ impl std::fmt::Display for TypePositionStep {
     }
 }
 
-/// A path addressing a sub-type within a type, used to attach a refinement.
+/// A path of [`TypePositionStep`]s addressing a sub-type within a type, used
+/// to attach a refinement.
 ///
-/// An empty path addresses the type itself. Each step descends one level:
-/// [`TypePositionStep::Param`] / [`TypePositionStep::Return`] enter a function
-/// type's parameter or return slot, and [`TypePositionStep::TypeArg`] enters a
-/// generic type argument. Steps combine freely, so positions inside
-/// higher-order function types are expressible. A path applied to a function
-/// type is therefore non-empty, beginning with a `Param`/`Return` step.
+/// An empty path addresses the type itself; a path applied to a function type
+/// is therefore non-empty, beginning with a `Param` or `Return` step.
 ///
 /// Examples (function `fn f(x: List<T>) -> Box<T>`):
 /// - `$0` — parameter `x`.
@@ -1555,12 +1552,8 @@ where
 impl RefinedType<FunctionParamIdx> {
     /// Installs `refinement` at the sub-type addressed by `steps`.
     ///
-    /// An empty `steps` slice replaces the refinement at this node. Each step
-    /// in the slice navigates one level deeper:
-    /// - [`TypePositionStep::TypeArg`] descends into enum type arguments or the
-    ///   `Box` pointee.
-    /// - [`TypePositionStep::Param`] / [`TypePositionStep::Return`] descend
-    ///   into a function-typed position's parameter or return slot.
+    /// An empty `steps` slice replaces the refinement at this node; otherwise
+    /// each step navigates one level deeper per [`TypePositionStep`].
     pub fn install_refinement_at(
         &mut self,
         steps: &[TypePositionStep],
@@ -1579,7 +1572,7 @@ impl RefinedType<FunctionParamIdx> {
                     arg.install_refinement_at(rest, refinement);
                 }
                 Type::Pointer(p) => {
-                    assert_eq!(*i, 0, "Box type position must be [0]");
+                    assert_eq!(*i, 0, "Box type position must be 0");
                     p.elem.install_refinement_at(rest, refinement);
                 }
                 ty => panic!("TypeArg step on unsupported type: {:?}", ty),
