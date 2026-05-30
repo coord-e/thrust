@@ -864,10 +864,7 @@ impl<'tcx> Analyzer<'tcx> {
                     formula_def_id
                 );
             };
-            let AnnotFormula::Formula(formula) = formula_fn.to_ensure_annot() else {
-                panic!("refinement_path annotation must lower to a plain formula");
-            };
-            out.push((position, formula.into()));
+            out.push((position, formula_fn.to_refinement()));
         }
         out
     }

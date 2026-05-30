@@ -566,12 +566,12 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         self
     }
 
-    /// Installs a refinement at a [`rty::TypePosition`].
+    /// Records a refinement to install at a [`rty::TypePosition`].
     ///
     /// The first step must be [`rty::TypePositionStep::Param`] or
     /// [`rty::TypePositionStep::Return`]; the remaining steps are forwarded to
     /// [`rty::RefinedType::install_refinement_at`].
-    pub fn install_refinement_at(
+    pub fn refinement_at(
         &mut self,
         position: &rty::TypePosition,
         refinement: rty::Refinement<rty::FunctionParamIdx>,

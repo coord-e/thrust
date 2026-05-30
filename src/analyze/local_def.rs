@@ -436,7 +436,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             builder.ret_rty(ret_rty);
         }
         for (position, refinement) in refinement_annots {
-            builder.install_refinement_at(&position, refinement);
+            builder.refinement_at(&position, refinement);
         }
 
         if is_fully_annotated {
