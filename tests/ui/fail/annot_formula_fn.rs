@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@no-rustfix
 
 #[thrust::formula_fn]
 fn _thrust_requires_rand_except(x: i64) -> bool {
