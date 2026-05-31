@@ -8,7 +8,7 @@ use rustc_span::def_id::LocalDefId;
 
 use crate::analyze;
 use crate::chc;
-use crate::rty::{self, ClauseBuilderExt as _};
+use crate::rty::ClauseBuilderExt as _;
 
 /// An implementation of local crate analysis.
 ///
@@ -69,8 +69,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(local_def_id)))]
     fn refine_fn_def(&mut self, local_def_id: LocalDefId) {
-        let sig = self.ctx.fn_sig(local_def_id.to_def_id());
-
         let mut analyzer = self.ctx.local_def_analyzer(local_def_id);
 
         if analyzer.is_annotated_as_trusted() {
@@ -113,24 +111,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
 
-        let target_def_id = if analyzer.is_annotated_as_extern_spec_fn() {
-            analyzer.extern_spec_fn_target_def_id()
-        } else {
-            local_def_id.to_def_id()
-        };
-
-        use mir_ty::TypeVisitableExt as _;
-        if sig.has_param() {
-            if self.skip_analysis.contains(&local_def_id) {
-                self.ctx
-                    .register_deferred_def_without_analysis(target_def_id, local_def_id);
-            } else {
-                self.ctx.register_deferred_def(local_def_id);
-            }
-        } else {
-            let expected = analyzer.expected_ty();
-            self.ctx.register_def(target_def_id, expected);
-        }
+        let owner_fn_id = analyzer.owner_fn_id;
+        let expected = analyzer.expected_ty();
+        self.ctx.register_def(owner_fn_id, expected);
     }
 
     fn analyze_local_defs(&mut self) {
@@ -139,25 +122,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 continue;
             };
             if self.skip_analysis.contains(local_def_id) {
+                tracing::debug!("this is marked as skip analysis: {:?}", local_def_id);
                 continue;
             }
 
             let Some(expected) = self.ctx.concrete_def_ty(local_def_id.to_def_id()) else {
                 // when the local_def_id is deferred it would be skipped
+                tracing::debug!("this is marked as deferred type: {:?}", local_def_id);
                 continue;
             };
 
             // check polymorphic function def by replacing type params with some opaque type
             // (and this is no-op if the function is mono)
-            let mut expected = expected.clone();
-            let subst = rty::TypeParamSubst::new(
-                expected
-                    .free_ty_params()
-                    .into_iter()
-                    .map(|ty_param| (ty_param, rty::RefinedType::unrefined(rty::Type::int())))
-                    .collect(),
-            );
-            expected.subst_ty_params(&subst);
+            let expected = expected.clone();
             let generic_args = self.placeholder_generic_args(*local_def_id);
             self.ctx
                 .local_def_analyzer(*local_def_id)
@@ -196,12 +173,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let arg = match param.kind {
                 mir_ty::GenericParamDefKind::Type { .. } => {
                     if constrained_params.contains(&param.index) {
-                        panic!(
-                            "unable to check generic function with constrained type parameter: {}",
-                            self.tcx.def_path_str(local_def_id)
+                        let new_param =
+                            mir_ty::Ty::new_param(self.tcx, param.index, param.name).into();
+                        tracing::debug!(
+                            "replace the cosnstrained param {:#?} with the new param {:#?}.",
+                            param,
+                            new_param
                         );
+                        new_param
+                    } else {
+                        self.tcx.types.i32.into()
                     }
-                    self.tcx.types.i32.into()
                 }
                 mir_ty::GenericParamDefKind::Const { .. } => {
                     unimplemented!()
