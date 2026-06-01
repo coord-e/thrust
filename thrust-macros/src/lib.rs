@@ -5,6 +5,7 @@ use syn::{FnArg, Generics};
 
 mod context;
 mod invariant;
+mod invariant_context;
 mod spec;
 
 // ===== proc-macro entry points =====
@@ -34,6 +35,15 @@ pub fn context(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn invariant(input: TokenStream) -> TokenStream {
     invariant::expand(input)
+}
+
+/// Threads the surrounding generic context (and, in methods, `Self`) into
+/// every `thrust_macros::invariant!(...)` inside the annotated function, impl,
+/// or trait, so an invariant may refer to generic- and `Self`-typed variables
+/// that the standalone `invariant!` macro cannot see.
+#[proc_macro_attribute]
+pub fn invariant_context(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    invariant_context::expand(item)
 }
 
 #[proc_macro_attribute]
