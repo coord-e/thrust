@@ -129,10 +129,10 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
     }
 
     let mut def_params: Vec<TokenStream2> = Vec::new();
-    let mut def_wheres: Vec<TokenStream2> = context
+    let mut def_wheres: Vec<WherePredicate> = context
         .iter()
         .flat_map(|ctx| ctx.wheres.iter())
-        .map(|w| w.to_token_stream())
+        .cloned()
         .collect();
     let mut turbofish_args: Vec<TokenStream2> = Vec::new();
 
@@ -146,8 +146,7 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
             SelfRewriter { synth: &synth }.visit_fn_arg_mut(param);
         }
         def_params.push(quote!(#synth));
-        def_wheres.push(quote!(#synth: thrust_models::Model));
-        def_wheres.push(quote!(<#synth as thrust_models::Model>::Ty: PartialEq));
+        def_wheres.extend(crate::model_predicates(&synth));
         turbofish_args.push(quote!(Self));
     }
 
@@ -155,10 +154,12 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
         def_params.push(param.to_token_stream());
         match param {
             GenericParam::Type(tp) => {
-                let ident = &tp.ident;
-                def_wheres.push(quote!(#ident: thrust_models::Model));
-                def_wheres.push(quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
-                turbofish_args.push(ident.to_token_stream());
+                // A closure-typed param has no `Model` instance; re-declare and
+                // pass it through, but do not bound it.
+                if !crate::has_fn_bound(&tp.bounds) {
+                    def_wheres.extend(crate::model_predicates(&tp.ident));
+                }
+                turbofish_args.push(tp.ident.to_token_stream());
             }
             GenericParam::Const(cp) => turbofish_args.push(cp.ident.to_token_stream()),
             GenericParam::Lifetime(_) => {}

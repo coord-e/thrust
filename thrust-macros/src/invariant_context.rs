@@ -124,12 +124,16 @@ impl VisitMut for InvariantInjector<'_> {
     }
 }
 
+/// Type-parameter idents that need a `Model` bound: every type param except
+/// closure-typed ones, which have no `Model` instance.
 fn type_param_idents(generics: &Generics) -> Vec<TokenStream2> {
     generics
         .params
         .iter()
         .filter_map(|p| match p {
-            GenericParam::Type(tp) => Some(tp.ident.to_token_stream()),
+            GenericParam::Type(tp) if !crate::has_fn_bound(&tp.bounds) => {
+                Some(tp.ident.to_token_stream())
+            }
             _ => None,
         })
         .collect()

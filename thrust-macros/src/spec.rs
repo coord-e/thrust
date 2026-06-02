@@ -562,19 +562,6 @@ fn model_where_predicates(
         }
     }
 
-    impl GenericTypeParam {
-        fn has_fn_bound(&self) -> bool {
-            self.bounds.iter().any(|b| {
-                let TypeParamBound::Trait(tb) = b else {
-                    return false;
-                };
-                tb.path.segments.last().is_some_and(|s| {
-                    matches!(s.ident.to_string().as_str(), "Fn" | "FnOnce" | "FnMut")
-                })
-            })
-        }
-    }
-
     let mut generic_type_params: Vec<GenericTypeParam> = Vec::new();
     for param in &func.sig().generics.params {
         let GenericParam::Type(tp) = param else {
@@ -596,7 +583,7 @@ fn model_where_predicates(
             });
         }
     }
-    generic_type_params.retain(|p| !p.has_fn_bound());
+    generic_type_params.retain(|p| !crate::has_fn_bound(&p.bounds));
 
     let mut predicates: Vec<WherePredicate> = Vec::new();
     for param in &generic_type_params {
