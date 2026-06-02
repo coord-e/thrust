@@ -34,8 +34,6 @@ use proc_macro2::{TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, quote, ToTokens};
 use syn::{parse_macro_input, visit_mut::VisitMut, FnArg, GenericParam, WherePredicate};
 
-use crate::FnOuterItem;
-
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Expands `invariant!(CLOSURE)`: a bare predicate closure with no threaded
@@ -74,7 +72,7 @@ impl Context {
     /// Parses the `fn` header that carries the threaded context, returning the
     /// predicate closure from its body alongside the recovered context.
     fn from_context_fn(ctx_fn: syn::ItemFn) -> syn::Result<(syn::ExprClosure, Self)> {
-        let outer = extract_outer_context(&ctx_fn.attrs)?;
+        let outer = crate::extract_outer_context(&ctx_fn.attrs)?;
 
         let closure = match ctx_fn.block.stmts.as_slice() {
             [syn::Stmt::Expr(syn::Expr::Closure(closure), _)] => closure.clone(),
@@ -199,26 +197,6 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
 
         thrust_models::__invariant_marker(#name #turbofish)
     })
-}
-
-/// Reads the optional `#[thrust::_outer_context(..)]` attribute threaded onto a
-/// context-carrying invariant by `invariant_context`.
-fn extract_outer_context(attrs: &[syn::Attribute]) -> syn::Result<Option<FnOuterItem>> {
-    let outer_context_path: syn::Path = syn::parse_quote!(thrust::_outer_context);
-    let mut outer_context = None;
-    for attr in attrs {
-        if attr.path() != &outer_context_path {
-            continue;
-        }
-        if outer_context.is_some() {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "multiple _outer_context attributes found; expected at most one",
-            ));
-        }
-        outer_context = Some(attr.parse_args()?);
-    }
-    Ok(outer_context)
 }
 
 /// Rewrites a bare `Self` type path to a synthetic type parameter, so the type

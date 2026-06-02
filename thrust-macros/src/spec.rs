@@ -235,22 +235,7 @@ fn extract_requires_ensures(func: &mut FnItemWithSignature) -> syn::Result<(syn:
 }
 
 fn extract_outer_context(func: &FnItemWithSignature) -> syn::Result<Option<FnOuterItem>> {
-    let outer_context_path: syn::Path = syn::parse_quote!(thrust::_outer_context);
-    let mut outer_context = None;
-    for attr in func.attrs() {
-        if attr.path() != &outer_context_path {
-            continue;
-        }
-
-        let item = attr.parse_args()?;
-        if outer_context.is_some() {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "multiple _outer_context attributes found; expected at most one",
-            ));
-        }
-        outer_context = Some(item);
-    }
+    let outer_context = crate::extract_outer_context(func.attrs())?;
     if mentions_self(func.sig()) && outer_context.is_none() {
         return Err(syn::Error::new_spanned(
             func.sig().ident.clone(),
