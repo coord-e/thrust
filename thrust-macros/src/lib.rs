@@ -31,10 +31,20 @@ pub fn invariant(input: TokenStream) -> TokenStream {
     invariant::expand(input)
 }
 
+/// Context-carrying counterpart of `invariant!`, emitted by
+/// `#[thrust_macros::invariant_context]`. Not intended to be written by hand:
+/// it takes a `fn` header carrying the threaded generics/where clause whose
+/// body is the predicate closure (see [`invariant`]).
+#[proc_macro]
+pub fn _invariant_with_context(input: TokenStream) -> TokenStream {
+    invariant::expand_with_context(input)
+}
+
 /// Threads the surrounding generic context (and, in methods, `Self`) into
 /// every `thrust_macros::invariant!(...)` inside the annotated function, impl,
 /// or trait, so an invariant may refer to generic- and `Self`-typed variables
-/// that the standalone `invariant!` macro cannot see.
+/// that the standalone `invariant!` macro cannot see. Each such call is
+/// rewritten into `thrust_macros::_invariant_with_context!`.
 #[proc_macro_attribute]
 pub fn invariant_context(_attr: TokenStream, item: TokenStream) -> TokenStream {
     invariant_context::expand(item)

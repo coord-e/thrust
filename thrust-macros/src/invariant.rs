@@ -1,52 +1,70 @@
-//! Expansion of `thrust_macros::invariant!`.
+//! Expansion of `thrust_macros::invariant!` and its context-carrying sibling
+//! `thrust_macros::_invariant_with_context!`.
 //!
-//! Expands a predicate closure with explicit parameter types into a
+//! Both expand a predicate closure with explicit parameter types into a
 //! `#[thrust::formula_fn]` over `Model::Ty` parameters plus a marker call
-//! referencing it.
+//! referencing it; they share [`Invariant::expand`] and differ only in input:
 //!
-//! A standalone `invariant!(|x: i64| x >= 1)` only sees concrete types. To
-//! refer to generic- or `Self`-typed variables, the enclosing item must be
-//! annotated with `#[thrust_macros::invariant_context]`, which rewrites each
-//! call into a context-carrying form that threads the in-scope generics (and,
-//! in methods, `Self`) into the macro input:
+//! - `invariant!(|x: i64| x >= 1)` takes a bare predicate closure and only sees
+//!   concrete types.
+//! - `_invariant_with_context!(..)` additionally carries the enclosing generic
+//!   context. It is never written by hand: `#[thrust_macros::invariant_context]`
+//!   rewrites each `invariant!` it finds into this form, threading the in-scope
+//!   generics (and, in methods, `Self`) in as an ordinary `fn` header whose body
+//!   is the predicate closure:
 //!
-//! ```ignore
-//! invariant!(
-//!     #[thrust::_outer_context(impl<T> Foo<T> where ..)]  // methods only
-//!     fn _ctx<U>() where .. {
-//!         |x: T, v: T| x == v
-//!     }
-//! )
-//! ```
+//!   ```ignore
+//!   _invariant_with_context!(
+//!       #[thrust::_outer_context(impl<T> Foo<T> where ..)]  // methods only
+//!       fn _ctx<U>() where .. {
+//!           |x: T, v: T| x == v
+//!       }
+//!   )
+//!   ```
 //!
-//! This macro re-declares the threaded generics (shadowing the enclosing ones)
-//! on the formula function and instantiates it via turbofish; in methods,
-//! `Self` is re-declared as a synthetic type parameter and instantiated with
-//! the real `Self` (legal in expression position).
+//!   The threaded generics (shadowing the enclosing ones) are re-declared on the
+//!   formula function and instantiated via turbofish; in methods, `Self` is
+//!   re-declared as a synthetic type parameter and instantiated with the real
+//!   `Self` (legal in expression position).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, quote, ToTokens};
-use syn::{
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-    visit_mut::VisitMut,
-    FnArg, GenericParam, WherePredicate,
-};
+use syn::{parse_macro_input, visit_mut::VisitMut, FnArg, GenericParam, WherePredicate};
 
 use crate::FnOuterItem;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+/// Expands `invariant!(CLOSURE)`: a bare predicate closure with no threaded
+/// context.
 pub fn expand(input: TokenStream) -> TokenStream {
-    let invariant = parse_macro_input!(input as Invariant);
-    invariant.expand().into_token_stream().into()
+    let closure = parse_macro_input!(input as syn::ExprClosure);
+    Invariant {
+        closure,
+        params: Vec::new(),
+        wheres: Vec::new(),
+        is_method: false,
+    }
+    .expand()
+    .into_token_stream()
+    .into()
 }
 
-/// The parsed `invariant!` input: the predicate closure plus the enclosing
-/// generic context threaded in by `#[thrust_macros::invariant_context]`.
+/// Expands `_invariant_with_context!(CONTEXT_FN)`, the form
+/// `#[thrust_macros::invariant_context]` rewrites each `invariant!` into.
+pub fn expand_with_context(input: TokenStream) -> TokenStream {
+    let ctx_fn = parse_macro_input!(input as syn::ItemFn);
+    match Invariant::from_context_fn(ctx_fn) {
+        Ok(invariant) => invariant.expand().into_token_stream().into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
+/// The closure to expand plus the enclosing generic context threaded in by
+/// `#[thrust_macros::invariant_context]`.
 struct Invariant {
     closure: syn::ExprClosure,
     /// In-scope generic params (the enclosing function's own, plus the outer
@@ -57,27 +75,6 @@ struct Invariant {
     wheres: Vec<WherePredicate>,
     /// Whether `Self` is nameable at the call site (i.e. we are in a method).
     is_method: bool,
-}
-
-impl Parse for Invariant {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        // Context-carrying form injected by `invariant_context`: a function
-        // header whose generics/where clause carry the enclosing context and
-        // whose body is the predicate closure. It always starts with the
-        // `#[thrust::_outer_context(..)]` attribute (methods) or `fn` (free
-        // functions); a standalone predicate closure starts with neither.
-        if input.peek(syn::Token![#]) || input.peek(syn::Token![fn]) {
-            let ctx_fn: syn::ItemFn = input.parse()?;
-            return Self::from_context_fn(ctx_fn);
-        }
-
-        Ok(Self {
-            closure: input.parse()?,
-            params: Vec::new(),
-            wheres: Vec::new(),
-            is_method: false,
-        })
-    }
 }
 
 impl Invariant {

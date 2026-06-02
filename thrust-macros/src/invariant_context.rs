@@ -6,10 +6,11 @@
 //! standalone `invariant!` macro cannot see.
 //!
 //! This macro does **not** expand the invariants itself: it only injects the
-//! context, by rewriting each call into the context-carrying form that
-//! `invariant!` knows how to expand (a `fn` header carrying the in-scope
-//! generics/where clause, plus a `#[thrust::_outer_context(..)]` attribute
-//! carrying the enclosing `impl`/`trait` header for methods).
+//! context, by rewriting each `invariant!(..)` call into a
+//! `thrust_macros::_invariant_with_context!(..)` call carrying that context (a
+//! `fn` header carrying the in-scope generics/where clause, plus a
+//! `#[thrust::_outer_context(..)]` attribute carrying the enclosing
+//! `impl`/`trait` header for methods).
 //!
 //! It also extends the host function's where clause with `T: Model` and
 //! `<T as Model>::Ty: PartialEq` predicates for every in-scope type parameter
@@ -92,10 +93,10 @@ impl<'a> InvariantInjector<'a> {
         }
     }
 
-    /// Rewrites the closure inside `invariant!(CLOSURE)` into the
-    /// context-carrying form that `invariant!` expands using the threaded
-    /// context: a `fn` header carrying the in-scope generics/where clause,
-    /// tagged (for methods) with the enclosing `impl`/`trait` header.
+    /// Builds the context-carrying argument for `_invariant_with_context!` from
+    /// the closure inside an `invariant!(CLOSURE)` call: a `fn` header carrying
+    /// the in-scope generics/where clause, tagged (for methods) with the
+    /// enclosing `impl`/`trait` header.
     fn inject_context(&self, closure: &TokenStream2) -> TokenStream2 {
         let generics = self.fn_generics;
         let where_clause = &self.fn_generics.where_clause;
@@ -146,6 +147,7 @@ impl VisitMut for InvariantInjector<'_> {
             self.self_used = true;
         }
         mac.tokens = self.inject_context(&mac.tokens);
+        mac.path = syn::parse_quote!(::thrust_macros::_invariant_with_context);
     }
 }
 
