@@ -41,10 +41,14 @@ pub fn _invariant_with_context(input: TokenStream) -> TokenStream {
 }
 
 /// Threads the surrounding generic context (and, in methods, `Self`) into
-/// every `thrust_macros::invariant!(...)` inside the annotated function, impl,
-/// or trait, so an invariant may refer to generic- and `Self`-typed variables
-/// that the standalone `invariant!` macro cannot see. Each such call is
-/// rewritten into `thrust_macros::_invariant_with_context!`.
+/// every `thrust_macros::invariant!(...)` inside the annotated function, so an
+/// invariant may refer to generic- and `Self`-typed variables that the
+/// standalone `invariant!` macro cannot see. Each such call is rewritten into
+/// `thrust_macros::_invariant_with_context!`.
+///
+/// Applied to a single function; a method recovers its enclosing
+/// `impl`/`trait` context from `#[thrust_macros::context]` on the surrounding
+/// block, as `requires`/`ensures` do.
 #[proc_macro_attribute]
 pub fn invariant_context(_attr: TokenStream, item: TokenStream) -> TokenStream {
     invariant_context::expand(item)

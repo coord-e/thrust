@@ -1,9 +1,22 @@
 //! Expansion of `#[thrust_macros::invariant_context]`.
 //!
 //! Threads the surrounding generic context (and, in methods, `Self`) into
-//! every `thrust_macros::invariant!(...)` call inside the annotated item, so an
-//! invariant may refer to generic- and `Self`-typed variables that the
+//! every `thrust_macros::invariant!(...)` call inside the annotated function, so
+//! an invariant may refer to generic- and `Self`-typed variables that the
 //! standalone `invariant!` macro cannot see.
+//!
+//! It is applied to a single function. A method recovers its enclosing
+//! `impl`/`trait` header from the `#[thrust::_outer_context(..)]` attribute
+//! stamped by `#[thrust_macros::context]`, the same mechanism `requires`/
+//! `ensures` use:
+//!
+//! ```ignore
+//! #[thrust_macros::context]
+//! impl<T> Foo<T> {
+//!     #[thrust_macros::invariant_context]
+//!     fn f(&self) { .. }
+//! }
+//! ```
 //!
 //! This macro does **not** expand the invariants itself: it only injects the
 //! context, by rewriting each `invariant!(..)` call into a
@@ -25,54 +38,19 @@ use syn::{visit_mut::VisitMut, GenericParam, Generics};
 use crate::FnOuterItem;
 
 pub(super) fn expand(item: TokenStream) -> TokenStream {
-    let mut item = syn::parse_macro_input!(item as syn::Item);
+    let mut item_fn = syn::parse_macro_input!(item as syn::ItemFn);
 
-    match &mut item {
-        syn::Item::Fn(item_fn) => {
-            let generics = item_fn.sig.generics.clone();
-            let mut injector = InvariantInjector::new(&generics, None);
-            injector.visit_block_mut(&mut item_fn.block);
-            injector.inject_model_bounds(&mut item_fn.sig.generics);
-        }
-        syn::Item::Impl(item_impl) => {
-            let outer = FnOuterItem::ItemImpl(item_impl.clone()).into_header_only();
-            for impl_item in &mut item_impl.items {
-                let syn::ImplItem::Fn(method) = impl_item else {
-                    continue;
-                };
-                let generics = method.sig.generics.clone();
-                let mut injector = InvariantInjector::new(&generics, Some(&outer));
-                injector.visit_block_mut(&mut method.block);
-                injector.inject_model_bounds(&mut method.sig.generics);
-            }
-        }
-        syn::Item::Trait(item_trait) => {
-            let outer = FnOuterItem::ItemTrait(item_trait.clone()).into_header_only();
-            for trait_item in &mut item_trait.items {
-                let syn::TraitItem::Fn(method) = trait_item else {
-                    continue;
-                };
-                let Some(block) = &mut method.default else {
-                    continue;
-                };
-                let generics = method.sig.generics.clone();
-                let mut injector = InvariantInjector::new(&generics, Some(&outer));
-                injector.visit_block_mut(block);
-                injector.inject_model_bounds(&mut method.sig.generics);
-            }
-        }
-        _ => {
-            return syn::Error::new_spanned(
-                &item,
-                "#[thrust_macros::invariant_context] expects a function, impl block, or trait \
-                 definition",
-            )
-            .to_compile_error()
-            .into();
-        }
-    }
+    let outer = match crate::extract_outer_context(&item_fn.attrs) {
+        Ok(outer) => outer,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
-    item.into_token_stream().into()
+    let generics = item_fn.sig.generics.clone();
+    let mut injector = InvariantInjector::new(&generics, outer.as_ref());
+    injector.visit_block_mut(&mut item_fn.block);
+    injector.inject_model_bounds(&mut item_fn.sig.generics);
+
+    item_fn.into_token_stream().into()
 }
 
 struct InvariantInjector<'a> {

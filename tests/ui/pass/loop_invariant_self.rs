@@ -11,8 +11,9 @@ impl thrust_models::Model for Counter {
     type Ty = (thrust_models::model::Int,);
 }
 
-#[thrust_macros::invariant_context]
+#[thrust_macros::context]
 impl Counter {
+    #[thrust_macros::invariant_context]
     fn run(self) {
         let mut c = self;
         let mut x = 1_i64;
