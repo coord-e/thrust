@@ -600,9 +600,7 @@ fn model_where_predicates(
 
     let mut predicates: Vec<WherePredicate> = Vec::new();
     for param in &generic_type_params {
-        let ident = &param.ident;
-        predicates.push(syn::parse_quote!(#ident: thrust_models::Model));
-        predicates.push(syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
+        predicates.extend(crate::model_predicates(&param.ident));
     }
 
     struct Visitor {
@@ -641,8 +639,7 @@ fn model_where_predicates(
     }
     visitor.visit_return_type(&func.sig().output);
     for tp in visitor.generic_paths {
-        predicates.push(syn::parse_quote!(#tp: thrust_models::Model));
-        predicates.push(syn::parse_quote!(<#tp as thrust_models::Model>::Ty: PartialEq));
+        predicates.extend(crate::model_predicates(&tp));
     }
 
     predicates

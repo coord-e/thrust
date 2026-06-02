@@ -106,12 +106,7 @@ impl<'a> InvariantInjector<'a> {
         }
         let where_clause = generics.make_where_clause();
         for ty in tys {
-            where_clause
-                .predicates
-                .push(syn::parse_quote!(#ty: thrust_models::Model));
-            where_clause
-                .predicates
-                .push(syn::parse_quote!(<#ty as thrust_models::Model>::Ty: PartialEq));
+            where_clause.predicates.extend(crate::model_predicates(&ty));
         }
     }
 }
