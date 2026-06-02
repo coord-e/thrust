@@ -3,7 +3,7 @@
 //!
 //! Both expand a predicate closure with explicit parameter types into a
 //! `#[thrust::formula_fn]` over `Model::Ty` parameters plus a marker call
-//! referencing it; they share [`Invariant::expand`] and differ only in input:
+//! referencing it; they share [`expand_invariant`] and differ only in input:
 //!
 //! - `invariant!(|x: i64| x >= 1)` takes a bare predicate closure and only sees
 //!   concrete types.
@@ -42,33 +42,26 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// context.
 pub fn expand(input: TokenStream) -> TokenStream {
     let closure = parse_macro_input!(input as syn::ExprClosure);
-    Invariant {
-        closure,
-        params: Vec::new(),
-        wheres: Vec::new(),
-        is_method: false,
-    }
-    .expand()
-    .into_token_stream()
-    .into()
+    expand_invariant(&closure, None).into_token_stream().into()
 }
 
 /// Expands `_invariant_with_context!(CONTEXT_FN)`, the form
 /// `#[thrust_macros::invariant_context]` rewrites each `invariant!` into.
 pub fn expand_with_context(input: TokenStream) -> TokenStream {
     let ctx_fn = parse_macro_input!(input as syn::ItemFn);
-    match Invariant::from_context_fn(ctx_fn) {
-        Ok(invariant) => invariant.expand().into_token_stream().into(),
+    match Context::from_context_fn(ctx_fn) {
+        Ok((closure, context)) => expand_invariant(&closure, Some(&context))
+            .into_token_stream()
+            .into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-/// The closure to expand plus the enclosing generic context threaded in by
-/// `#[thrust_macros::invariant_context]`.
-struct Invariant {
-    closure: syn::ExprClosure,
-    /// In-scope generic params (the enclosing function's own, plus the outer
-    /// `impl`/`trait`'s for a method). Empty for a standalone `invariant!`.
+/// The enclosing generic context threaded into an invariant by
+/// `#[thrust_macros::invariant_context]`. A standalone `invariant!` has none.
+struct Context {
+    /// In-scope generic params: the enclosing function's own, plus the outer
+    /// `impl`/`trait`'s for a method.
     params: Vec<GenericParam>,
     /// Combined where-predicates from the function and (for a method) the
     /// outer `impl`/`trait`.
@@ -77,8 +70,10 @@ struct Invariant {
     is_method: bool,
 }
 
-impl Invariant {
-    fn from_context_fn(ctx_fn: syn::ItemFn) -> syn::Result<Self> {
+impl Context {
+    /// Parses the `fn` header that carries the threaded context, returning the
+    /// predicate closure from its body alongside the recovered context.
+    fn from_context_fn(ctx_fn: syn::ItemFn) -> syn::Result<(syn::ExprClosure, Self)> {
         let outer = extract_outer_context(&ctx_fn.attrs)?;
 
         let closure = match ctx_fn.block.stmts.as_slice() {
@@ -106,95 +101,104 @@ impl Invariant {
             }
         }
 
-        Ok(Self {
+        Ok((
             closure,
-            params,
-            wheres,
-            is_method: outer.is_some(),
-        })
+            Self {
+                params,
+                wheres,
+                is_method: outer.is_some(),
+            },
+        ))
+    }
+}
+
+/// Expands a predicate closure into a `#[thrust::formula_fn]` plus a marker
+/// call. With `context`, the threaded generics (and, in methods, `Self`) are
+/// re-declared on the formula function and instantiated via turbofish.
+fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> syn::Expr {
+    let mut fn_params: Vec<FnArg> = Vec::new();
+    for param in &closure.inputs {
+        let syn::Pat::Type(pt) = param else {
+            let err = syn::Error::new_spanned(
+                param,
+                "invariant closure parameters must have explicit types, e.g. `|x: i64| ...`",
+            );
+            return syn::Expr::Verbatim(err.to_compile_error());
+        };
+        let pat = &pt.pat;
+        let ty = &pt.ty;
+        fn_params.push(syn::parse_quote!(#pat: #ty));
     }
 
-    fn expand(&self) -> syn::Expr {
-        let mut fn_params: Vec<FnArg> = Vec::new();
-        for param in &self.closure.inputs {
-            let syn::Pat::Type(pt) = param else {
-                let err = syn::Error::new_spanned(
-                    param,
-                    "invariant closure parameters must have explicit types, e.g. `|x: i64| ...`",
-                );
-                return syn::Expr::Verbatim(err.to_compile_error());
-            };
-            let pat = &pt.pat;
-            let ty = &pt.ty;
-            fn_params.push(syn::parse_quote!(#pat: #ty));
+    let mut def_params: Vec<TokenStream2> = Vec::new();
+    let mut def_wheres: Vec<TokenStream2> = context
+        .iter()
+        .flat_map(|ctx| ctx.wheres.iter())
+        .map(|w| w.to_token_stream())
+        .collect();
+    let mut turbofish_args: Vec<TokenStream2> = Vec::new();
+
+    // `Self` in a method context: rewrite it to a synthetic generic, then pass
+    // the real `Self` via turbofish (legal in expression position).
+    let uses_self =
+        context.is_some_and(|ctx| ctx.is_method) && tokens_contain_self(&closure.to_token_stream());
+    if uses_self {
+        let synth: syn::Ident = format_ident!("__ThrustSelf");
+        for param in &mut fn_params {
+            SelfRewriter { synth: &synth }.visit_fn_arg_mut(param);
         }
-
-        let mut def_params: Vec<TokenStream2> = Vec::new();
-        let mut def_wheres: Vec<TokenStream2> =
-            self.wheres.iter().map(|w| w.to_token_stream()).collect();
-        let mut turbofish_args: Vec<TokenStream2> = Vec::new();
-
-        // `Self` in a method context: rewrite it to a synthetic generic, then
-        // pass the real `Self` via turbofish (legal in expression position).
-        let uses_self = self.is_method && tokens_contain_self(&self.closure.to_token_stream());
-        if uses_self {
-            let synth: syn::Ident = format_ident!("__ThrustSelf");
-            for param in &mut fn_params {
-                SelfRewriter { synth: &synth }.visit_fn_arg_mut(param);
-            }
-            def_params.push(quote!(#synth));
-            def_wheres.push(quote!(#synth: thrust_models::Model));
-            def_wheres.push(quote!(<#synth as thrust_models::Model>::Ty: PartialEq));
-            turbofish_args.push(quote!(Self));
-        }
-
-        for param in &self.params {
-            def_params.push(param.to_token_stream());
-            match param {
-                GenericParam::Type(tp) => {
-                    let ident = &tp.ident;
-                    def_wheres.push(quote!(#ident: thrust_models::Model));
-                    def_wheres.push(quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
-                    turbofish_args.push(ident.to_token_stream());
-                }
-                GenericParam::Const(cp) => turbofish_args.push(cp.ident.to_token_stream()),
-                GenericParam::Lifetime(_) => {}
-            }
-        }
-
-        let model_ty_params = crate::fn_params_with_model_ty(&fn_params);
-        let body = &self.closure.body;
-
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let name = format_ident!("_thrust_invariant_{}", id);
-
-        let def_generics = if def_params.is_empty() {
-            quote!()
-        } else {
-            quote!(<#(#def_params),*>)
-        };
-        let where_clause = if def_wheres.is_empty() {
-            quote!()
-        } else {
-            quote!(where #(#def_wheres),*)
-        };
-        let turbofish = if turbofish_args.is_empty() {
-            quote!()
-        } else {
-            quote!(::<#(#turbofish_args),*>)
-        };
-
-        syn::parse_quote!({
-            #[allow(unused_variables)]
-            #[allow(non_snake_case)]
-            #[thrust::formula_fn]
-            fn #name #def_generics(#model_ty_params) -> bool #where_clause {
-                #body
-            }
-
-            thrust_models::__invariant_marker(#name #turbofish)
-        })
+        def_params.push(quote!(#synth));
+        def_wheres.push(quote!(#synth: thrust_models::Model));
+        def_wheres.push(quote!(<#synth as thrust_models::Model>::Ty: PartialEq));
+        turbofish_args.push(quote!(Self));
     }
+
+    for param in context.iter().flat_map(|ctx| ctx.params.iter()) {
+        def_params.push(param.to_token_stream());
+        match param {
+            GenericParam::Type(tp) => {
+                let ident = &tp.ident;
+                def_wheres.push(quote!(#ident: thrust_models::Model));
+                def_wheres.push(quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
+                turbofish_args.push(ident.to_token_stream());
+            }
+            GenericParam::Const(cp) => turbofish_args.push(cp.ident.to_token_stream()),
+            GenericParam::Lifetime(_) => {}
+        }
+    }
+
+    let model_ty_params = crate::fn_params_with_model_ty(&fn_params);
+    let body = &closure.body;
+
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let name = format_ident!("_thrust_invariant_{}", id);
+
+    let def_generics = if def_params.is_empty() {
+        quote!()
+    } else {
+        quote!(<#(#def_params),*>)
+    };
+    let where_clause = if def_wheres.is_empty() {
+        quote!()
+    } else {
+        quote!(where #(#def_wheres),*)
+    };
+    let turbofish = if turbofish_args.is_empty() {
+        quote!()
+    } else {
+        quote!(::<#(#turbofish_args),*>)
+    };
+
+    syn::parse_quote!({
+        #[allow(unused_variables)]
+        #[allow(non_snake_case)]
+        #[thrust::formula_fn]
+        fn #name #def_generics(#model_ty_params) -> bool #where_clause {
+            #body
+        }
+
+        thrust_models::__invariant_marker(#name #turbofish)
+    })
 }
 
 /// Reads the optional `#[thrust::_outer_context(..)]` attribute threaded onto a
