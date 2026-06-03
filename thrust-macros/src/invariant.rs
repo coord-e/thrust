@@ -30,7 +30,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use proc_macro::TokenStream;
-use proc_macro2::{TokenStream as TokenStream2, TokenTree};
+use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse::{Parse, ParseStream},
@@ -53,30 +53,29 @@ pub fn expand(input: TokenStream) -> TokenStream {
 /// Expands `_invariant_with_context!(#outer_attr #sig; CLOSURE)`, the form
 /// `#[thrust_macros::invariant_context]` rewrites each `invariant!` into.
 pub fn expand_with_context(input: TokenStream) -> TokenStream {
+    struct WithContext {
+        context: Context,
+        closure: syn::ExprClosure,
+    }
+
+    impl Parse for WithContext {
+        fn parse(input: ParseStream) -> syn::Result<Self> {
+            let attrs = input.call(syn::Attribute::parse_outer)?;
+            let outer = crate::extract_outer_context(&attrs)?;
+            let sig: Signature = input.parse()?;
+            input.parse::<syn::Token![;]>()?;
+            let closure: syn::ExprClosure = input.parse()?;
+            Ok(Self {
+                context: Context { sig, outer },
+                closure,
+            })
+        }
+    }
+
     let WithContext { closure, context } = parse_macro_input!(input as WithContext);
     expand_invariant(&closure, Some(&context))
         .into_token_stream()
         .into()
-}
-
-/// The parsed `_invariant_with_context!` input.
-struct WithContext {
-    context: Context,
-    closure: syn::ExprClosure,
-}
-
-impl Parse for WithContext {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let attrs = input.call(syn::Attribute::parse_outer)?;
-        let outer = crate::extract_outer_context(&attrs)?;
-        let sig: Signature = input.parse()?;
-        input.parse::<syn::Token![;]>()?;
-        let closure: syn::ExprClosure = input.parse()?;
-        Ok(Self {
-            context: Context { sig, outer },
-            closure,
-        })
-    }
 }
 
 /// The enclosing context threaded into an invariant by
@@ -88,13 +87,9 @@ struct Context {
 }
 
 impl Context {
-    fn is_method(&self) -> bool {
-        self.outer.is_some()
-    }
-
     /// The generic params in scope: the host signature's own, plus the outer
     /// `impl`/`trait`'s for a method.
-    fn params(&self) -> impl Iterator<Item = &GenericParam> {
+    fn generic_params(&self) -> impl Iterator<Item = &GenericParam> {
         self.sig
             .generics
             .params
@@ -132,30 +127,7 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
 
     let mut def_params: Vec<TokenStream2> = Vec::new();
     let mut turbofish_args: Vec<TokenStream2> = Vec::new();
-    // The where-predicates the host already declares, carried verbatim.
-    let mut def_wheres: Vec<WherePredicate> = context
-        .into_iter()
-        .flat_map(Context::where_predicates)
-        .cloned()
-        .collect();
-
-    // `Self` in a method context: rewrite it to a synthetic generic, then pass
-    // the real `Self` via turbofish (legal in expression position).
-    let uses_self =
-        context.is_some_and(Context::is_method) && tokens_contain_self(&closure.to_token_stream());
-    if uses_self {
-        let synth: syn::Ident = format_ident!("__ThrustSelf");
-        for param in &mut fn_params {
-            SelfRewriter { synth: &synth }.visit_fn_arg_mut(param);
-        }
-        def_params.push(quote!(#synth));
-        def_wheres.extend(crate::model_predicates(&synth));
-        turbofish_args.push(quote!(Self));
-    }
-
-    // Re-declare the in-scope generics on the formula function and pass them
-    // through the turbofish.
-    for param in context.into_iter().flat_map(Context::params) {
+    for param in context.into_iter().flat_map(Context::generic_params) {
         def_params.push(param.to_token_stream());
         match param {
             GenericParam::Type(tp) => turbofish_args.push(tp.ident.to_token_stream()),
@@ -164,12 +136,28 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
         }
     }
 
-    // `Model` bounds for those generics (closure-typed params are skipped).
+    let mut def_wheres: Vec<WherePredicate> = context
+        .into_iter()
+        .flat_map(Context::where_predicates)
+        .cloned()
+        .collect();
     if let Some(context) = context {
         def_wheres.extend(crate::model_where_predicates(
             &context.sig,
             context.outer.as_ref(),
         ));
+    }
+
+    // `Self` in a method context: rewrite it to a synthetic generic, then pass
+    // the real `Self` via turbofish (legal in expression position).
+    if crate::tokens_contain_ident(&closure.to_token_stream(), "Self") {
+        let synth: syn::Ident = format_ident!("__ThrustSelf");
+        for param in &mut fn_params {
+            SelfRewriter { synth: &synth }.visit_fn_arg_mut(param);
+        }
+        def_params.push(quote!(#synth));
+        def_wheres.extend(crate::model_predicates(&synth));
+        turbofish_args.push(quote!(Self));
     }
 
     let model_ty_params = crate::fn_params_with_model_ty(&fn_params);
@@ -206,9 +194,6 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
     })
 }
 
-/// Rewrites a bare `Self` type path to a synthetic type parameter, so the type
-/// can be named inside a nested formula function. Qualified paths such as
-/// `Self::Assoc` are left untouched (and are not supported in invariants).
 struct SelfRewriter<'a> {
     synth: &'a syn::Ident,
 }
@@ -223,12 +208,4 @@ impl VisitMut for SelfRewriter<'_> {
             path.segments[0].ident = self.synth.clone();
         }
     }
-}
-
-fn tokens_contain_self(tokens: &TokenStream2) -> bool {
-    tokens.clone().into_iter().any(|tt| match tt {
-        TokenTree::Ident(ident) => ident == "Self",
-        TokenTree::Group(group) => tokens_contain_self(&group.stream()),
-        _ => false,
-    })
 }
