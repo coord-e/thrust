@@ -140,6 +140,14 @@ impl<'tcx> TypeBuilder<'tcx> {
         rty::ParamType::new(param_local_idx, *forall_sort_idx).into()
     }
 
+    fn translate_alias_type(&self, ty: &mir_ty::AliasTy) -> rty::Type<rty::Closed> {
+        let mut type_params = self.type_params.borrow_mut();
+        let index = type_params
+            .entry(TypeParam::AssocType(ty.def_id))
+            .or_insert_with(|| self.system.borrow_mut().new_forall_sort());
+        rty::AliasType::new(*index).into()
+    }
+
     /// Replaces {closure} types with thrust_models::Closure<{closure}>.
     ///
     /// Ideally, we want to have `impl<F> Model for F where F: Fn` instead of this and let
@@ -301,7 +309,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
-            // mir_ty::TyKind::Alias(_, ty) => self.translate_alias_type(ty),
+            mir_ty::TyKind::Alias(_, ty) => self.translate_alias_type(ty),
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
     }

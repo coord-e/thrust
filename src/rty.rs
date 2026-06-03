@@ -763,6 +763,30 @@ impl ParamType {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AliasType {
+    forall_sort_idx: ForallSortIdx,
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &AliasType
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        self.forall_sort_idx.pretty(allocator)
+    }
+}
+
+impl AliasType {
+    pub fn new(forall_sort_idx: ForallSortIdx) -> Self {
+        AliasType { forall_sort_idx }
+    }
+
+    pub fn forall_sort_index(&self) -> ForallSortIdx {
+        self.forall_sort_idx
+    }
+}
+
 /// An array type.
 #[derive(Debug, Clone)]
 pub struct ArrayType<T> {
@@ -854,6 +878,7 @@ pub enum Type<T> {
     String,
     Never,
     Param(ParamType),
+    Alias(AliasType),
     Pointer(PointerType<T>),
     Function(FunctionType),
     Tuple(TupleType<T>),
@@ -864,6 +889,12 @@ pub enum Type<T> {
 impl<T> From<ParamType> for Type<T> {
     fn from(t: ParamType) -> Type<T> {
         Type::Param(t)
+    }
+}
+
+impl<T> From<AliasType> for Type<T> {
+    fn from(t: AliasType) -> Type<T> {
+        Type::Alias(t)
     }
 }
 
@@ -910,6 +941,7 @@ where
             Type::String => allocator.text("string"),
             Type::Never => allocator.text("!"),
             Type::Param(ty) => ty.pretty(allocator),
+            Type::Alias(ty) => ty.pretty(allocator),
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
             Type::Tuple(ty) => ty.pretty(allocator),
@@ -1043,6 +1075,7 @@ impl<T> Type<T> {
             Type::String => chc::Sort::null(),
             Type::Never => chc::Sort::null(),
             Type::Param(ty) => chc::Sort::forall(ty.forall_sort_index()),
+            Type::Alias(ty) => chc::Sort::Forall(ty.forall_sort_index()),
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.ty.to_sort();
 
@@ -1080,6 +1113,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.subst_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.subst_var(f)),
@@ -1098,6 +1132,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.map_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.map_var(f)),
@@ -1117,6 +1152,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.strip_refinement()),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
@@ -1127,7 +1163,9 @@ impl<T> Type<T> {
 
     pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
         match self {
-            Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
+            Type::Int | Type::Bool | Type::String | Type::Never | Type::Alias(_) => {
+                Default::default()
+            }
             Type::Param(ty) => std::iter::once(ty.type_param_index()).collect(),
             Type::Pointer(ty) => ty.free_ty_params(),
             Type::Function(ty) => ty.free_ty_params(),
@@ -1693,7 +1731,7 @@ impl<FV> RefinedType<FV> {
     {
         self.refinement.subst_ty_params_in_sorts(subst);
         match &mut self.ty {
-            Type::Int | Type::Bool | Type::String | Type::Never => {}
+            Type::Int | Type::Bool | Type::String | Type::Never | Type::Alias(_) => {}
             Type::Param(ty) => {
                 if let Some(rty) = subst.get(ty.type_param_index()) {
                     let RefinedType {
