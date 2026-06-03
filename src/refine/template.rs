@@ -144,7 +144,16 @@ impl<'tcx> TypeBuilder<'tcx> {
         let mut type_params = self.type_params.borrow_mut();
         let index = type_params
             .entry(TypeParam::AssocType(ty.def_id))
-            .or_insert_with(|| self.system.borrow_mut().new_forall_sort());
+            .or_insert_with(|| {
+                let idx = self.system.borrow_mut().new_forall_sort();
+                tracing::debug!(
+                    "issue the new ForallSortIdx {} for AliasTy {:?}.",
+                    idx,
+                    ty,
+                );
+                idx
+            });
+        
         rty::AliasType::new(*index).into()
     }
 
