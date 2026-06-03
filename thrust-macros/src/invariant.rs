@@ -9,20 +9,20 @@
 //!   concrete types.
 //! - `_invariant_with_context!(..)` additionally carries the enclosing generic
 //!   context. It is never written by hand: `#[thrust_macros::invariant_context]`
-//!   rewrites each `invariant!` it finds into this form, threading the in-scope
-//!   generics (and, in methods, `Self`) in as an ordinary `fn` header whose body
-//!   is the predicate closure:
+//!   rewrites each `invariant!` it finds into this form, pasting the host
+//!   function's signature (and, in methods, a `#[thrust::_outer_context(..)]`
+//!   attribute carrying the enclosing `impl`/`trait` header) ahead of the
+//!   closure:
 //!
 //!   ```ignore
 //!   _invariant_with_context!(
 //!       #[thrust::_outer_context(impl<T> Foo<T> where ..)]  // methods only
-//!       fn _ctx<U>() where .. {
-//!           |x: T, v: T| x == v
-//!       }
+//!       fn f<U>(..) -> .. where ..;                         // host signature, as-is
+//!       |x: T, v: T| x == v
 //!   )
 //!   ```
 //!
-//!   The threaded generics (shadowing the enclosing ones) are re-declared on the
+//!   The in-scope generics (shadowing the enclosing ones) are re-declared on the
 //!   formula function and instantiated via turbofish; in methods, `Self` is
 //!   re-declared as a synthetic type parameter and instantiated with the real
 //!   `Self` (legal in expression position).
@@ -32,7 +32,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, quote, ToTokens};
-use syn::{parse_macro_input, visit_mut::VisitMut, FnArg, GenericParam, WherePredicate};
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    visit_mut::VisitMut,
+    FnArg, GenericParam, Signature, WherePredicate,
+};
+
+use crate::FnOuterItem;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -43,75 +50,70 @@ pub fn expand(input: TokenStream) -> TokenStream {
     expand_invariant(&closure, None).into_token_stream().into()
 }
 
-/// Expands `_invariant_with_context!(CONTEXT_FN)`, the form
+/// Expands `_invariant_with_context!(#outer_attr #sig; CLOSURE)`, the form
 /// `#[thrust_macros::invariant_context]` rewrites each `invariant!` into.
 pub fn expand_with_context(input: TokenStream) -> TokenStream {
-    let ctx_fn = parse_macro_input!(input as syn::ItemFn);
-    match Context::from_context_fn(ctx_fn) {
-        Ok((closure, context)) => expand_invariant(&closure, Some(&context))
-            .into_token_stream()
-            .into(),
-        Err(e) => e.to_compile_error().into(),
+    let WithContext { closure, context } = parse_macro_input!(input as WithContext);
+    expand_invariant(&closure, Some(&context))
+        .into_token_stream()
+        .into()
+}
+
+/// The parsed `_invariant_with_context!` input.
+struct WithContext {
+    context: Context,
+    closure: syn::ExprClosure,
+}
+
+impl Parse for WithContext {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(syn::Attribute::parse_outer)?;
+        let outer = crate::extract_outer_context(&attrs)?;
+        let sig: Signature = input.parse()?;
+        input.parse::<syn::Token![;]>()?;
+        let closure: syn::ExprClosure = input.parse()?;
+        Ok(Self {
+            context: Context { sig, outer },
+            closure,
+        })
     }
 }
 
-/// The enclosing generic context threaded into an invariant by
-/// `#[thrust_macros::invariant_context]`. A standalone `invariant!` has none.
+/// The enclosing context threaded into an invariant by
+/// `#[thrust_macros::invariant_context]`: the host function signature and, for a
+/// method, its `impl`/`trait` header. A standalone `invariant!` has none.
 struct Context {
-    /// In-scope generic params: the enclosing function's own, plus the outer
-    /// `impl`/`trait`'s for a method.
-    params: Vec<GenericParam>,
-    /// Combined where-predicates from the function and (for a method) the
-    /// outer `impl`/`trait`.
-    wheres: Vec<WherePredicate>,
-    /// Whether `Self` is nameable at the call site (i.e. we are in a method).
-    is_method: bool,
+    sig: Signature,
+    outer: Option<FnOuterItem>,
 }
 
 impl Context {
-    /// Parses the `fn` header that carries the threaded context, returning the
-    /// predicate closure from its body alongside the recovered context.
-    fn from_context_fn(ctx_fn: syn::ItemFn) -> syn::Result<(syn::ExprClosure, Self)> {
-        let outer = crate::extract_outer_context(&ctx_fn.attrs)?;
+    fn is_method(&self) -> bool {
+        self.outer.is_some()
+    }
 
-        let closure = match ctx_fn.block.stmts.as_slice() {
-            [syn::Stmt::Expr(syn::Expr::Closure(closure), _)] => closure.clone(),
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    &ctx_fn.block,
-                    "invariant context body must be a single predicate closure",
-                ))
-            }
-        };
-
-        let mut params: Vec<GenericParam> = ctx_fn.sig.generics.params.iter().cloned().collect();
-        let mut wheres: Vec<WherePredicate> = ctx_fn
-            .sig
+    /// The generic params in scope: the host signature's own, plus the outer
+    /// `impl`/`trait`'s for a method.
+    fn params(&self) -> impl Iterator<Item = &GenericParam> {
+        self.sig
             .generics
-            .where_clause
-            .as_ref()
-            .map(|wc| wc.predicates.iter().cloned().collect())
-            .unwrap_or_default();
-        if let Some(outer) = &outer {
-            params.extend(outer.generics().params.iter().cloned());
-            if let Some(wc) = &outer.generics().where_clause {
-                wheres.extend(wc.predicates.iter().cloned());
-            }
-        }
+            .params
+            .iter()
+            .chain(self.outer.iter().flat_map(|o| o.generics().params.iter()))
+    }
 
-        Ok((
-            closure,
-            Self {
-                params,
-                wheres,
-                is_method: outer.is_some(),
-            },
-        ))
+    /// The where-predicates in scope, from the host signature and (for a method)
+    /// the outer `impl`/`trait`.
+    fn where_predicates(&self) -> impl Iterator<Item = &WherePredicate> {
+        fn preds(g: &syn::Generics) -> impl Iterator<Item = &WherePredicate> {
+            g.where_clause.iter().flat_map(|wc| wc.predicates.iter())
+        }
+        preds(&self.sig.generics).chain(self.outer.iter().flat_map(|o| preds(o.generics())))
     }
 }
 
 /// Expands a predicate closure into a `#[thrust::formula_fn]` plus a marker
-/// call. With `context`, the threaded generics (and, in methods, `Self`) are
+/// call. With `context`, the in-scope generics (and, in methods, `Self`) are
 /// re-declared on the formula function and instantiated via turbofish.
 fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> syn::Expr {
     let mut fn_params: Vec<FnArg> = Vec::new();
@@ -129,17 +131,18 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
     }
 
     let mut def_params: Vec<TokenStream2> = Vec::new();
+    let mut turbofish_args: Vec<TokenStream2> = Vec::new();
+    // The where-predicates the host already declares, carried verbatim.
     let mut def_wheres: Vec<WherePredicate> = context
-        .iter()
-        .flat_map(|ctx| ctx.wheres.iter())
+        .into_iter()
+        .flat_map(Context::where_predicates)
         .cloned()
         .collect();
-    let mut turbofish_args: Vec<TokenStream2> = Vec::new();
 
     // `Self` in a method context: rewrite it to a synthetic generic, then pass
     // the real `Self` via turbofish (legal in expression position).
     let uses_self =
-        context.is_some_and(|ctx| ctx.is_method) && tokens_contain_self(&closure.to_token_stream());
+        context.is_some_and(Context::is_method) && tokens_contain_self(&closure.to_token_stream());
     if uses_self {
         let synth: syn::Ident = format_ident!("__ThrustSelf");
         for param in &mut fn_params {
@@ -150,20 +153,23 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
         turbofish_args.push(quote!(Self));
     }
 
-    for param in context.iter().flat_map(|ctx| ctx.params.iter()) {
+    // Re-declare the in-scope generics on the formula function and pass them
+    // through the turbofish.
+    for param in context.into_iter().flat_map(Context::params) {
         def_params.push(param.to_token_stream());
         match param {
-            GenericParam::Type(tp) => {
-                // A closure-typed param has no `Model` instance; re-declare and
-                // pass it through, but do not bound it.
-                if !crate::has_fn_bound(&tp.bounds) {
-                    def_wheres.extend(crate::model_predicates(&tp.ident));
-                }
-                turbofish_args.push(tp.ident.to_token_stream());
-            }
+            GenericParam::Type(tp) => turbofish_args.push(tp.ident.to_token_stream()),
             GenericParam::Const(cp) => turbofish_args.push(cp.ident.to_token_stream()),
             GenericParam::Lifetime(_) => {}
         }
+    }
+
+    // `Model` bounds for those generics (closure-typed params are skipped).
+    if let Some(context) = context {
+        def_wheres.extend(crate::model_where_predicates(
+            &context.sig,
+            context.outer.as_ref(),
+        ));
     }
 
     let model_ty_params = crate::fn_params_with_model_ty(&fn_params);

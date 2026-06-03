@@ -10,8 +10,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, TypeParamBound,
-    WherePredicate,
+    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, WherePredicate,
 };
 
 use crate::{fn_outer_item::FnOuterItem, fn_params_with_model_ty};
@@ -31,7 +30,7 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
     let model_ty_params = fn_params_with_model_ty(&func.sig().inputs);
     let model_ret = fn_return_ty_with_model_ty(&func.sig().output);
 
-    let model_preds = model_where_predicates(&func, outer_context.as_ref());
+    let model_preds = crate::model_where_predicates(func.sig(), outer_context.as_ref());
     let extended_where = extended_where_clause(&func, &model_preds);
 
     let sig = quote! {
@@ -310,7 +309,8 @@ impl ExpandedTokens {
     }
 
     fn extended_where_clause(&self) -> TokenStream2 {
-        let model_preds = model_where_predicates(&self.func, self.outer_context.as_ref());
+        let model_preds =
+            crate::model_where_predicates(self.func.sig(), self.outer_context.as_ref());
         extended_where_clause(&self.func, &model_preds)
     }
 
@@ -540,96 +540,6 @@ fn rewrite_inputs_for_call(
     }
 
     (quote!(#(#rewritten),*), quote!(#(#call_args),*))
-}
-
-/// Returns `T: thrust_models::Model` predicates for every type param that does not
-/// already carry an `Fn`, `FnOnce`, or `FnMut` bound.
-fn model_where_predicates(
-    func: &FnItemWithSignature,
-    outer_context: Option<&FnOuterItem>,
-) -> Vec<WherePredicate> {
-    struct GenericTypeParam {
-        ident: syn::Ident,
-        bounds: Vec<TypeParamBound>,
-    }
-
-    impl From<syn::TypeParam> for GenericTypeParam {
-        fn from(tp: syn::TypeParam) -> Self {
-            Self {
-                ident: tp.ident,
-                bounds: tp.bounds.into_iter().collect(),
-            }
-        }
-    }
-
-    let mut generic_type_params: Vec<GenericTypeParam> = Vec::new();
-    for param in &func.sig().generics.params {
-        let GenericParam::Type(tp) = param else {
-            continue;
-        };
-        generic_type_params.push(tp.clone().into());
-    }
-    if let Some(outer_item) = outer_context {
-        for param in &outer_item.generics().params {
-            let GenericParam::Type(tp) = param else {
-                continue;
-            };
-            generic_type_params.push(tp.clone().into());
-        }
-        if let FnOuterItem::ItemTrait(outer_item) = &outer_item {
-            generic_type_params.push(GenericTypeParam {
-                ident: format_ident!("Self"),
-                bounds: outer_item.supertraits.iter().cloned().collect(),
-            });
-        }
-    }
-    generic_type_params.retain(|p| !crate::has_fn_bound(&p.bounds));
-
-    let mut predicates: Vec<WherePredicate> = Vec::new();
-    for param in &generic_type_params {
-        predicates.extend(crate::model_predicates(&param.ident));
-    }
-
-    struct Visitor {
-        generic_type_params: Vec<GenericTypeParam>,
-        generic_paths: Vec<syn::TypePath>,
-    }
-
-    impl syn::visit::Visit<'_> for Visitor {
-        fn visit_type_path(&mut self, tp: &syn::TypePath) {
-            for param in &self.generic_type_params {
-                if let Some(qself) = &tp.qself {
-                    let param = &param.ident;
-                    let param_ty: syn::Type = syn::parse_quote!(#param);
-                    if *qself.ty == param_ty {
-                        self.generic_paths.push(tp.clone());
-                    }
-                }
-                if tp.path.segments.len() > 1
-                    && tp.path.segments.first().unwrap().ident == param.ident
-                    && tp.qself.is_none()
-                {
-                    self.generic_paths.push(tp.clone());
-                }
-            }
-            syn::visit::visit_type_path(self, tp);
-        }
-    }
-
-    let mut visitor = Visitor {
-        generic_type_params,
-        generic_paths: Vec::new(),
-    };
-    use syn::visit::Visit as _;
-    for arg in &func.sig().inputs {
-        visitor.visit_fn_arg(arg);
-    }
-    visitor.visit_return_type(&func.sig().output);
-    for tp in visitor.generic_paths {
-        predicates.extend(crate::model_predicates(&tp));
-    }
-
-    predicates
 }
 
 /// Builds `where <original predicates>, <model predicates>`.
