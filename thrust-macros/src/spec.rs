@@ -15,7 +15,7 @@ use syn::{
 
 use crate::{fn_outer_item::FnOuterItem, fn_params_with_model_ty};
 
-pub(super) fn expand_predicate(item: TokenStream) -> TokenStream {
+pub fn expand_predicate(item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as FnItemWithSignature);
     let outer_context = match extract_outer_context(&func) {
         Ok(ctx) => ctx,
@@ -45,7 +45,7 @@ pub(super) fn expand_predicate(item: TokenStream) -> TokenStream {
     }
 }
 
-pub(super) fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expr = TokenStream2::from(attr);
     let mut func = parse_macro_input!(item as FnItemWithSignature);
 
@@ -60,7 +60,7 @@ pub(super) fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStre
     func.into_token_stream().into()
 }
 
-pub(super) fn expand_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn expand_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
     let expr = TokenStream2::from(attr);
     let mut func = parse_macro_input!(item as FnItemWithSignature);
 
@@ -75,7 +75,7 @@ pub(super) fn expand_ensures(attr: TokenStream, item: TokenStream) -> TokenStrea
     func.into_token_stream().into()
 }
 
-pub(super) fn expand_requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn expand_requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
     use syn::parse::Parser as _;
     let parser = Punctuated::<syn::Expr, syn::Token![,]>::parse_separated_nonempty;
     let mut exprs = match parser.parse(attr.clone()) {

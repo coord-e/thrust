@@ -84,5 +84,6 @@ impl VisitMut for ContextInjector<'_> {
 }
 
 fn is_invariant_macro(path: &syn::Path) -> bool {
+    // TODO: identify the macro precisely
     path.segments.last().is_some_and(|s| s.ident == "invariant")
 }

@@ -1,7 +1,5 @@
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree as TokenTree2};
-use quote::quote;
-use syn::{FnArg, GenericParam, TypeParamBound};
 
 mod context;
 mod fn_outer_item;
@@ -95,9 +93,9 @@ fn extract_outer_context(attrs: &[syn::Attribute]) -> syn::Result<Option<FnOuter
     Ok(outer_context)
 }
 
-fn has_fn_bound<'a>(bounds: impl IntoIterator<Item = &'a TypeParamBound>) -> bool {
+fn has_fn_bound<'a>(bounds: impl IntoIterator<Item = &'a syn::TypeParamBound>) -> bool {
     bounds.into_iter().any(|b| {
-        let TypeParamBound::Trait(tb) = b else {
+        let syn::TypeParamBound::Trait(tb) = b else {
             return false;
         };
         tb.path
@@ -124,7 +122,7 @@ fn model_where_predicates(
 ) -> Vec<syn::WherePredicate> {
     struct GenericTypeParam {
         ident: syn::Ident,
-        bounds: Vec<TypeParamBound>,
+        bounds: Vec<syn::TypeParamBound>,
     }
 
     impl From<syn::TypeParam> for GenericTypeParam {
@@ -138,14 +136,14 @@ fn model_where_predicates(
 
     let mut generic_type_params: Vec<GenericTypeParam> = Vec::new();
     for param in &sig.generics.params {
-        let GenericParam::Type(tp) = param else {
+        let syn::GenericParam::Type(tp) = param else {
             continue;
         };
         generic_type_params.push(tp.clone().into());
     }
     if let Some(outer_item) = outer_context {
         for param in &outer_item.generics().params {
-            let GenericParam::Type(tp) = param else {
+            let syn::GenericParam::Type(tp) = param else {
                 continue;
             };
             generic_type_params.push(tp.clone().into());
@@ -209,23 +207,23 @@ fn model_where_predicates(
 /// Maps each function parameter `x: T` to `x: <T as thrust_models::Model>::Ty`.
 fn fn_params_with_model_ty<'ast, I>(args: I) -> TokenStream2
 where
-    I: IntoIterator<Item = &'ast FnArg>,
+    I: IntoIterator<Item = &'ast syn::FnArg>,
 {
-    let mut model_inputs: Vec<FnArg> = Vec::new();
+    let mut model_inputs: Vec<syn::FnArg> = Vec::new();
     for arg in args {
         match arg {
-            FnArg::Receiver(receiver) => {
+            syn::FnArg::Receiver(receiver) => {
                 let ty = &receiver.ty;
                 model_inputs.push(syn::parse_quote!(self_: <#ty as thrust_models::Model>::Ty));
             }
-            FnArg::Typed(pt) => {
+            syn::FnArg::Typed(pt) => {
                 let pat = &pt.pat;
                 let ty = &pt.ty;
                 model_inputs.push(syn::parse_quote!(#pat: <#ty as thrust_models::Model>::Ty));
             }
         }
     }
-    quote!(#(#model_inputs),*)
+    quote::quote!(#(#model_inputs),*)
 }
 
 fn tokens_contain_ident<T>(tokens: &TokenStream2, target: T) -> bool
