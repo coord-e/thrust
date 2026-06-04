@@ -208,7 +208,11 @@ impl<'tcx> TypeBuilder<'tcx> {
             .tcx
             .try_normalize_erasing_regions(self.typing_env, projection_ty)
         {
-            tracing::debug!("the type {:#?} is resolved as the type {:#?}.", orig_ty, ty);
+            tracing::debug!(
+                "the type {:#?} is normalized as the type {:#?}.",
+                orig_ty,
+                normalized_ty
+            );
             let contains_model_ty_alias = normalized_ty.walk().any(|arg| {
                 if let mir_ty::GenericArgKind::Type(t) = arg.kind() {
                     matches!(t.kind(), mir_ty::TyKind::Alias(_, alias_ty) if alias_ty.def_id == model_ty_def_id)
@@ -314,7 +318,19 @@ impl<'tcx> TypeBuilder<'tcx> {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
-            mir_ty::TyKind::Alias(_, ty) => self.translate_alias_type(ty),
+            mir_ty::TyKind::Alias(mir_ty::AliasTyKind::Projection, ty) => {
+                if let Some(model_ty_def_id) = self.def_ids.model_ty() {
+                    let arg_ty = ty.args.type_at(0);
+
+                    if ty.def_id == model_ty_def_id
+                        && matches!(arg_ty.kind(), mir_ty::TyKind::Param(_))
+                    {
+                        return self.build(arg_ty);
+                    }
+                }
+
+                self.translate_alias_type(ty)
+            }
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
     }
