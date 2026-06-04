@@ -10,8 +10,7 @@ use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
-    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, TypeParamBound,
-    WherePredicate,
+    parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, WherePredicate,
 };
 
 use crate::{fn_outer_item::FnOuterItem, fn_params_with_model_ty};
@@ -31,7 +30,7 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
     let model_ty_params = fn_params_with_model_ty(&func.sig().inputs);
     let model_ret = fn_return_ty_with_model_ty(&func.sig().output);
 
-    let model_preds = model_where_predicates(&func, outer_context.as_ref());
+    let model_preds = crate::model_where_predicates(func.sig(), outer_context.as_ref());
     let extended_where = extended_where_clause(&func, &model_preds);
 
     let sig = quote! {
@@ -235,22 +234,7 @@ fn extract_requires_ensures(func: &mut FnItemWithSignature) -> syn::Result<(syn:
 }
 
 fn extract_outer_context(func: &FnItemWithSignature) -> syn::Result<Option<FnOuterItem>> {
-    let outer_context_path: syn::Path = syn::parse_quote!(thrust::_outer_context);
-    let mut outer_context = None;
-    for attr in func.attrs() {
-        if attr.path() != &outer_context_path {
-            continue;
-        }
-
-        let item = attr.parse_args()?;
-        if outer_context.is_some() {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "multiple _outer_context attributes found; expected at most one",
-            ));
-        }
-        outer_context = Some(item);
-    }
+    let outer_context = crate::extract_outer_context(func.attrs())?;
     if mentions_self(func.sig()) && outer_context.is_none() {
         return Err(syn::Error::new_spanned(
             func.sig().ident.clone(),
@@ -325,7 +309,8 @@ impl ExpandedTokens {
     }
 
     fn extended_where_clause(&self) -> TokenStream2 {
-        let model_preds = model_where_predicates(&self.func, self.outer_context.as_ref());
+        let model_preds =
+            crate::model_where_predicates(self.func.sig(), self.outer_context.as_ref());
         extended_where_clause(&self.func, &model_preds)
     }
 
@@ -555,112 +540,6 @@ fn rewrite_inputs_for_call(
     }
 
     (quote!(#(#rewritten),*), quote!(#(#call_args),*))
-}
-
-/// Returns `T: thrust_models::Model` predicates for every type param that does not
-/// already carry an `Fn`, `FnOnce`, or `FnMut` bound.
-fn model_where_predicates(
-    func: &FnItemWithSignature,
-    outer_context: Option<&FnOuterItem>,
-) -> Vec<WherePredicate> {
-    struct GenericTypeParam {
-        ident: syn::Ident,
-        bounds: Vec<TypeParamBound>,
-    }
-
-    impl From<syn::TypeParam> for GenericTypeParam {
-        fn from(tp: syn::TypeParam) -> Self {
-            Self {
-                ident: tp.ident,
-                bounds: tp.bounds.into_iter().collect(),
-            }
-        }
-    }
-
-    impl GenericTypeParam {
-        fn has_fn_bound(&self) -> bool {
-            self.bounds.iter().any(|b| {
-                let TypeParamBound::Trait(tb) = b else {
-                    return false;
-                };
-                tb.path.segments.last().is_some_and(|s| {
-                    matches!(s.ident.to_string().as_str(), "Fn" | "FnOnce" | "FnMut")
-                })
-            })
-        }
-    }
-
-    let mut generic_type_params: Vec<GenericTypeParam> = Vec::new();
-    for param in &func.sig().generics.params {
-        let GenericParam::Type(tp) = param else {
-            continue;
-        };
-        generic_type_params.push(tp.clone().into());
-    }
-    if let Some(outer_item) = outer_context {
-        for param in &outer_item.generics().params {
-            let GenericParam::Type(tp) = param else {
-                continue;
-            };
-            generic_type_params.push(tp.clone().into());
-        }
-        if let FnOuterItem::ItemTrait(outer_item) = &outer_item {
-            generic_type_params.push(GenericTypeParam {
-                ident: format_ident!("Self"),
-                bounds: outer_item.supertraits.iter().cloned().collect(),
-            });
-        }
-    }
-    generic_type_params.retain(|p| !p.has_fn_bound());
-
-    let mut predicates: Vec<WherePredicate> = Vec::new();
-    for param in &generic_type_params {
-        let ident = &param.ident;
-        predicates.push(syn::parse_quote!(#ident: thrust_models::Model));
-        predicates.push(syn::parse_quote!(<#ident as thrust_models::Model>::Ty: PartialEq));
-    }
-
-    struct Visitor {
-        generic_type_params: Vec<GenericTypeParam>,
-        generic_paths: Vec<syn::TypePath>,
-    }
-
-    impl syn::visit::Visit<'_> for Visitor {
-        fn visit_type_path(&mut self, tp: &syn::TypePath) {
-            for param in &self.generic_type_params {
-                if let Some(qself) = &tp.qself {
-                    let param = &param.ident;
-                    let param_ty: syn::Type = syn::parse_quote!(#param);
-                    if *qself.ty == param_ty {
-                        self.generic_paths.push(tp.clone());
-                    }
-                }
-                if tp.path.segments.len() > 1
-                    && tp.path.segments.first().unwrap().ident == param.ident
-                    && tp.qself.is_none()
-                {
-                    self.generic_paths.push(tp.clone());
-                }
-            }
-            syn::visit::visit_type_path(self, tp);
-        }
-    }
-
-    let mut visitor = Visitor {
-        generic_type_params,
-        generic_paths: Vec::new(),
-    };
-    use syn::visit::Visit as _;
-    for arg in &func.sig().inputs {
-        visitor.visit_fn_arg(arg);
-    }
-    visitor.visit_return_type(&func.sig().output);
-    for tp in visitor.generic_paths {
-        predicates.push(syn::parse_quote!(#tp: thrust_models::Model));
-        predicates.push(syn::parse_quote!(<#tp as thrust_models::Model>::Ty: PartialEq));
-    }
-
-    predicates
 }
 
 /// Builds `where <original predicates>, <model predicates>`.
