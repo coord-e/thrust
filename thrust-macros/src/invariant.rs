@@ -47,7 +47,10 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// context.
 pub fn expand(input: TokenStream) -> TokenStream {
     let closure = parse_macro_input!(input as syn::ExprClosure);
-    expand_invariant(&closure, None).into_token_stream().into()
+    match expand_invariant(&closure, None) {
+        Ok(expr) => expr.into_token_stream().into(),
+        Err(e) => e.to_compile_error().into(),
+    }
 }
 
 /// Expands `_invariant_with_context!(#outer_attr #sig; CLOSURE)`, the form
@@ -73,9 +76,10 @@ pub fn expand_with_context(input: TokenStream) -> TokenStream {
     }
 
     let WithContext { closure, context } = parse_macro_input!(input as WithContext);
-    expand_invariant(&closure, Some(&context))
-        .into_token_stream()
-        .into()
+    match expand_invariant(&closure, Some(&context)) {
+        Ok(expr) => expr.into_token_stream().into(),
+        Err(e) => e.to_compile_error().into(),
+    }
 }
 
 /// The enclosing context threaded into an invariant by
@@ -110,15 +114,17 @@ impl Context {
 /// Expands a predicate closure into a `#[thrust::formula_fn]` plus a marker
 /// call. With `context`, the in-scope generics (and, in methods, `Self`) are
 /// re-declared on the formula function and instantiated via turbofish.
-fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> syn::Expr {
+fn expand_invariant(
+    closure: &syn::ExprClosure,
+    context: Option<&Context>,
+) -> syn::Result<syn::Expr> {
     let mut fn_params: Vec<FnArg> = Vec::new();
     for param in &closure.inputs {
         let syn::Pat::Type(pt) = param else {
-            let err = syn::Error::new_spanned(
+            return Err(syn::Error::new_spanned(
                 param,
                 "invariant closure parameters must have explicit types, e.g. `|x: i64| ...`",
-            );
-            return syn::Expr::Verbatim(err.to_compile_error());
+            ));
         };
         let pat = &pt.pat;
         let ty = &pt.ty;
@@ -182,7 +188,7 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
         quote!(::<#(#turbofish_args),*>)
     };
 
-    syn::parse_quote!({
+    Ok(syn::parse_quote!({
         #[allow(unused_variables)]
         #[allow(non_snake_case)]
         #[thrust::formula_fn]
@@ -191,7 +197,7 @@ fn expand_invariant(closure: &syn::ExprClosure, context: Option<&Context>) -> sy
         }
 
         thrust_models::__invariant_marker(#name #turbofish)
-    })
+    }))
 }
 
 struct SelfRewriter<'a> {
