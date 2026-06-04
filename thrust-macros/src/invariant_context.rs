@@ -15,7 +15,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, ToTokens};
 use syn::{visit_mut::VisitMut, Signature};
 
-use crate::FnOuterItem;
+use crate::fn_outer_item::FnOuterItem;
 
 pub fn expand(item: TokenStream) -> TokenStream {
     let mut item_fn = syn::parse_macro_input!(item as syn::ItemFn);

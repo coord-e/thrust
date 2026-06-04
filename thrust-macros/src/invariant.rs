@@ -39,7 +39,7 @@ use syn::{
     FnArg, GenericParam, Signature, WherePredicate,
 };
 
-use crate::FnOuterItem;
+use crate::fn_outer_item::FnOuterItem;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
