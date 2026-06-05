@@ -138,24 +138,17 @@ impl<'tcx> ReplacePlacesVisitor<'tcx> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeferredDefMode {
-    Analyze,
-    NoAnalyze,
-}
-
-impl DeferredDefMode {
-    fn should_analyze(&self) -> bool {
-        matches!(self, DeferredDefMode::Analyze)
-    }
-}
-
 #[derive(Debug, Clone)]
 struct DeferredDefTy<'tcx> {
-    // this is different from a key in defs when the def is extern_spec_fn
+    // the def that provides the spec (`expected_ty`). this is different from a key in defs when
+    // the def is an extern_spec_fn (then it is the extern_spec_fn wrapper carrying the contract).
     local_def_id: LocalDefId,
+    // the def whose body is verified against the spec, if any. `None` means the body is not
+    // analyzed (e.g. an extern_spec_fn whose target is a non-local function). when the spec source
+    // and the body differ (an extern_spec_fn wrapper targeting a local function), this lets us
+    // check the target's body against the wrapper's contract.
+    body_to_analyze: Option<LocalDefId>,
     cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
-    mode: DeferredDefMode,
 }
 
 #[derive(Debug, Clone)]
@@ -359,39 +352,40 @@ impl<'tcx> Analyzer<'tcx> {
     }
 
     pub fn register_deferred_def(&mut self, local_def_id: LocalDefId) {
-        self.register_deferred_def_impl(
-            local_def_id.to_def_id(),
-            local_def_id,
-            DeferredDefMode::Analyze,
-        );
+        self.register_deferred_def_impl(local_def_id.to_def_id(), local_def_id, Some(local_def_id));
     }
 
-    pub fn register_deferred_def_without_analysis(
+    /// Register a deferred def whose spec source (`spec_local_def_id`) and verified body
+    /// (`body_to_analyze`) may differ. Used for extern_spec_fn wrappers: the contract lives on the
+    /// wrapper, while the body to verify is the wrapper's target. `body_to_analyze` is `None` when
+    /// the target has no analyzable (local) body, in which case the contract is trusted.
+    pub fn register_deferred_def_with_body(
         &mut self,
         target_def_id: DefId,
-        local_def_id: LocalDefId,
+        spec_local_def_id: LocalDefId,
+        body_to_analyze: Option<LocalDefId>,
     ) {
-        self.register_deferred_def_impl(target_def_id, local_def_id, DeferredDefMode::NoAnalyze);
+        self.register_deferred_def_impl(target_def_id, spec_local_def_id, body_to_analyze);
     }
 
     fn register_deferred_def_impl(
         &mut self,
         target_def_id: DefId,
         local_def_id: LocalDefId,
-        mode: DeferredDefMode,
+        body_to_analyze: Option<LocalDefId>,
     ) {
         tracing::info!(
             ?target_def_id,
             ?local_def_id,
-            ?mode,
+            ?body_to_analyze,
             "register_deferred_def"
         );
         self.defs.insert(
             target_def_id,
             DefTy::Deferred(DeferredDefTy {
                 local_def_id,
+                body_to_analyze,
                 cache: Rc::new(RefCell::new(HashMap::new())),
-                mode,
             }),
         );
     }
@@ -453,7 +447,7 @@ impl<'tcx> Analyzer<'tcx> {
         if let Some(rty) = deferred_ty_cache.borrow().get(&generic_args) {
             return Some(rty.clone());
         }
-        let deferred_ty_mode = deferred_ty.mode;
+        let body_to_analyze = deferred_ty.body_to_analyze;
 
         let mut analyzer = self.local_def_analyzer(deferred_ty.local_def_id);
         analyzer.generic_args(generic_args);
@@ -468,13 +462,21 @@ impl<'tcx> Analyzer<'tcx> {
                 .map(rty::RefinedType::unrefined)
                 .collect(),
         );
+        // insert into the cache before analyzing the body so a (possibly recursive) self-call
+        // during analysis resolves via the cache instead of recursing here indefinitely.
         deferred_ty_cache
             .borrow_mut()
             .insert(generic_args, expected.clone());
         tracing::info!(?def_id, rty = %expected.display(), ?generic_args, "deferred def");
 
-        if deferred_ty_mode.should_analyze() {
-            analyzer.run(&expected);
+        // verify the body against the spec, per concrete instantiation. using the call-site's
+        // concrete `generic_args` avoids `placeholder_generic_args` (which panics on constrained
+        // type params). NOTE: generic functions that are never instantiated are never analyzed
+        // here, so a wrong contract on an uncalled generic function is not caught.
+        if let Some(body_local_def_id) = body_to_analyze {
+            let mut body_analyzer = self.local_def_analyzer(body_local_def_id);
+            body_analyzer.generic_args(generic_args);
+            body_analyzer.run(&expected);
         }
         Some(expected)
     }
