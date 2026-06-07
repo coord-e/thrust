@@ -129,14 +129,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 // extern fn or a bodyless trait method declaration) or is itself trusted/ignored
                 // (e.g. `#[thrust::trusted]`, whose macro expansion marks the original as
                 // `#[thrust::ignored]`) and must stay an unchecked summary.
-                let analyze_body = target_def_id.is_local()
+                let mode = if target_def_id.is_local()
                     && self.tcx.is_mir_available(target_def_id)
-                    && !self.is_trusted_or_ignored(target_def_id);
-                self.ctx.register_deferred_extern_spec_def(
-                    target_def_id,
-                    local_def_id,
-                    analyze_body,
-                );
+                    && !self.is_trusted_or_ignored(target_def_id)
+                {
+                    analyze::DeferredDefMode::Analyze
+                } else {
+                    analyze::DeferredDefMode::NoAnalyze
+                };
+                self.ctx
+                    .register_deferred_extern_spec_def(target_def_id, local_def_id, mode);
             } else {
                 self.ctx.register_deferred_def(local_def_id);
             }
