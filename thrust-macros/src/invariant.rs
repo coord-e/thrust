@@ -39,7 +39,7 @@ use syn::{
     FnArg, GenericParam, Signature, WherePredicate,
 };
 
-use crate::fn_outer_item::FnOuterItem;
+use crate::{fn_outer_item::FnOuterItem, FormulaFnTypeLowering};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -109,6 +109,14 @@ impl Context {
         }
         preds(&self.sig.generics).chain(self.outer.iter().flat_map(|o| preds(o.generics())))
     }
+
+    fn type_lowering(&self) -> FormulaFnTypeLowering<'_> {
+        if let Some(outer) = &self.outer {
+            FormulaFnTypeLowering::with_outer_context(&self.sig, outer)
+        } else {
+            FormulaFnTypeLowering::new(&self.sig)
+        }
+    }
 }
 
 /// Expands a predicate closure into a `#[thrust::formula_fn]` plus a marker
@@ -147,12 +155,15 @@ fn expand_invariant(
         .flat_map(Context::where_predicates)
         .cloned()
         .collect();
-    if let Some(context) = context {
-        def_wheres.extend(crate::model_where_predicates(
-            &context.sig,
-            context.outer.as_ref(),
-        ));
-    }
+
+    let dummy_sig = syn::parse_quote!(fn f());
+    let type_lowering = if let Some(context) = context {
+        context.type_lowering()
+    } else {
+        FormulaFnTypeLowering::new(&dummy_sig)
+    };
+
+    def_wheres.extend(type_lowering.model_where_predicates());
 
     // `Self` in a method context: rewrite it to a synthetic generic, then pass
     // the real `Self` via turbofish (legal in expression position).
@@ -162,11 +173,11 @@ fn expand_invariant(
             SelfRewriter { synth: &synth }.visit_fn_arg_mut(param);
         }
         def_params.push(quote!(#synth));
-        def_wheres.extend(crate::model_predicates(&synth));
+        def_wheres.extend(type_lowering.model_where_predicates_for(&synth));
         turbofish_args.push(quote!(Self));
     }
 
-    let model_ty_params = crate::fn_params_with_model_ty(&fn_params);
+    let model_ty_params = type_lowering.lower_params(&fn_params);
     let body = &closure.body;
 
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
