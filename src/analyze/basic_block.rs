@@ -840,11 +840,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             // we simply replace the def_id with the closure's function def_id.
             // This skips shims, and makes self arguments mismatch. visitor::RustCallVisitor
             // adjusts the arguments accordingly.
-            let mir_ty::TyKind::Closure(closure_def_id, _) = args.type_at(0).kind() else {
+            let mir_ty::TyKind::Closure(closure_def_id, closure_args) = args.type_at(0).kind()
+            else {
                 panic!("expected closure arg for fn trait");
             };
             tracing::debug!(?closure_def_id, "closure instance");
-            (*closure_def_id, args)
+            (*closure_def_id, closure_args)
         } else {
             let typing_env = self.body.typing_env(self.tcx);
             let instance =
