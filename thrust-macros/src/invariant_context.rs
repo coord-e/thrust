@@ -5,9 +5,8 @@
 //! an invariant may refer to generic- and `Self`-typed variables that the
 //! standalone `invariant!` macro cannot see.
 //!
-//! It also extends the host function's where clause with the `Model` predicates
-//! (see [`crate::model_where_predicates`]) for every in-scope type parameter
-//! (and for `Self` when used), since each injected marker call instantiates a
+//! It also extends the host function's where clause with the `Model` predicates for every in-scope
+//! type parameter (and for `Self` when used), since each injected marker call instantiates a
 //! `Model`-bounded formula function with the host's own generics.
 
 use proc_macro::TokenStream;
@@ -33,9 +32,14 @@ pub fn expand(item: TokenStream) -> TokenStream {
     };
     injector.visit_block_mut(&mut item_fn.block);
 
-    let mut predicates = crate::model_where_predicates(&sig, outer.as_ref());
+    let type_lowering = if let Some(outer) = &outer {
+        crate::FormulaFnTypeLowering::with_outer_context(&sig, outer)
+    } else {
+        crate::FormulaFnTypeLowering::new(&sig)
+    };
+    let mut predicates = type_lowering.model_where_predicates();
     if injector.self_used {
-        predicates.extend(crate::model_predicates(&quote!(Self)));
+        predicates.extend(type_lowering.model_where_predicates_for(&quote::format_ident!("Self")));
     }
     if !predicates.is_empty() {
         item_fn

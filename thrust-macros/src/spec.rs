@@ -13,7 +13,7 @@ use syn::{
     parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, WherePredicate,
 };
 
-use crate::{fn_outer_item::FnOuterItem, fn_params_with_model_ty};
+use crate::{fn_outer_item::FnOuterItem, FormulaFnTypeLowering};
 
 pub fn expand_predicate(item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as FnItemWithSignature);
@@ -27,10 +27,15 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
 
     let name = &func.sig().ident;
     let def_generics = generic_params_tokens(&func.sig().generics);
-    let model_ty_params = fn_params_with_model_ty(&func.sig().inputs);
-    let model_ret = fn_return_ty_with_model_ty(&func.sig().output);
+    let type_lowering = if let Some(outer_context) = &outer_context {
+        FormulaFnTypeLowering::with_outer_context(func.sig(), outer_context)
+    } else {
+        FormulaFnTypeLowering::new(func.sig())
+    };
+    let model_ty_params = type_lowering.lower_params(&func.sig().inputs);
+    let model_ret = type_lowering.lower_return_type(&func.sig().output);
 
-    let model_preds = crate::model_where_predicates(func.sig(), outer_context.as_ref());
+    let model_preds = type_lowering.model_where_predicates();
     let extended_where = extended_where_clause(&func, &model_preds);
 
     let sig = quote! {
@@ -255,9 +260,6 @@ struct ExpandedTokens {
     def_generics: TokenStream2,
     turbofish: TokenStream2,
 
-    model_ty_params: TokenStream2,
-    ret_model_ty: syn::Type,
-
     outer_context: Option<FnOuterItem>,
 }
 
@@ -281,9 +283,6 @@ impl ExpandedTokens {
         let def_generics = generic_params_tokens(generics);
         let turbofish = generic_turbofish(generics);
 
-        let model_ty_params = fn_params_with_model_ty(&func.sig().inputs);
-        let ret_model_ty = fn_return_ty_with_model_ty(&func.sig().output);
-
         if func.sig().receiver().is_some() {
             rewrite_self_in_expr(&mut req_expr);
             rewrite_self_in_expr(&mut ens_expr);
@@ -297,8 +296,6 @@ impl ExpandedTokens {
             ensures_name,
             def_generics,
             turbofish,
-            model_ty_params,
-            ret_model_ty,
             outer_context: None,
         }
     }
@@ -308,9 +305,16 @@ impl ExpandedTokens {
         self
     }
 
+    fn type_lowering(&self) -> FormulaFnTypeLowering<'_> {
+        if let Some(outer_context) = &self.outer_context {
+            FormulaFnTypeLowering::with_outer_context(self.func.sig(), outer_context)
+        } else {
+            FormulaFnTypeLowering::new(self.func.sig())
+        }
+    }
+
     fn extended_where_clause(&self) -> TokenStream2 {
-        let model_preds =
-            crate::model_where_predicates(self.func.sig(), self.outer_context.as_ref());
+        let model_preds = self.type_lowering().model_where_predicates();
         extended_where_clause(&self.func, &model_preds)
     }
 
@@ -325,7 +329,7 @@ impl ExpandedTokens {
     fn requires_fn(&self) -> TokenStream2 {
         let requires_name = &self.requires_name;
         let def_generics = &self.def_generics;
-        let model_ty_params = &self.model_ty_params;
+        let model_ty_params = self.type_lowering().lower_params(&self.func.sig().inputs);
         let extended_where = self.extended_where_clause();
         let req_expr = &self.req_expr;
 
@@ -342,9 +346,11 @@ impl ExpandedTokens {
     fn ensures_fn(&self) -> TokenStream2 {
         let ensures_name = &self.ensures_name;
         let def_generics = &self.def_generics;
-        let model_ty_params = &self.model_ty_params;
+        let model_ty_params = &self.type_lowering().lower_params(&self.func.sig().inputs);
         let extended_where = self.extended_where_clause();
-        let ret_model_ty = &self.ret_model_ty;
+        let ret_model_ty = &self
+            .type_lowering()
+            .lower_return_type(&self.func.sig().output);
         let ens_expr = &self.ens_expr;
 
         quote! {
@@ -561,11 +567,4 @@ fn extended_where_clause(
     }
 
     quote! { where #(#existing,)* #(#model_preds),* }
-}
-
-fn fn_return_ty_with_model_ty(ret: &syn::ReturnType) -> syn::Type {
-    match ret {
-        syn::ReturnType::Default => syn::parse_quote!(<() as thrust_models::Model>::Ty),
-        syn::ReturnType::Type(_, ty) => syn::parse_quote!(<#ty as thrust_models::Model>::Ty),
-    }
 }
