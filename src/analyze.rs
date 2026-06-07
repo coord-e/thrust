@@ -471,12 +471,17 @@ impl<'tcx> Analyzer<'tcx> {
         tracing::info!(?def_id, rty = %expected.display(), ?generic_args, "deferred def");
 
         if deferred_ty_mode.should_analyze() {
-            let body_local_def_id = def_id
-                .as_local()
-                .expect("Analyze mode is only set for deferred defs keyed on a local def");
-            self.local_def_analyzer(body_local_def_id)
-                .generic_args(generic_args)
-                .run(&expected);
+            let mut body_analyzer = if analyzer.local_def_id().to_def_id() == def_id {
+                analyzer
+            } else {
+                let body_local_def_id = def_id
+                    .as_local()
+                    .expect("Analyze mode is only set for deferred defs keyed on a local def");
+                let mut body_analyzer = self.local_def_analyzer(body_local_def_id);
+                body_analyzer.generic_args(generic_args);
+                body_analyzer
+            };
+            body_analyzer.run(&expected);
         }
         Some(expected)
     }
