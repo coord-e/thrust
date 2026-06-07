@@ -152,7 +152,8 @@ impl DeferredDefMode {
 
 #[derive(Debug, Clone)]
 struct DeferredDefTy<'tcx> {
-    // this is different from a key in defs when the def is extern_spec_fn
+    // the def that provides the spec (`expected_ty`). this is different from a key in defs when
+    // the def is an extern_spec_fn (then it is the extern_spec_fn wrapper carrying the contract).
     local_def_id: LocalDefId,
     cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
     mode: DeferredDefMode,
@@ -358,12 +359,8 @@ impl<'tcx> Analyzer<'tcx> {
         self.defs.insert(def_id, DefTy::Concrete(rty));
     }
 
-    pub fn register_deferred_def(&mut self, local_def_id: LocalDefId) {
-        self.register_deferred_def_impl(
-            local_def_id.to_def_id(),
-            local_def_id,
-            DeferredDefMode::Analyze,
-        );
+    pub fn register_deferred_def(&mut self, target_def_id: DefId, local_def_id: LocalDefId) {
+        self.register_deferred_def_impl(target_def_id, local_def_id, DeferredDefMode::Analyze);
     }
 
     pub fn register_deferred_def_without_analysis(
@@ -474,7 +471,17 @@ impl<'tcx> Analyzer<'tcx> {
         tracing::info!(?def_id, rty = %expected.display(), ?generic_args, "deferred def");
 
         if deferred_ty_mode.should_analyze() {
-            analyzer.run(&expected);
+            let mut body_analyzer = if analyzer.local_def_id().to_def_id() == def_id {
+                analyzer
+            } else {
+                let body_local_def_id = def_id
+                    .as_local()
+                    .expect("Analyze mode is only set for deferred defs keyed on a local def");
+                let mut body_analyzer = self.local_def_analyzer(body_local_def_id);
+                body_analyzer.generic_args(generic_args);
+                body_analyzer
+            };
+            body_analyzer.run(&expected);
         }
         Some(expected)
     }

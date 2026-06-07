@@ -1169,6 +1169,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    pub fn local_def_id(&self) -> LocalDefId {
+        self.local_def_id
+    }
+
     pub fn generic_args(&mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> &mut Self {
         self.generic_args = generic_args;
         self.body =
