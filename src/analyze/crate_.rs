@@ -121,43 +121,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         use mir_ty::TypeVisitableExt as _;
         if sig.has_param() {
-            if self.skip_analysis.contains(&local_def_id) {
-                // the wrapper itself is skipped, but its target may still have an analyzable body
-                // (e.g. a generic function whose `requires`/`ensures` macro expands into an
-                // extern_spec_fn wrapper targeting it). verify the target's body against the
-                // wrapper's contract, unless the target has no analyzable MIR body (a genuine
-                // extern fn or a bodyless trait method declaration) or is itself trusted/ignored
-                // (e.g. `#[thrust::trusted]`, whose macro expansion marks the original as
-                // `#[thrust::ignored]`) and must stay an unchecked summary.
-                let mode = if target_def_id.is_local()
-                    && self.tcx.is_mir_available(target_def_id)
-                    && !self.is_trusted_or_ignored(target_def_id)
-                {
-                    analyze::DeferredDefMode::Analyze
-                } else {
-                    analyze::DeferredDefMode::NoAnalyze
-                };
+            // TODO: needs clear criteria on whether extern_spec'ed target fn is analyzed or not
+            if target_def_id
+                .as_local()
+                .is_some_and(|def_id| self.skip_analysis.contains(&def_id))
+            {
                 self.ctx
-                    .register_deferred_extern_spec_def(target_def_id, local_def_id, mode);
+                    .register_deferred_def_without_analysis(target_def_id, local_def_id);
             } else {
-                self.ctx.register_deferred_def(local_def_id);
+                self.ctx.register_deferred_def(target_def_id, local_def_id);
             }
         } else {
             let expected = analyzer.expected_ty();
             self.ctx.register_def(target_def_id, expected);
         }
-    }
-
-    /// Whether `def_id` is annotated as trusted or ignored, i.e. its body must not be analyzed.
-    /// `#[thrust::trusted]` is rewritten to `#[thrust::ignored]` on the original function by the
-    /// `requires`/`ensures` macro, so checking both covers trusted functions.
-    fn is_trusted_or_ignored(&self, def_id: rustc_hir::def_id::DefId) -> bool {
-        [
-            analyze::annot::ignored_path(),
-            analyze::annot::trusted_path(),
-        ]
-        .iter()
-        .any(|path| self.tcx.get_attrs_by_path(def_id, path).next().is_some())
     }
 
     fn analyze_local_defs(&mut self) {
