@@ -113,12 +113,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         let owner_fn_id = analyzer.owner_fn_id;
-        let expected = analyzer.expected_ty();
         use mir_ty::TypeVisitableExt as _;
         if sig.has_param() {
+            let expected = self
+                .tcx
+                .is_mir_available(owner_fn_id)
+                .then(|| analyzer.expected_ty());
             self.ctx
                 .register_generic_def(owner_fn_id, local_def_id, expected);
         } else {
+            let expected = analyzer.expected_ty();
             self.ctx.register_def(owner_fn_id, expected);
         }
     }

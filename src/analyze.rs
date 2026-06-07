@@ -165,7 +165,7 @@ struct GenericDefTy<'tcx> {
     // this is different from a key in defs when the def is extern_spec_fn
     local_def_id: LocalDefId,
     cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
-    rty: rty::RefinedType,
+    rty: Option<rty::RefinedType>,
 }
 
 #[derive(Debug, Clone)]
@@ -421,9 +421,9 @@ impl<'tcx> Analyzer<'tcx> {
         &mut self,
         target_def_id: DefId,
         local_def_id: LocalDefId,
-        rty: rty::RefinedType,
+        rty: Option<rty::RefinedType>,
     ) {
-        tracing::info!(?target_def_id, ?local_def_id, rty = %rty.display(), "register_generic_def");
+        tracing::info!(?target_def_id, ?local_def_id, ?rty, "register_generic_def");
         self.defs.insert(
             target_def_id,
             DefTy::Generic(GenericDefTy {
@@ -437,7 +437,7 @@ impl<'tcx> Analyzer<'tcx> {
     pub fn concrete_def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
         self.defs.get(&def_id).and_then(|def_ty| match def_ty {
             DefTy::Concrete(rty) => Some(rty),
-            DefTy::Generic(GenericDefTy { rty, .. }) => Some(rty),
+            DefTy::Generic(GenericDefTy { rty, .. }) => rty.as_ref(),
             DefTy::Deferred(_) => None,
         })
     }
@@ -497,6 +497,20 @@ impl<'tcx> Analyzer<'tcx> {
         Some(formula_fn)
     }
 
+    fn instantiate_generic_args(
+        ty: &mut rty::RefinedType,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+        type_builder: &TypeBuilder<'tcx>,
+    ) {
+        ty.instantiate_ty_params(
+            generic_args
+                .types()
+                .map(|ty| type_builder.build(ty))
+                .map(rty::RefinedType::unrefined)
+                .collect(),
+        );
+    }
+
     pub fn def_ty_with_args(
         &mut self,
         def_id: DefId,
@@ -509,13 +523,7 @@ impl<'tcx> Analyzer<'tcx> {
             match self.defs.get(&def_id)? {
                 DefTy::Concrete(rty) => {
                     let mut def_ty = rty.clone();
-                    def_ty.instantiate_ty_params(
-                        generic_args
-                            .types()
-                            .map(|ty| type_builder.build(ty))
-                            .map(rty::RefinedType::unrefined)
-                            .collect(),
-                    );
+                    Self::instantiate_generic_args(&mut def_ty, generic_args, &type_builder);
                     return Some(def_ty);
                 }
                 DefTy::Generic(generic) => (generic.local_def_id, Rc::clone(&generic.cache), None),
@@ -538,13 +546,7 @@ impl<'tcx> Analyzer<'tcx> {
         let mut expected = analyzer.expected_ty();
         // parameters in annotations are left as params
         // TODO: remove this after annotation V2
-        expected.instantiate_ty_params(
-            generic_args
-                .types()
-                .map(|ty| type_builder.build(ty))
-                .map(rty::RefinedType::unrefined)
-                .collect(),
-        );
+        Self::instantiate_generic_args(&mut expected, generic_args, &type_builder);
         instantiated_ty_cache
             .borrow_mut()
             .insert(generic_args, expected.clone());
