@@ -845,7 +845,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 panic!("expected closure arg for fn trait");
             };
             tracing::debug!(?closure_def_id, "closure instance");
-            (*closure_def_id, closure_args)
+            // closure_args contains [parent_generics..., upvars, return_ty, fn_sig_binder, ...].
+            // Only the parent generics are meaningful to def_ty_with_args; the rest are internal
+            // closure encoding that type_builder.build() cannot handle.
+            let parent_count = self.tcx.generics_of(*closure_def_id).parent_count;
+            let parent_args = self.tcx.mk_args(&closure_args[..parent_count]);
+            (*closure_def_id, parent_args)
         } else {
             let typing_env = self.body.typing_env(self.tcx);
             let instance =
