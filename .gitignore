@@ -1,1 +1,4 @@
 target/
+mir_dump/
+*.mir
+rust_out

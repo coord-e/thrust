@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@no-rustfix
 //@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER_ARGS=
 
