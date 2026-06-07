@@ -681,6 +681,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                     .iter()
                                     .map(|e| {
                                         let ty = typeck_results.expr_ty(e);
+                                        let ty = self
+                                            .instantiate_generics(ty, generic_args)
+                                            .unwrap_or(ty);
                                         self.type_builder.build(ty).to_sort()
                                     })
                                     .collect();
