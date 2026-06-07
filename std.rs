@@ -160,7 +160,8 @@ mod thrust_models {
 
         /// Refers to the precondition of a closure in a specification.
         ///
-        /// `args` is the tuple of logical arguments (`(x,)` for one argument, `()` for none).
+        /// Prefer the `thrust_macros::pre!(f(x))` surface syntax, which desugars to this; the
+        /// `args` here is the tuple of logical arguments (`(x,)` for one argument, `()` for none).
         #[allow(dead_code)]
         #[thrust::def::closure_precondition]
         #[thrust::ignored]
@@ -170,6 +171,8 @@ mod thrust_models {
 
         /// Refers to the postcondition of a closure in a specification, relating the
         /// logical arguments `args` to the closure's `result`.
+        ///
+        /// Prefer the `thrust_macros::post!(f(x), r)` surface syntax, which desugars to this.
         #[allow(dead_code)]
         #[thrust::def::closure_postcondition]
         #[thrust::ignored]
@@ -408,16 +411,12 @@ fn _extern_spec_option_unwrap_or<T>(opt: Option<T>, default: T) -> T where T: th
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(
-    opt == None
-        || thrust_models::exists(|i| opt == Some(i)
-            && thrust_models::model::closure_precondition(&(f), (i,)))
+    opt == None || thrust_models::exists(|i| opt == Some(i) && thrust_macros::pre!(f(i)))
 )]
 #[thrust_macros::ensures(
     (opt == None && result == None)
     || thrust_models::exists(|i| thrust_models::exists(|j|
-        opt == Some(i)
-            && thrust_models::model::closure_postcondition(&(f), (i,), j)
-            && result == Some(j)))
+        opt == Some(i) && thrust_macros::post!(f(i), j) && result == Some(j)))
 )]
 fn _extern_spec_option_map<T, U, F>(opt: Option<T>, f: F) -> Option<U>
 where
@@ -429,10 +428,10 @@ where
 }
 
 #[thrust::extern_spec_fn]
-#[thrust_macros::requires(opt != None || thrust_models::model::closure_precondition(&(f), ()))]
+#[thrust_macros::requires(opt != None || thrust_macros::pre!(f()))]
 #[thrust_macros::ensures(
     (opt != None && Some(result) == opt)
-    || (opt == None && thrust_models::model::closure_postcondition(&(f), (), result))
+    || (opt == None && thrust_macros::post!(f(), result))
 )]
 fn _extern_spec_option_unwrap_or_else<T, F>(opt: Option<T>, f: F) -> T
 where

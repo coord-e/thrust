@@ -1,8 +1,8 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
 
-#[thrust_macros::requires(thrust_models::model::closure_precondition(&(f), (x,)))]
-#[thrust_macros::ensures(thrust_models::model::closure_postcondition(&(f), (x,), result))]
+#[thrust_macros::requires(thrust_macros::pre!(f(x)))]
+#[thrust_macros::ensures(thrust_macros::post!(f(x), result))]
 fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {
     f(x)
 }
