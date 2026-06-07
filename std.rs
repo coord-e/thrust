@@ -158,6 +158,25 @@ mod thrust_models {
         #[thrust::def::closure_model]
         pub struct Closure<T: ?Sized>(PhantomData<T>);
 
+        /// Refers to the precondition of a closure in a specification.
+        ///
+        /// `args` is the tuple of logical arguments (`(x,)` for one argument, `()` for none).
+        #[allow(dead_code)]
+        #[thrust::def::closure_precondition]
+        #[thrust::ignored]
+        pub fn closure_precondition<F: ?Sized, Args>(_f: &F, _args: Args) -> bool {
+            unimplemented!()
+        }
+
+        /// Refers to the postcondition of a closure in a specification, relating the
+        /// logical arguments `args` to the closure's `result`.
+        #[allow(dead_code)]
+        #[thrust::def::closure_postcondition]
+        #[thrust::ignored]
+        pub fn closure_postcondition<F: ?Sized, Args, R>(_f: &F, _args: Args, _result: R) -> bool {
+            unimplemented!()
+        }
+
         pub struct Vec<T: ?Sized>(pub Array<Int, T>, pub Int);
 
         impl<T, U> PartialEq<U> for Vec<T> where U: super::Model<Ty = Self> {
@@ -385,6 +404,42 @@ fn _extern_spec_option_is_some<T>(opt: &Option<T>) -> bool where T: thrust_model
 )]
 fn _extern_spec_option_unwrap_or<T>(opt: Option<T>, default: T) -> T where T: thrust_models::Model, T::Ty: PartialEq {
     Option::unwrap_or(opt, default)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(
+    opt == None
+        || thrust_models::exists(|i| opt == Some(i)
+            && thrust_models::model::closure_precondition(&(f), (i,)))
+)]
+#[thrust_macros::ensures(
+    (opt == None && result == None)
+    || thrust_models::exists(|i| thrust_models::exists(|j|
+        opt == Some(i)
+            && thrust_models::model::closure_postcondition(&(f), (i,), j)
+            && result == Some(j)))
+)]
+fn _extern_spec_option_map<T, U, F>(opt: Option<T>, f: F) -> Option<U>
+where
+    T: thrust_models::Model, T::Ty: PartialEq,
+    U: thrust_models::Model, U::Ty: PartialEq,
+    F: FnOnce(T) -> U,
+{
+    Option::map(opt, f)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(opt != None || thrust_models::model::closure_precondition(&(f), ()))]
+#[thrust_macros::ensures(
+    (opt != None && Some(result) == opt)
+    || (opt == None && thrust_models::model::closure_postcondition(&(f), (), result))
+)]
+fn _extern_spec_option_unwrap_or_else<T, F>(opt: Option<T>, f: F) -> T
+where
+    T: thrust_models::Model, T::Ty: PartialEq,
+    F: FnOnce() -> T,
+{
+    Option::unwrap_or_else(opt, f)
 }
 
 #[thrust::extern_spec_fn]

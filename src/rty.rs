@@ -231,6 +231,95 @@ impl FunctionType {
         self.ret = Box::new(old_ret.map_var(shift));
         removed
     }
+
+    /// Maps each parameter of this function type to the logical term that represents its value,
+    /// given the parameter values `args` supplied at a (spec-level) application site.
+    ///
+    /// The i-th argument is the value of the i-th parameter; there must be exactly one argument per
+    /// parameter. For closures ([`FunctionAbi::RustCall`]), the caller supplies the closure
+    /// environment as the first argument.
+    fn param_terms<W>(&self, args: &[chc::Term<W>]) -> IndexVec<FunctionParamIdx, chc::Term<W>>
+    where
+        W: chc::Var,
+    {
+        assert_eq!(
+            args.len(),
+            self.params.len(),
+            "expected exactly one argument per parameter"
+        );
+        self.params
+            .indices()
+            .map(|idx| args[idx.index()].clone())
+            .collect()
+    }
+
+    /// The precondition of this function instantiated with the parameter values `args`, expressed as
+    /// a [`chc::Formula`] in the caller's variable space `W`.
+    ///
+    /// The precondition is the conjunction of the refinements of all parameters, with each
+    /// parameter's value variable replaced by the corresponding argument term.
+    pub fn precondition_formula<W>(&self, args: &[chc::Term<W>]) -> chc::Formula<W>
+    where
+        W: chc::Var,
+    {
+        let param_terms = self.param_terms(args);
+        let mut acc = chc::Formula::top();
+        for (idx, param) in self.params.iter_enumerated() {
+            let f = refinement_to_chc_formula(
+                &param.refinement,
+                param_terms[idx].clone(),
+                &param_terms,
+            );
+            acc = acc.and(f);
+        }
+        acc
+    }
+
+    /// The postcondition of this function instantiated with the parameter values `args` and return
+    /// value `result`, expressed as a [`chc::Formula`] in the caller's variable space `W`.
+    pub fn postcondition_formula<W>(
+        &self,
+        args: &[chc::Term<W>],
+        result: chc::Term<W>,
+    ) -> chc::Formula<W>
+    where
+        W: chc::Var,
+    {
+        let param_terms = self.param_terms(args);
+        refinement_to_chc_formula(&self.ret.refinement, result, &param_terms)
+    }
+}
+
+/// Lowers a [`Refinement`] (over [`FunctionParamIdx`]) into a [`chc::Formula`] in the caller's
+/// variable space `W`, substituting [`RefinedTypeVar::Value`] with `value` and
+/// [`RefinedTypeVar::Free`] with the corresponding entry of `param_terms`.
+///
+/// Closure parameter/return refinements are predicate-variable templates without existentials, so
+/// [`RefinedTypeVar::Existential`] is not expected here.
+fn refinement_to_chc_formula<W>(
+    refinement: &Refinement<FunctionParamIdx>,
+    value: chc::Term<W>,
+    param_terms: &IndexVec<FunctionParamIdx, chc::Term<W>>,
+) -> chc::Formula<W>
+where
+    W: chc::Var,
+{
+    assert!(
+        refinement.existentials.is_empty(),
+        "closure refinements with existentials are not supported"
+    );
+
+    let body = refinement.body.clone().subst_var(|v| match v {
+        RefinedTypeVar::Value => value.clone(),
+        RefinedTypeVar::Free(j) => param_terms[j].clone(),
+        RefinedTypeVar::Existential(_) => unreachable!("closure refinement has no existentials"),
+    });
+
+    let mut formula = body.formula;
+    for atom in body.atoms {
+        formula = formula.and(chc::Formula::Atom(atom));
+    }
+    formula
 }
 
 /// The kind of a reference, which is either mutable or immutable.

@@ -26,6 +26,9 @@ struct DefIds {
 
     exists: OnceCell<Option<DefId>>,
     invariant_marker: OnceCell<Option<DefId>>,
+
+    closure_precondition: OnceCell<Option<DefId>>,
+    closure_postcondition: OnceCell<Option<DefId>>,
 }
 
 /// Retrieves and caches well-known [`DefId`]s.
@@ -183,5 +186,18 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .invariant_marker
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::invariant_marker_path()))
+    }
+
+    pub fn closure_precondition(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .closure_precondition
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_precondition_path()))
+    }
+
+    pub fn closure_postcondition(&self) -> Option<DefId> {
+        *self.def_ids.closure_postcondition.get_or_init(|| {
+            self.annotated_def(&crate::analyze::annot::closure_postcondition_path())
+        })
     }
 }

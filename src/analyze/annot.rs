@@ -149,6 +149,22 @@ pub fn invariant_marker_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn closure_precondition_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("closure_precondition"),
+    ]
+}
+
+pub fn closure_postcondition_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("closure_postcondition"),
+    ]
+}
+
 /// A [`annot::Resolver`] implementation for resolving function parameters.
 ///
 /// The parameter names and their sorts needs to be configured via

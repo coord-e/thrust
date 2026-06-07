@@ -320,6 +320,30 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
     }
 
+    // TODO: Remove this eager precompute together with
+    // `Analyzer::known_function_ty_with_args` once formula translation can call a read-only
+    // `def_ty_with_args` directly.
+    fn precompute_callable_param_contracts(&mut self, sig: &mir_ty::FnSig<'tcx>) {
+        for input_ty in sig.inputs() {
+            let inst =
+                mir_ty::EarlyBinder::bind(*input_ty).instantiate(self.tcx, self.generic_args);
+            let inst = self
+                .tcx
+                .normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), inst);
+            let (fn_def_id, fn_args) = match inst.kind() {
+                mir_ty::TyKind::Closure(def_id, args) => {
+                    (*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
+                }
+                mir_ty::TyKind::FnDef(def_id, args) => (*def_id, *args),
+                _ => continue,
+            };
+            if fn_def_id == self.local_def_id.to_def_id() {
+                continue;
+            }
+            let _ = self.ctx.def_ty_with_args(fn_def_id, fn_args);
+        }
+    }
+
     // Note that we do not expect predicate variables to be generated here
     // when type params are still present in the type. Callers should ensure either
     // - type params are fully instantiated, or
@@ -351,6 +375,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
 
         let self_type_name = self.impl_type().map(|ty| ty.to_string());
+
+        // Formula translation for `pre!(f(..))`/`post!(f(..), result)` is read-only. If a callable
+        // parameter resolves to a deferred closure/function def, force its analysis here so the
+        // translator can later find the cached contract.
+        self.precompute_callable_param_contracts(&sig);
 
         let mut require_annot = self.ctx.extract_require_annot(
             self.local_def_id,
