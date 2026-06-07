@@ -109,10 +109,11 @@ impl<'a> FormulaFnTypeLowering<'a> {
                 generic_type_params.push(quote::format_ident!("Self"));
             }
         }
+        generic_type_params.retain(|p| !self.closure_type_params.contains(p));
 
         let mut predicates: Vec<syn::WherePredicate> = Vec::new();
         for param in &generic_type_params {
-            predicates.extend(self.model_where_predicates_for(param));
+            predicates.extend(model_predicates(param));
         }
 
         struct Visitor {
