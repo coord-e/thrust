@@ -233,6 +233,10 @@ impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
 }
 
 impl<'tcx> Analyzer<'tcx> {
+    pub fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+
     pub fn generate_pred_var(&mut self, sig: chc::PredSig) -> chc::PredVarId {
         self.system
             .borrow_mut()
@@ -400,6 +404,29 @@ impl<'tcx> Analyzer<'tcx> {
         })
     }
 
+    // TODO: Remove this cache-only accessor together with
+    // `local_def::Analyzer::precompute_callable_param_contracts` once `def_ty_with_args` can be
+    // used from formula translation without requiring `&mut Analyzer`.
+    pub fn known_function_ty_with_args(
+        &self,
+        def_id: DefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Option<rty::FunctionType> {
+        let type_builder = TypeBuilder::new(self.tcx, self.def_ids(), def_id);
+        let mut def_ty = match self.defs.get(&def_id)? {
+            DefTy::Concrete(rty) => rty.clone(),
+            DefTy::Deferred(deferred) => deferred.cache.borrow().get(&generic_args)?.clone(),
+        };
+        def_ty.instantiate_ty_params(
+            generic_args
+                .types()
+                .map(|ty| type_builder.build(ty))
+                .map(rty::RefinedType::unrefined)
+                .collect(),
+        );
+        def_ty.ty.as_function().cloned()
+    }
+
     pub fn formula_fn_with_args(
         &self,
         local_def_id: LocalDefId,
@@ -412,7 +439,7 @@ impl<'tcx> Analyzer<'tcx> {
             return Some(formula_fn.clone());
         }
 
-        let translator = annot_fn::AnnotFnTranslator::new(self.tcx, local_def_id)
+        let translator = annot_fn::AnnotFnTranslator::new(self, local_def_id)
             .with_generic_args(generic_args)
             .with_def_id_cache(self.def_ids());
         let formula_fn = translator.to_formula_fn();

@@ -130,9 +130,10 @@ impl<T> FormulaOrTerm<T> {
 }
 
 #[derive(Clone)]
-pub struct AnnotFnTranslator<'tcx> {
+pub struct AnnotFnTranslator<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     local_def_id: LocalDefId,
+    analyzer: &'a analyze::Analyzer<'tcx>,
 
     typeck: &'tcx mir_ty::TypeckResults<'tcx>,
     body: &'tcx rustc_hir::Body<'tcx>,
@@ -143,16 +144,18 @@ pub struct AnnotFnTranslator<'tcx> {
     env: HashMap<HirId, chc::Term<rty::FunctionParamIdx>>,
 }
 
-impl<'tcx> AnnotFnTranslator<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, local_def_id: LocalDefId) -> Self {
+impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
+    pub fn new(analyzer: &'a analyze::Analyzer<'tcx>, local_def_id: LocalDefId) -> Self {
+        let tcx = analyzer.tcx();
         let body = tcx.hir_body_owned_by(local_def_id);
         let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
-        let def_ids = DefIdCache::new(tcx);
+        let def_ids = analyzer.def_ids();
         let type_builder = TypeBuilder::new(tcx, def_ids.clone(), local_def_id.to_def_id());
         let mut translator = Self {
             tcx,
             local_def_id,
+            analyzer,
             typeck,
             body,
             generic_args,
@@ -247,6 +250,110 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
         self.to_formula_or_term(hir)
             .into_term()
             .expect("expected a term")
+    }
+
+    /// Resolves the [`rty::FunctionType`] of the closure parameter referred to by `receiver` (the
+    /// closure argument of a `closure_precondition(..)` / `closure_postcondition(..)` call).
+    ///
+    /// The receiver is instantiated to the actual closure type in the formula function; its `DefId`
+    /// is used to look up the contract collected by the analyzer.
+    fn receiver_closure_fn_type(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> Option<rty::FunctionType> {
+        let mut recv_ty = self.expr_ty(receiver);
+        if let mir_ty::TyKind::Ref(_, inner, _) = recv_ty.kind() {
+            recv_ty = *inner;
+        }
+        let mir_ty::TyKind::Closure(def_id, args) = recv_ty.kind() else {
+            return None;
+        };
+        self.analyzer
+            .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
+    }
+
+    /// Extracts the logical argument terms passed to `closure_precondition`/
+    /// `closure_postcondition`. The arguments are supplied as a single tuple (e.g. `(x,)` or
+    /// `()`), whose elements are the logical arguments of the closure.
+    fn closure_spec_args(
+        &self,
+        arg: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> Vec<chc::Term<rty::FunctionParamIdx>> {
+        match arg.kind {
+            rustc_hir::ExprKind::Tup(elems) => elems.iter().map(|e| self.to_term(e)).collect(),
+            _ => vec![self.to_term(arg)],
+        }
+    }
+
+    /// The term of the closure value referred to by `receiver` (the `&f` argument of a marker call).
+    fn closure_value_term(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        match receiver.kind {
+            rustc_hir::ExprKind::AddrOf(
+                rustc_hir::BorrowKind::Ref,
+                rustc_hir::Mutability::Not,
+                operand,
+            ) => self.to_term(operand),
+            _ => self.to_term(receiver),
+        }
+    }
+
+    /// The values of a closure's parameters: the closure's first (RustCall) parameter is its
+    /// environment, which is the closure value itself, followed by the logical arguments.
+    fn translate_closure_precondition(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+        args: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> FormulaOrTerm<rty::FunctionParamIdx> {
+        let fn_ty = self.receiver_closure_fn_type(receiver).unwrap_or_else(|| {
+            panic!(
+                "precondition used on a non-closure parameter: {:?}",
+                receiver
+            )
+        });
+        let logical_args = self.closure_spec_args(args);
+        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
+        // environment is the closure value itself.
+        assert_eq!(
+            logical_args.len(),
+            fn_ty.params.len() - 1,
+            "closure precondition arity mismatch: closure takes {} argument(s)",
+            fn_ty.params.len() - 1
+        );
+        let param_args: Vec<_> = std::iter::once(self.closure_value_term(receiver))
+            .chain(logical_args)
+            .collect();
+        FormulaOrTerm::Formula(fn_ty.precondition_formula(&param_args))
+    }
+
+    fn translate_closure_postcondition(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+        args: &'tcx rustc_hir::Expr<'tcx>,
+        result: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> FormulaOrTerm<rty::FunctionParamIdx> {
+        let fn_ty = self.receiver_closure_fn_type(receiver).unwrap_or_else(|| {
+            panic!(
+                "postcondition used on a non-closure parameter: {:?}",
+                receiver
+            )
+        });
+        let logical_args = self.closure_spec_args(args);
+        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
+        // environment is the closure value itself.
+        assert_eq!(
+            logical_args.len(),
+            fn_ty.params.len() - 1,
+            "closure postcondition arity mismatch: closure takes {} argument(s)",
+            fn_ty.params.len() - 1
+        );
+        let param_args: Vec<_> = std::iter::once(self.closure_value_term(receiver))
+            .chain(logical_args)
+            .collect();
+        let result = self.to_term(result);
+        FormulaOrTerm::Formula(fn_ty.postcondition_formula(&param_args, result))
     }
 
     fn variant_ctor_term(
@@ -425,6 +532,22 @@ impl<'tcx> AnnotFnTranslator<'tcx> {
                 if let ExprKind::Path(qpath) = &func_expr.kind {
                     let res = self.typeck.qpath_res(qpath, func_expr.hir_id);
                     if let rustc_hir::def::Res::Def(def_kind, def_id) = res {
+                        if Some(def_id) == self.def_ids.closure_precondition() {
+                            let [receiver, args] = args else {
+                                panic!(
+                                    "closure_precondition takes a closure and a tuple of arguments"
+                                );
+                            };
+                            return self.translate_closure_precondition(receiver, args);
+                        }
+                        if Some(def_id) == self.def_ids.closure_postcondition() {
+                            let [receiver, args, result] = args else {
+                                panic!(
+                                    "closure_postcondition takes a closure, a tuple of arguments, and a result"
+                                );
+                            };
+                            return self.translate_closure_postcondition(receiver, args, result);
+                        }
                         if Some(def_id) == self.def_ids.exists() {
                             assert_eq!(args.len(), 1, "exists takes exactly 1 argument");
                             let ExprKind::Closure(closure) = args[0].kind else {

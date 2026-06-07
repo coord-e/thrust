@@ -6,10 +6,25 @@ mod fn_outer_item;
 mod formula_fn_type_lowering;
 mod invariant;
 mod invariant_context;
+mod pre_post;
 mod spec;
 
 use fn_outer_item::FnOuterItem;
 use formula_fn_type_lowering::FormulaFnTypeLowering;
+
+/// `pre!(f(a, b))` refers to the precondition of the closure `f` for arguments `a, b` in a
+/// specification.
+#[proc_macro]
+pub fn pre(input: TokenStream) -> TokenStream {
+    pre_post::expand_pre(input)
+}
+
+/// `post!(f(a, b), r)` refers to the postcondition of the closure `f` relating arguments
+/// `a, b` to the result `r` in a specification.
+#[proc_macro]
+pub fn post(input: TokenStream) -> TokenStream {
+    pre_post::expand_post(input)
+}
 
 #[proc_macro_attribute]
 pub fn context(_attr: TokenStream, item: TokenStream) -> TokenStream {
