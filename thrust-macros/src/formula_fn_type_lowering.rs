@@ -105,8 +105,10 @@ impl<'a> FormulaFnTypeLowering<'a> {
                 };
                 generic_type_params.push(tp.ident.clone());
             }
-            if matches!(outer_context, FnOuterItem::ItemTrait(_)) {
-                generic_type_params.push(quote::format_ident!("Self"));
+            if let FnOuterItem::ItemTrait(item_trait) = outer_context {
+                if !has_fn_bound(item_trait.supertraits.iter()) {
+                    generic_type_params.push(quote::format_ident!("Self"));
+                }
             }
         }
         generic_type_params.retain(|p| !self.closure_type_params.contains(p));
