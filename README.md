@@ -125,17 +125,13 @@ fn g(x: i32) -> i32 {
 
 Refinements may be nested inside generic arguments and reference types, e.g. `Box<{ v: i64 | v > 0 }>` or `&mut { v: i32 | v >= 0 }`.
 
-### Trusted and callable functions
-
-The body of a function marked with `#[thrust::trusted]` is not analyzed by Thrust; only its annotated specification is used. This is useful for modeling functions whose implementation Thrust cannot (or should not) verify.
+The bodies of functions marked with `#[thrust::trusted]` are not analyzed by Thrust. Additionally, `#[thrust::callable]` is an alias for `#[thrust_macros::requires(true)]` and `#[thrust_macros::ensures(true)]`.
 
 ```rust
 #[thrust::trusted]
-#[thrust_macros::ensures(result != x)]
-fn rand_except(x: i32) -> i32 { unimplemented!() }
+#[thrust::callable]
+fn rand() -> i32 { unimplemented!() }
 ```
-
-`#[thrust::callable]` is an alias for `#[thrust_macros::requires(true)]` and `#[thrust_macros::ensures(true)]`.
 
 ## Configuration
 
