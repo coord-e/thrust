@@ -89,7 +89,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
 
         if analyzer.is_annotated_as_predicate() {
-            analyzer.analyze_predicate_definition();
+            // A predicate whose body is a Rust expression is also marked
+            // `formula_fn`; register it first so `analyze_predicate_definition`
+            // can pull the translated formula via `formula_fn_with_args`.
+            let is_formula_fn = analyzer.is_annotated_as_formula_fn();
+            drop(analyzer);
+            if is_formula_fn {
+                self.ctx.register_formula_fn(local_def_id);
+            }
+            self.ctx
+                .local_def_analyzer(local_def_id)
+                .analyze_predicate_definition();
             self.skip_analysis.insert(local_def_id);
             return;
         }

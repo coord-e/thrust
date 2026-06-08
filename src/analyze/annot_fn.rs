@@ -529,11 +529,22 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 FormulaOrTerm::Term(chc::Term::tuple(terms))
             }
             ExprKind::Field(expr, field) => {
-                let index = field
-                    .name
-                    .as_str()
-                    .parse::<usize>()
-                    .expect("tuple field index must be a non-negative integer");
+                // Tuples use numeric field names (`.0`); structs (represented as
+                // tuples in the logic) use named fields resolved to their position.
+                let index = match field.name.as_str().parse::<usize>() {
+                    Ok(index) => index,
+                    Err(_) => {
+                        let adt = self
+                            .expr_ty(expr)
+                            .ty_adt_def()
+                            .expect("named field access on a non-ADT type");
+                        adt.non_enum_variant()
+                            .fields
+                            .iter()
+                            .position(|f| f.name == field.name)
+                            .expect("unknown named field in formula")
+                    }
+                };
                 let term = self.to_term(expr);
                 FormulaOrTerm::Term(term.tuple_proj(index))
             }

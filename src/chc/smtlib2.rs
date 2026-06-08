@@ -577,10 +577,32 @@ impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
         );
         write!(
             f,
-            "(define-fun {name} {params} Bool {body})",
+            "(define-fun {name} {params} Bool ",
             name = self.inner.symbol,
-            body = &self.inner.body,
-        )
+        )?;
+        match &self.inner.body {
+            chc::UserDefinedPredBody::Raw(body) => write!(f, "{body}")?,
+            chc::UserDefinedPredBody::Formula(formula) => {
+                // Term display needs a `Clause` to resolve sorts (for box/mut/tuple
+                // constructors); build a synthetic one whose `vars` are the
+                // predicate's parameter sorts in order. The formula's `Var(v{i})`
+                // and the `(v{i} Sort)` parameter list above both render via
+                // `TermVarIdx`, so they line up by index.
+                let clause = chc::Clause {
+                    vars: self
+                        .inner
+                        .sig
+                        .iter()
+                        .map(|(_, sort)| sort.clone())
+                        .collect(),
+                    head: chc::Atom::top(),
+                    body: chc::Body::default(),
+                    debug_info: chc::DebugInfo::default(),
+                };
+                write!(f, "{}", Formula::new(self.ctx, &clause, formula))?;
+            }
+        }
+        write!(f, ")")
     }
 }
 
