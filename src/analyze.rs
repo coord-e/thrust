@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
@@ -19,7 +20,7 @@ use rustc_span::Symbol;
 
 use crate::analyze;
 use crate::annot::{AnnotFormula, AnnotParser, Resolver};
-use crate::chc;
+use crate::chc::{self, ForallSortIdx};
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
@@ -197,7 +198,13 @@ impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
 }
 
 pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
-pub type TypeParams = HashMap<(DefId, u32), chc::ForallSortIdx>;
+pub type TypeParamMap = HashMap<TypeParam, ForallSortIdx>;
+
+#[derive(Eq, PartialEq, Hash)]
+pub enum TypeParam {
+    GenericType(DefId, u32),
+    AssocType(DefId),
+}
 
 #[derive(Debug, Clone)]
 struct DeferredFormulaFnDef<'tcx> {
@@ -226,7 +233,7 @@ pub struct Analyzer<'tcx> {
 
     enum_defs: Rc<RefCell<EnumDefs>>,
 
-    type_params: Rc<RefCell<TypeParams>>,
+    type_params: Rc<RefCell<TypeParamMap>>,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
