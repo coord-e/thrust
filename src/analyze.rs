@@ -448,6 +448,7 @@ impl<'tcx> Analyzer<'tcx> {
         &self,
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Option<annot_fn::FormulaFn<'tcx>> {
         let deferred_formula_fn = self.formula_fns.get(&local_def_id)?;
 
@@ -458,7 +459,7 @@ impl<'tcx> Analyzer<'tcx> {
 
         let translator = annot_fn::AnnotFnTranslator::new(self, local_def_id)
             .with_generic_args(generic_args)
-            .with_def_id_cache(self.def_ids());
+            .with_def_id_cache(self.def_ids(), owner_fn_id);
         let formula_fn = translator.to_formula_fn();
         deferred_formula_fn_cache
             .borrow_mut()
@@ -655,7 +656,7 @@ impl<'tcx> Analyzer<'tcx> {
         &mut self,
         local_def_id: LocalDefId,
         bb: BasicBlock,
-        owner_fn_id: DefId
+        owner_fn_id: DefId,
     ) -> basic_block::Analyzer<'tcx, '_> {
         basic_block::Analyzer::new(self, local_def_id, bb, owner_fn_id)
     }
@@ -761,6 +762,7 @@ impl<'tcx> Analyzer<'tcx> {
         resolver: T,
         self_type_name: Option<String>,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver<Output = rty::FunctionParamIdx>,
@@ -791,7 +793,9 @@ impl<'tcx> Analyzer<'tcx> {
             if require_annot.is_some() {
                 unimplemented!();
             }
-            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+            let Some(formula_fn) =
+                self.formula_fn_with_args(formula_def_id, generic_args, owner_fn_id)
+            else {
                 panic!(
                     "require annotation {:?} is not a formula function",
                     formula_def_id
@@ -810,6 +814,7 @@ impl<'tcx> Analyzer<'tcx> {
         resolver: T,
         self_type_name: Option<String>,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver<Output = rty::RefinedTypeVar<rty::FunctionParamIdx>>,
@@ -841,7 +846,9 @@ impl<'tcx> Analyzer<'tcx> {
             if ensure_annot.is_some() {
                 unimplemented!();
             }
-            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+            let Some(formula_fn) =
+                self.formula_fn_with_args(formula_def_id, generic_args, owner_fn_id)
+            else {
                 panic!(
                     "ensure annotation {:?} is not a formula function",
                     formula_def_id

@@ -111,14 +111,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
 
-        let target_def_id = if analyzer.is_annotated_as_extern_spec_fn() {
-            analyzer.extern_spec_fn_target_def_id()
-        } else {
-            local_def_id.to_def_id()
-        };
-
+        let owner_fn_id = analyzer.owner_fn_id;
         let expected = analyzer.expected_ty();
-        self.ctx.register_def(target_def_id, expected);
+        self.ctx.register_def(owner_fn_id, expected);
     }
 
     fn analyze_local_defs(&mut self) {
@@ -140,7 +135,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             // check polymorphic function def by replacing type params with some opaque type
             // (and this is no-op if the function is mono)
             let expected = expected.clone();
-            tracing::debug!("expected type of {:?} is {:#?}", local_def_id, expected);
             let generic_args = self.placeholder_generic_args(*local_def_id);
             self.ctx
                 .local_def_analyzer(*local_def_id)

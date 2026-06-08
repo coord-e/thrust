@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use pretty::{termcolor, Pretty};
-use rustc_hir::{def_id::LocalDefId, HirId};
+use rustc_hir::{
+    def_id::{DefId, LocalDefId},
+    HirId,
+};
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeFoldable};
 
@@ -178,12 +181,12 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self
     }
 
-    pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>) -> Self {
+    pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>, owner_fn_id: DefId) -> Self {
         self.def_ids = def_ids;
         self.type_builder = TypeBuilder::new(
             self.tcx,
             self.def_ids.clone(),
-            self.local_def_id.to_def_id(),
+            owner_fn_id,
             self.analyzer.type_params.clone(),
             self.analyzer.system.clone(),
         );
