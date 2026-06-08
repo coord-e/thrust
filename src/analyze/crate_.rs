@@ -69,6 +69,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(local_def_id)))]
     fn refine_fn_def(&mut self, local_def_id: LocalDefId) {
+        let sig = self.ctx.fn_sig(local_def_id.to_def_id());
         let mut analyzer = self.ctx.local_def_analyzer(local_def_id);
 
         if analyzer.is_annotated_as_trusted() {
@@ -113,7 +114,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let owner_fn_id = analyzer.owner_fn_id;
         let expected = analyzer.expected_ty();
-        self.ctx.register_def(owner_fn_id, expected);
+        use mir_ty::TypeVisitableExt as _;
+        if sig.has_param() {
+            self.ctx
+                .register_generic_def(owner_fn_id, local_def_id, expected);
+        } else {
+            self.ctx.register_def(owner_fn_id, expected);
+        }
     }
 
     fn analyze_local_defs(&mut self) {

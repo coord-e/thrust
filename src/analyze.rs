@@ -161,8 +161,17 @@ struct DeferredDefTy<'tcx> {
 }
 
 #[derive(Debug, Clone)]
+struct GenericDefTy<'tcx> {
+    // this is different from a key in defs when the def is extern_spec_fn
+    local_def_id: LocalDefId,
+    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
+    rty: rty::RefinedType,
+}
+
+#[derive(Debug, Clone)]
 enum DefTy<'tcx> {
     Concrete(rty::RefinedType),
+    Generic(GenericDefTy<'tcx>),
     Deferred(DeferredDefTy<'tcx>),
 }
 
@@ -408,9 +417,27 @@ impl<'tcx> Analyzer<'tcx> {
         });
     }
 
+    pub fn register_generic_def(
+        &mut self,
+        target_def_id: DefId,
+        local_def_id: LocalDefId,
+        rty: rty::RefinedType,
+    ) {
+        tracing::info!(?target_def_id, ?local_def_id, rty = %rty.display(), "register_generic_def");
+        self.defs.insert(
+            target_def_id,
+            DefTy::Generic(GenericDefTy {
+                rty,
+                local_def_id,
+                cache: Rc::new(RefCell::new(HashMap::new())),
+            }),
+        );
+    }
+
     pub fn concrete_def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
         self.defs.get(&def_id).and_then(|def_ty| match def_ty {
             DefTy::Concrete(rty) => Some(rty),
+            DefTy::Generic(GenericDefTy { rty, .. }) => Some(rty),
             DefTy::Deferred(_) => None,
         })
     }
@@ -432,6 +459,7 @@ impl<'tcx> Analyzer<'tcx> {
         );
         let mut def_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => rty.clone(),
+            DefTy::Generic(generic) => generic.cache.borrow().get(&generic_args)?.clone(),
             DefTy::Deferred(deferred) => deferred.cache.borrow().get(&generic_args)?.clone(),
         };
         def_ty.instantiate_ty_params(
@@ -477,29 +505,35 @@ impl<'tcx> Analyzer<'tcx> {
     ) -> Option<rty::RefinedType> {
         let type_builder = self.type_builder(self.def_ids(), caller_def_id);
 
-        let deferred_ty = match self.defs.get(&def_id)? {
-            DefTy::Concrete(rty) => {
-                let mut def_ty = rty.clone();
-                def_ty.instantiate_ty_params(
-                    generic_args
-                        .types()
-                        .map(|ty| type_builder.build(ty))
-                        .map(rty::RefinedType::unrefined)
-                        .collect(),
-                );
-                return Some(def_ty);
-            }
-            DefTy::Deferred(deferred) => deferred,
-        };
+        let (local_def_id, instantiated_ty_cache, deferred_ty_mode) =
+            match self.defs.get(&def_id)? {
+                DefTy::Concrete(rty) => {
+                    let mut def_ty = rty.clone();
+                    def_ty.instantiate_ty_params(
+                        generic_args
+                            .types()
+                            .map(|ty| type_builder.build(ty))
+                            .map(rty::RefinedType::unrefined)
+                            .collect(),
+                    );
+                    return Some(def_ty);
+                }
+                DefTy::Generic(generic) => (generic.local_def_id, Rc::clone(&generic.cache), None),
+                DefTy::Deferred(deferred) => (
+                    deferred.local_def_id,
+                    Rc::clone(&deferred.cache),
+                    Some(deferred.mode),
+                ),
+            };
 
-        let deferred_ty_cache = Rc::clone(&deferred_ty.cache); // to cut reference to allow &mut self
-        if let Some(rty) = deferred_ty_cache.borrow().get(&generic_args) {
+        if let Some(rty) = instantiated_ty_cache.borrow().get(&generic_args) {
             return Some(rty.clone());
         }
-        let deferred_ty_mode = deferred_ty.mode;
 
-        let mut analyzer = self.local_def_analyzer(deferred_ty.local_def_id);
-        analyzer.generic_args(generic_args);
+        let mut analyzer = self.local_def_analyzer(local_def_id);
+        analyzer
+            .owner_fn_id(caller_def_id)
+            .generic_args(generic_args);
 
         let mut expected = analyzer.expected_ty();
         // parameters in annotations are left as params
@@ -511,12 +545,12 @@ impl<'tcx> Analyzer<'tcx> {
                 .map(rty::RefinedType::unrefined)
                 .collect(),
         );
-        deferred_ty_cache
+        instantiated_ty_cache
             .borrow_mut()
             .insert(generic_args, expected.clone());
         tracing::info!(?def_id, rty = %expected.display(), ?generic_args, "deferred def");
 
-        if deferred_ty_mode.should_analyze() {
+        if deferred_ty_mode.is_some_and(|mode| mode.should_analyze()) {
             let mut body_analyzer = if analyzer.local_def_id().to_def_id() == def_id {
                 analyzer
             } else {
