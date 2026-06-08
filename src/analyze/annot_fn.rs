@@ -682,7 +682,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                         self.type_builder.build(ty).to_sort()
                                     })
                                     .collect();
-                                self.system
+                                self.analyzer
+                                    .system
                                     .borrow_mut()
                                     .register_forall_pred(pred.clone(), sig);
                                 pred.into()
