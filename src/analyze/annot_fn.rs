@@ -676,8 +676,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
                             let typeck_results = self.tcx.typeck(self.local_def_id);
                             let pred = if is_unresolved_args {
-                                let pred = refine::forall_pred(self.tcx, pred_def_id);
-                                let sig = args
+                                let sig: Vec<chc::Sort> = args
                                     .iter()
                                     .map(|e| {
                                         let ty = typeck_results.expr_ty(e);
@@ -687,15 +686,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                         self.type_builder.build(ty).to_sort()
                                     })
                                     .collect();
-                                tracing::debug!(
-                                    "register ForallPred {:?} with signature {:?}",
-                                    pred,
-                                    sig
-                                );
+                                let pred = refine::forall_pred(self.tcx, pred_def_id, sig);
                                 self.analyzer
                                     .system
                                     .borrow_mut()
-                                    .register_forall_pred(pred.clone(), sig);
+                                    .register_forall_pred(pred.clone());
                                 pred.into()
                             } else {
                                 refine::user_defined_pred(self.tcx, pred_def_id).into()

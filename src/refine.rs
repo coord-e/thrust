@@ -18,7 +18,7 @@ pub use env::{
     Assumption, EnumDefProvider, Env, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx, Var,
 };
 
-use crate::chc::{DatatypeSymbol, ForallPred, UserDefinedPred};
+use crate::chc::{DatatypeSymbol, ForallPred, Sort, UserDefinedPred};
 use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
@@ -41,6 +41,6 @@ pub fn user_defined_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> UserDefinedPred
     UserDefinedPred::new(stable_def_id_symbol(tcx, did, "p"))
 }
 
-pub fn forall_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> ForallPred {
-    ForallPred::new(stable_def_id_symbol(tcx, did, "q"))
+pub fn forall_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId, args: Vec<Sort>) -> ForallPred {
+    ForallPred::new(stable_def_id_symbol(tcx, did, "q"), args)
 }

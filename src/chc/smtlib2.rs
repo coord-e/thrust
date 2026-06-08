@@ -234,6 +234,7 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
         }
         let pred = match &self.inner.pred {
             chc::Pred::Matcher(p) => self.ctx.matcher_pred(p).to_string(),
+            chc::Pred::ForallPred(p) => self.ctx.forall_pred(p).to_string(),
             p => p.name().into_owned(),
         };
         if self.inner.args.is_empty() {
@@ -594,28 +595,24 @@ impl<'ctx, 'a> UserDefinedPredDef<'ctx, 'a> {
 
 pub struct ForallPredDef<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    symbol: &'a chc::ForallPred,
-    sig: &'a chc::PredSig,
+    pred: &'a chc::ForallPred,
 }
 
 impl<'ctx, 'a> std::fmt::Display for ForallPredDef<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let params = List::closed(self.sig.iter().map(|sort| self.ctx.fmt_sort(sort)));
+        let params = self.pred.args.iter().map(|sort| self.ctx.fmt_sort(sort));
+        let params = List::closed(params);
         write!(
             f,
             "(declare-forall-fun {name} {params} Bool)",
-            name = self.symbol,
+            name = self.ctx.forall_pred(self.pred),
         )
     }
 }
 
 impl<'ctx, 'a> ForallPredDef<'ctx, 'a> {
-    pub fn new(
-        ctx: &'ctx FormatContext,
-        symbol: &'a chc::ForallPred,
-        sig: &'a chc::PredSig,
-    ) -> Self {
-        Self { ctx, symbol, sig }
+    pub fn new(ctx: &'ctx FormatContext, pred: &'a chc::ForallPred) -> Self {
+        Self { ctx, pred }
     }
 }
 
@@ -635,7 +632,7 @@ impl<'ctx, 'a> std::fmt::Display for DepExistsPredVarDef<'ctx, 'a> {
             f,
             "(declare-dep-exists-fun {} {} {} Bool)",
             self.id,
-            List::closed(self.dependencies),
+            List::closed(self.dependencies.iter().map(|p| self.ctx.forall_pred(p))),
             List::closed(self.def.sig.iter().map(|s| self.ctx.fmt_sort(s))),
         )
     }
@@ -672,8 +669,8 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "(declare-forall-sort {})\n", forall_sort_idx)?;
         }
 
-        for (symbol, sig) in &self.inner.forall_pred_vars {
-            writeln!(f, "{}\n", ForallPredDef::new(&self.ctx, symbol, sig))?;
+        for pred in &self.inner.forall_pred_vars {
+            writeln!(f, "{}\n", ForallPredDef::new(&self.ctx, pred))?;
         }
 
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;

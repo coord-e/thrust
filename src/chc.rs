@@ -1050,6 +1050,7 @@ impl UserDefinedPred {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ForallPred {
     inner: String,
+    args: Vec<Sort>,
 }
 
 impl std::fmt::Display for ForallPred {
@@ -1061,15 +1062,28 @@ impl std::fmt::Display for ForallPred {
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ForallPred
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        allocator.text(self.inner.clone())
+        let args = allocator.intersperse(
+            self.args.iter().map(|a| a.pretty(allocator)),
+            allocator.text(", "),
+        );
+        allocator
+            .text("forall_pred")
+            .append(
+                allocator
+                    .as_string(&self.inner)
+                    .append(args.angles())
+                    .angles(),
+            )
+            .group()
     }
 }
 
 impl ForallPred {
-    pub fn new(inner: String) -> Self {
-        Self { inner }
+    pub fn new(inner: String, args: Vec<Sort>) -> Self {
+        Self { inner, args }
     }
 }
 
@@ -1918,7 +1932,7 @@ pub struct System {
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
     pub forall_sorts: Vec<ForallSortIdx>,
     pub num_forall_sort_idx: ForallSortIdx,
-    forall_pred_vars: HashMap<ForallPred, PredSig>,
+    forall_pred_vars: HashSet<ForallPred>,
 }
 
 impl System {
@@ -1926,8 +1940,8 @@ impl System {
         self.pred_vars.push(PredVarDef { sig, debug_info })
     }
 
-    pub fn register_forall_pred(&mut self, pred: ForallPred, sig: PredSig) {
-        self.forall_pred_vars.entry(pred).or_insert(sig);
+    pub fn register_forall_pred(&mut self, pred: ForallPred) {
+        self.forall_pred_vars.insert(pred);
     }
 
     pub fn new_forall_sort(&mut self) -> ForallSortIdx {

@@ -348,6 +348,11 @@ impl FormatContext {
         format!("matcher_pred<{}>", self.fmt_datatype_symbol(sym))
     }
 
+    pub fn forall_pred(&self, p: &chc::ForallPred) -> impl std::fmt::Display {
+        let ss = SortSymbols::new(&p.args);
+        format!("{}{}", p.inner, ss)
+    }
+
     fn fmt_sort_impl(&self, sort: &chc::Sort) -> Box<dyn std::fmt::Display> {
         match sort {
             chc::Sort::Array(s1, s2) => {
