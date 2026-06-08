@@ -1334,7 +1334,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let env = ctx.new_env();
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
-        let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
+        let type_builder = ctx.type_builder(ctx.def_ids(), local_def_id.to_def_id());
         Self {
             ctx,
             tcx,

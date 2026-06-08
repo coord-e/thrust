@@ -7,7 +7,7 @@ use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
 use crate::analyze::{self, did_cache::DefIdCache};
 use crate::annot::AnnotFormula;
-use crate::chc;
+use crate::chc::{self};
 use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
@@ -151,7 +151,13 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
         let def_ids = analyzer.def_ids();
-        let type_builder = TypeBuilder::new(tcx, def_ids.clone(), local_def_id.to_def_id());
+        let type_builder = TypeBuilder::new(
+            tcx,
+            def_ids.clone(),
+            local_def_id.to_def_id(),
+            analyzer.type_params.clone(),
+            analyzer.system.clone(),
+        );
         let mut translator = Self {
             tcx,
             local_def_id,
@@ -178,6 +184,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             self.tcx,
             self.def_ids.clone(),
             self.local_def_id.to_def_id(),
+            self.analyzer.type_params.clone(),
+            self.analyzer.system.clone(),
         );
         self
     }
