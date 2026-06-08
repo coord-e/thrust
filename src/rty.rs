@@ -83,6 +83,80 @@ where
     }
 }
 
+/// One step in a [`TypePosition`] path.
+///
+/// A path is a sequence of steps that addresses a sub-type within a
+/// (potentially nested) function signature:
+/// - [`Param`](Self::Param) / [`Return`](Self::Return) navigate into a
+///   function type's parameter or return slot respectively.
+/// - [`TypeArg`](Self::TypeArg) navigates into the `i`-th type argument of a
+///   generic type (enum, `Box`, etc.).
+///
+/// Using distinct variants for function navigation ([`Param`](Self::Param),
+/// [`Return`](Self::Return)) and generic-arg navigation
+/// ([`TypeArg`](Self::TypeArg)) allows the same path representation to address
+/// positions inside higher-order function types. For example, `$0, result`
+/// addresses the return type of a function-typed first parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypePositionStep {
+    /// Navigate to the `i`-th parameter of a function type.
+    Param(FunctionParamIdx),
+    /// Navigate to the return type of a function type.
+    Return,
+    /// Navigate to the `i`-th type argument of a generic type (enum, `Box`, …).
+    TypeArg(usize),
+}
+
+impl std::fmt::Display for TypePositionStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TypePositionStep::Param(idx) => write!(f, "{}", idx),
+            TypePositionStep::Return => f.write_str("result"),
+            TypePositionStep::TypeArg(i) => write!(f, "{}", i),
+        }
+    }
+}
+
+/// A path of [`TypePositionStep`]s addressing a sub-type within a type, used
+/// to attach a refinement.
+///
+/// An empty path addresses the type itself; a path applied to a function type
+/// is therefore non-empty, beginning with a `Param` or `Return` step.
+///
+/// Examples (function `fn f(x: List<T>) -> Box<T>`):
+/// - `$0` — parameter `x`.
+/// - `result` — the return type.
+/// - `$0, 0` — the first type arg of `x`.
+/// - `result, 0` — the pointee of the `Box` return.
+/// - `$0, result` — the return of a function-typed param `x`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypePosition {
+    steps: Vec<TypePositionStep>,
+}
+
+impl TypePosition {
+    pub fn new(steps: Vec<TypePositionStep>) -> Self {
+        TypePosition { steps }
+    }
+
+    pub fn steps(&self) -> &[TypePositionStep] {
+        &self.steps
+    }
+}
+
+impl std::fmt::Display for TypePosition {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let mut iter = self.steps.iter();
+        if let Some(first) = iter.next() {
+            write!(f, "{}", first)?;
+        }
+        for s in iter {
+            write!(f, ", {}", s)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FunctionAbi {
     #[default]
@@ -1560,6 +1634,50 @@ where
                 .append(allocator.line())
                 .braces()
                 .group()
+        }
+    }
+}
+
+impl RefinedType<FunctionParamIdx> {
+    /// Installs `refinement` at the sub-type addressed by `steps`.
+    ///
+    /// An empty `steps` slice replaces the refinement at this node; otherwise
+    /// each step navigates one level deeper per [`TypePositionStep`].
+    pub fn install_refinement_at(
+        &mut self,
+        steps: &[TypePositionStep],
+        refinement: Refinement<FunctionParamIdx>,
+    ) {
+        let Some((step, rest)) = steps.split_first() else {
+            self.refinement = refinement;
+            return;
+        };
+        match step {
+            TypePositionStep::TypeArg(i) => match &mut self.ty {
+                Type::Enum(e) => {
+                    let arg = e.args.get_mut(TypeParamIdx::from(*i)).unwrap_or_else(|| {
+                        panic!("refine step [{}] out of range for enum type", i)
+                    });
+                    arg.install_refinement_at(rest, refinement);
+                }
+                Type::Pointer(p) => {
+                    assert_eq!(*i, 0, "Box type position must be 0");
+                    p.elem.install_refinement_at(rest, refinement);
+                }
+                ty => panic!("TypeArg step on unsupported type: {:?}", ty),
+            },
+            TypePositionStep::Param(idx) => match &mut self.ty {
+                Type::Function(func) => {
+                    func.params[*idx].install_refinement_at(rest, refinement);
+                }
+                ty => panic!("Param step on non-function type: {:?}", ty),
+            },
+            TypePositionStep::Return => match &mut self.ty {
+                Type::Function(func) => {
+                    func.ret.install_refinement_at(rest, refinement);
+                }
+                ty => panic!("Return step on non-function type: {:?}", ty),
+            },
         }
     }
 }
