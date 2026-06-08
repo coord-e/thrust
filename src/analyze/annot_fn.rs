@@ -243,7 +243,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .instantiate_generics(ty, self.generic_args)
             .unwrap_or(ty);
         let typing_env = mir_ty::TypingEnv::fully_monomorphized();
-        self.tcx.normalize_erasing_regions(typing_env, instantiated)
+        self.tcx
+            .try_normalize_erasing_regions(typing_env, instantiated)
+            .unwrap_or(instantiated)
     }
 
     fn pat_ty(&self, pat: &'tcx rustc_hir::Pat<'tcx>) -> mir_ty::Ty<'tcx> {
@@ -682,6 +684,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                         self.type_builder.build(ty).to_sort()
                                     })
                                     .collect();
+                                tracing::debug!(
+                                    "register ForallPred {:?} with signature {:?}",
+                                    pred,
+                                    sig
+                                );
                                 self.analyzer
                                     .system
                                     .borrow_mut()

@@ -146,14 +146,10 @@ impl<'tcx> TypeBuilder<'tcx> {
             .entry(TypeParam::AssocType(ty.def_id))
             .or_insert_with(|| {
                 let idx = self.system.borrow_mut().new_forall_sort();
-                tracing::debug!(
-                    "issue the new ForallSortIdx {} for AliasTy {:?}.",
-                    idx,
-                    ty,
-                );
+                tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?}.", idx, ty,);
                 idx
             });
-        
+
         rty::AliasType::new(*index).into()
     }
 
