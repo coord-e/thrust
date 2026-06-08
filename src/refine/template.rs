@@ -565,6 +565,49 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         self.ret_rty = Some(rty);
         self
     }
+
+    /// Records a refinement to install at a [`rty::TypePosition`].
+    ///
+    /// The first step must be [`rty::TypePositionStep::Param`] or
+    /// [`rty::TypePositionStep::Return`]; the remaining steps are forwarded to
+    /// [`rty::RefinedType::install_refinement_at`].
+    pub fn refinement_at(
+        &mut self,
+        position: &rty::TypePosition,
+        refinement: rty::Refinement<rty::FunctionParamIdx>,
+    ) -> &mut Self {
+        let (first, rest) = match position.steps().split_first() {
+            Some(pair) => pair,
+            None => panic!("type position applied to a function type must not be empty"),
+        };
+        match first {
+            rty::TypePositionStep::Param(idx) => {
+                if !self.param_rtys.contains_key(idx) {
+                    let ty = self.inner.build(self.param_tys[idx.index()].ty).vacuous();
+                    self.param_rtys
+                        .insert(*idx, rty::RefinedType::unrefined(ty));
+                }
+                self.param_rtys
+                    .get_mut(idx)
+                    .unwrap()
+                    .install_refinement_at(rest, refinement);
+            }
+            rty::TypePositionStep::Return => {
+                if self.ret_rty.is_none() {
+                    let ty = self.inner.build(self.ret_ty).vacuous();
+                    self.ret_rty = Some(rty::RefinedType::unrefined(ty));
+                }
+                self.ret_rty
+                    .as_mut()
+                    .unwrap()
+                    .install_refinement_at(rest, refinement);
+            }
+            rty::TypePositionStep::TypeArg(_) => {
+                panic!("type position applied to a function type must start with a param or result step, not a type argument");
+            }
+        }
+        self
+    }
 }
 
 impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R>

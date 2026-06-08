@@ -824,6 +824,85 @@ impl<'tcx> Analyzer<'tcx> {
         ensure_annot
     }
 
+    /// Collects every `#[thrust::refinement_path(..)]` path statement in the
+    /// function body, returning each `(type position, formula_fn DefId)`.
+    fn extract_refinement_paths(
+        &self,
+        local_def_id: LocalDefId,
+    ) -> Vec<(rty::TypePosition, DefId)> {
+        let mut out = Vec::new();
+        let Some(body) = self.tcx.hir_maybe_body_owned_by(local_def_id) else {
+            return out;
+        };
+        let rustc_hir::ExprKind::Block(block, _) = body.value.kind else {
+            return out;
+        };
+        let attr_path = analyze::annot::refinement_path_path();
+        let typeck = self.tcx.typeck(local_def_id);
+        for stmt in block.stmts {
+            let Some(attr) = self
+                .tcx
+                .hir_attrs(stmt.hir_id)
+                .iter()
+                .find(|attr| attr.path_matches(&attr_path))
+            else {
+                continue;
+            };
+            let ts = analyze::annot::extract_annot_tokens(attr.clone());
+            let position = analyze::annot::parse_type_position(&ts);
+
+            let rustc_hir::StmtKind::Semi(expr) = stmt.kind else {
+                self.tcx.dcx().span_err(
+                    stmt.span,
+                    "annotated path is expected to be a semi statement",
+                );
+                continue;
+            };
+            let rustc_hir::ExprKind::Path(qpath) = expr.kind else {
+                self.tcx.dcx().span_err(
+                    expr.span,
+                    "annotated path is expected to be a path expression",
+                );
+                continue;
+            };
+            let rustc_hir::def::Res::Def(_, def_id) = typeck.qpath_res(&qpath, expr.hir_id) else {
+                self.tcx.dcx().span_err(
+                    expr.span,
+                    "annotated path is expected to refer to a definition",
+                );
+                continue;
+            };
+            out.push((position, def_id));
+        }
+        out
+    }
+
+    /// Resolves every `#[thrust::refinement_path(..)]` annotation into a
+    /// positioned refinement, by translating the referenced formula function.
+    pub fn extract_refinement_annots(
+        &self,
+        local_def_id: LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Vec<(rty::TypePosition, rty::Refinement<rty::FunctionParamIdx>)> {
+        let mut out = Vec::new();
+        for (position, def_id) in self.extract_refinement_paths(local_def_id) {
+            let Some(formula_def_id) = def_id.as_local() else {
+                panic!(
+                    "refinement_path annotation is expected to refer to a local def, but found: {:?}",
+                    def_id
+                );
+            };
+            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+                panic!(
+                    "refinement_path annotation {:?} is not a formula function",
+                    formula_def_id
+                );
+            };
+            out.push((position, formula_fn.to_refinement()));
+        }
+        out
+    }
+
     /// Whether the given `def_id` corresponds to a method of one of the `Fn` traits.
     fn is_fn_trait_method(&self, def_id: DefId) -> bool {
         self.tcx
