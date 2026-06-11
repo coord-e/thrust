@@ -282,6 +282,13 @@ impl<'tcx> TypeBuilder<'tcx> {
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
             }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                if !matches!(elem_ty, rty::Type::Param(_)) {
+                    panic!("unsupported mutable reference type: {elem_ty:?}");
+                }
+                rty::PointerType::mut_to(elem_ty).into()
+            }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
                 let elems = ts
@@ -480,6 +487,13 @@ where
             mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Not) => {
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
+            }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                if !matches!(elem_ty, rty::Type::Param(_)) {
+                    panic!("unsupported mutable reference type: {elem_ty:?}");
+                }
+                rty::PointerType::mut_to(elem_ty).into()
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
