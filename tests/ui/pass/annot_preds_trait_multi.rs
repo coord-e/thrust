@@ -26,7 +26,11 @@ impl thrust_models::Model for A {
 impl Double for A {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
-        self.x * 2 == doubled.x
+        // self.x * 2 == doubled.x
+        "(=
+            (* (tuple_proj<Int>.0 self_) 2)
+            (tuple_proj<Int>.0 doubled)
+        )"; true
     }
 
     fn double(&mut self) {
@@ -48,7 +52,17 @@ impl thrust_models::Model for B {
 impl Double for B {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
-        self.x * 2 == doubled.x && self.y * 2 == doubled.y
+        // self.x * 2 == doubled.x && self.y * 2 == doubled.y
+        "(and
+            (=
+                (* (tuple_proj<Int-Int>.0 self_) 2)
+                (tuple_proj<Int-Int>.0 doubled)
+            )
+            (=
+                (* (tuple_proj<Int-Int>.1 self_) 2)
+                (tuple_proj<Int-Int>.1 doubled)
+            )
+        )"; true
     }
 
     fn double(&mut self) {
