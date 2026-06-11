@@ -25,11 +25,15 @@ fn target<T: A>(a: &T, x: i64) -> i64 {
     v
 }
 
+#[derive(PartialEq)]
 struct B(i64);
 
+impl thrust_models::Model for B {
+    type Ty = B;
+}
+
+#[thrust_macros::context]
 impl A for B {
-    #[thrust_macros::requires(Self::p(x))]
-    #[thrust_macros::ensures(Self::p(result))]
     fn f(&self, x: i64) -> i64{
         x
     }
