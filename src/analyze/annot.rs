@@ -212,4 +212,3 @@ pub fn parse_type_position(ts: &TokenStream) -> rty::TypePosition {
 
     rty::TypePosition::new(steps)
 }
-

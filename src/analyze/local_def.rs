@@ -245,15 +245,21 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // translator can later find the cached contract.
         self.precompute_callable_param_contracts(&sig);
 
-        let mut require_annot = self.ctx.extract_require_annot(self.local_def_id, self.generic_args);
-        let mut ensure_annot = self.ctx.extract_ensure_annot(self.local_def_id, self.generic_args);
+        let mut require_annot = self
+            .ctx
+            .extract_require_annot(self.local_def_id, self.generic_args);
+        let mut ensure_annot = self
+            .ctx
+            .extract_ensure_annot(self.local_def_id, self.generic_args);
 
         if let Some(trait_item_id) = self.local_trait_item_id() {
             tracing::info!("trait item found: {:?}", trait_item_id);
-            let trait_require_annot =
-                self.ctx.extract_require_annot(trait_item_id, self.generic_args);
-            let trait_ensure_annot =
-                self.ctx.extract_ensure_annot(trait_item_id, self.generic_args);
+            let trait_require_annot = self
+                .ctx
+                .extract_require_annot(trait_item_id, self.generic_args);
+            let trait_ensure_annot = self
+                .ctx
+                .extract_ensure_annot(trait_item_id, self.generic_args);
 
             assert!(require_annot.is_none() || trait_require_annot.is_none());
             require_annot = require_annot.or(trait_require_annot);
