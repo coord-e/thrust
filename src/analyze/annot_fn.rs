@@ -159,6 +159,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             def_ids.clone(),
             local_def_id.to_def_id(),
             analyzer.type_params.clone(),
+            analyzer.closure_type_params.clone(),
             analyzer.system.clone(),
         );
         let mut translator = Self {
@@ -188,6 +189,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             self.def_ids.clone(),
             owner_fn_id,
             self.analyzer.type_params.clone(),
+            self.analyzer.closure_type_params.clone(),
             self.analyzer.system.clone(),
         );
         self
@@ -298,10 +300,102 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             recv_ty = *inner;
         }
         let mir_ty::TyKind::Closure(def_id, args) = recv_ty.kind() else {
+            if let mir_ty::TyKind::Param(ty) = recv_ty.kind() {
+                tracing::debug!("ParamTy is found: {ty:?}");
+                let closure_fun_ty = self.type_param_as_callable_sig(*ty);
+                tracing::debug!(
+                    "the obtained FunctionType for the closure {ty:?}: {closure_fun_ty:#?}"
+                );
+                if let Some(closure_fun_ty) = closure_fun_ty.clone() {
+                    self.type_builder.register_closure_type_param(
+                        analyze::TypeParam::GenericType(self.local_def_id.to_def_id(), ty.index),
+                        closure_fun_ty,
+                    );
+                };
+                return closure_fun_ty;
+            }
             return None;
         };
         self.analyzer
             .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn closure_trait_args(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        pred: mir_ty::TraitPredicate<'tcx>,
+    ) -> Option<IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>> {
+        let trait_ref = pred.trait_ref;
+        if trait_ref.self_ty() != param_ty.to_ty(self.tcx) {
+            return None;
+        }
+
+        let receiver_type = self.type_builder.build(trait_ref.args.type_at(0));
+        use mir_ty::ClosureKind::*;
+        let receiver_type = match self.tcx.fn_trait_kind_from_def_id(trait_ref.def_id)? {
+            Fn => rty::PointerType::immut_to(receiver_type).into(),
+            FnMut => rty::PointerType::mut_to(receiver_type).into(),
+            FnOnce => receiver_type,
+        };
+
+        let mir_ty::Tuple(other_params) = trait_ref.args.type_at(1).kind() else {
+            return None;
+        };
+
+        let other_params = other_params.iter().map(|ty| {
+            let ty = self
+                .instantiate_generics(ty, self.generic_args)
+                .unwrap_or(ty);
+            self.type_builder.build(ty)
+        });
+        let params = std::iter::once(receiver_type)
+            .chain(other_params)
+            .map(|ty| rty::RefinedType::unrefined(ty.vacuous()))
+            .collect();
+        tracing::debug!("found the signature for closure trait: {params:#?}");
+        Some(params)
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn closure_trait_ret(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        pred: mir_ty::ProjectionPredicate<'tcx>,
+    ) -> Option<rty::RefinedType<rty::FunctionParamIdx>> {
+        let projection = pred.projection_term;
+        if projection.def_id != self.tcx.lang_items().fn_once_output()?
+            || projection.args.type_at(0) != param_ty.to_ty(self.tcx)
+        {
+            return None;
+        }
+
+        let ret_ty = self.type_builder.build(pred.term.expect_type()).vacuous();
+        tracing::debug!(?ret_ty);
+        Some(rty::RefinedType::unrefined(ret_ty))
+    }
+
+    fn type_param_as_callable_sig(&self, param_ty: mir_ty::ParamTy) -> Option<rty::FunctionType> {
+        let param_ty = self
+            .instantiate_generics(param_ty, self.generic_args)
+            .unwrap_or(param_ty);
+        let mut predicates = self
+            .tcx
+            .predicates_of(self.local_def_id)
+            .predicates
+            .iter()
+            .map(|(clause, _)| {
+                self.instantiate_generics(*clause, self.generic_args)
+                    .unwrap_or(*clause)
+            });
+        let params = predicates.clone().find_map(|clause| {
+            self.closure_trait_args(param_ty, clause.as_trait_clause()?.skip_binder())
+        });
+        let ret = predicates.find_map(|clause| {
+            self.closure_trait_ret(param_ty, clause.as_projection_clause()?.skip_binder())
+        });
+
+        Some(rty::FunctionType::new(params?, ret?))
     }
 
     /// Extracts the logical argument terms passed to `closure_precondition`/

@@ -81,6 +81,7 @@ pub struct TypeBuilder<'tcx> {
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
     type_params: Rc<RefCell<TypeParamMap>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
     system: Rc<RefCell<chc::System>>,
 }
 
@@ -90,6 +91,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         def_ids: DefIdCache<'tcx>,
         owner_fn_id: DefId,
         type_params: Rc<RefCell<TypeParamMap>>,
+        closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
         system: Rc<RefCell<chc::System>>,
     ) -> Self {
         let generics = tcx.generics_of(owner_fn_id);
@@ -114,6 +116,7 @@ impl<'tcx> TypeBuilder<'tcx> {
             typing_env,
             param_idx_mapping,
             type_params,
+            closure_type_params,
             system,
         }
     }
@@ -151,6 +154,13 @@ impl<'tcx> TypeBuilder<'tcx> {
             });
 
         rty::AliasType::new(*index).into()
+    }
+
+    pub fn register_closure_type_param(&self, type_param: TypeParam, fun_type: rty::FunctionType) {
+        tracing::info!(?type_param, ?fun_type, "register_closure_type_param");
+        self.closure_type_params
+            .borrow_mut()
+            .insert(type_param, fun_type);
     }
 
     /// Replaces {closure} types with thrust_models::Closure<{closure}>.

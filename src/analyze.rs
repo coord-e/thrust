@@ -209,7 +209,7 @@ impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
 pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
 pub type TypeParamMap = HashMap<TypeParam, ForallSortIdx>;
 
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum TypeParam {
     GenericType(DefId, u32),
     AssocType(DefId),
@@ -243,6 +243,7 @@ pub struct Analyzer<'tcx> {
     enum_defs: Rc<RefCell<EnumDefs>>,
 
     type_params: Rc<RefCell<TypeParamMap>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
@@ -271,6 +272,7 @@ impl<'tcx> Analyzer<'tcx> {
         let basic_blocks = Default::default();
         let enum_defs = Default::default();
         let type_params = Default::default();
+        let closure_type_params = Default::default();
         Self {
             tcx,
             defs,
@@ -280,6 +282,7 @@ impl<'tcx> Analyzer<'tcx> {
             def_ids: did_cache::DefIdCache::new(tcx),
             enum_defs,
             type_params,
+            closure_type_params,
         }
     }
 
@@ -434,6 +437,10 @@ impl<'tcx> Analyzer<'tcx> {
         );
     }
 
+    pub fn get_closure_type(&self, type_param: TypeParam) -> Option<rty::FunctionType> {
+        self.closure_type_params.borrow().get(&type_param).cloned()
+    }
+
     pub fn concrete_def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
         self.defs.get(&def_id).and_then(|def_ty| match def_ty {
             DefTy::Concrete(rty) => Some(rty),
@@ -455,6 +462,7 @@ impl<'tcx> Analyzer<'tcx> {
             self.def_ids(),
             def_id,
             self.type_params.clone(),
+            self.closure_type_params.clone(),
             self.system.clone(),
         );
         let mut def_ty = match self.defs.get(&def_id)? {
@@ -703,6 +711,7 @@ impl<'tcx> Analyzer<'tcx> {
             def_ids,
             owner_fn_id,
             self.type_params.clone(),
+            self.closure_type_params.clone(),
             self.system.clone(),
         )
     }
