@@ -59,7 +59,7 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for RustCallVisitor<'a, 'tcx, 
                 // RustCallVisitor expects all generic args to be already instantiated
                 let mir_ty::TyKind::Closure(resolved_def_id, _) = generic_args.type_at(0).kind()
                 else {
-                    panic!("expected closure arg for fn trait");
+                    return;
                 };
                 let fn_sig = self.analyzer.ctx().fn_sig(*resolved_def_id);
                 if !matches!(fn_sig.abi, rustc_abi::ExternAbi::RustCall) {
