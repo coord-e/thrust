@@ -1,8 +1,6 @@
 //@check-pass
 //@compile-flags: -Adead_code -C debug-assertions=off
 
-// P is represented as Tuple<Int, Int> in SMT-LIB2 format; fields are accessed
-// by name in the specification formula.
 #[derive(PartialEq)]
 struct P {
     x: i64,
