@@ -476,6 +476,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
+                // PtrMetadata extracts the length from a fat-pointer slice (&[T]).
+                // In the model, &[T] is &immut TupleType([Box<Array<Int,T>>, Box<Int>]),
+                // so the length is (*operand).1.
+                if op == mir::UnOp::PtrMetadata {
+                    if let rty::Type::Pointer(ref ptr) = operand_ty.ty {
+                        if matches!(ptr.kind, rty::PointerKind::Ref(rty::RefKind::Immut))
+                            && operand_ty.ty.as_pointer().unwrap().elem.ty.as_tuple().is_some()
+                        {
+                            return operand_ty.deref().tuple_proj(1).deref();
+                        }
+                    }
+                    unimplemented!("PtrMetadata on {:?}", operand_ty.ty);
+                }
+
                 let mut builder = PlaceTypeBuilder::default();
                 let (operand_ty, operand_term) = builder.subsume(operand_ty);
                 match (&operand_ty, op) {
@@ -621,6 +635,29 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let mut builder = PlaceTypeBuilder::default();
                 let (_, term) = builder.subsume(ty);
                 builder.build(rty::Type::Int, chc::Term::datatype_discr(sym, term))
+            }
+            Rvalue::Len(place) => {
+                let model_place = self.elaborate_place(&place);
+                let place_ty = self.env.place_type(model_place);
+                match &place_ty.ty {
+                    rty::Type::Tuple(_) => {
+                        // Slice model: TupleType([Box<Array<Int,T>>, Box<Int>])
+                        // Length is element 1 (boxed Int): project then deref the box
+                        place_ty.tuple_proj(1).deref()
+                    }
+                    rty::Type::Array(_) => {
+                        // Static array [T; N]: length is the const N from the MIR type
+                        let mir_ty = place.ty(&self.local_decls, self.tcx).ty;
+                        let mir_ty::TyKind::Array(_, len_const) = mir_ty.kind() else {
+                            unimplemented!("Rvalue::Len: Array model type but MIR type is {:?}", mir_ty)
+                        };
+                        let n = len_const
+                            .try_to_target_usize(self.tcx)
+                            .expect("array length must be a known constant");
+                        PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(n as i64))
+                    }
+                    _ => unimplemented!("Rvalue::Len for model type: {:?}", place_ty.ty),
+                }
             }
             _ => unimplemented!(
                 "rvalue={:?} ({:?})",

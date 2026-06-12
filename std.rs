@@ -188,6 +188,15 @@ mod thrust_models {
                 unimplemented!()
             }
         }
+
+        pub struct Slice<T: ?Sized>(pub Array<Int, T>, pub Int);
+
+        impl<T, U> PartialEq<U> for Slice<T> where U: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &U) -> bool {
+                unimplemented!()
+            }
+        }
     }
 
     impl Model for model::Int {
@@ -308,6 +317,18 @@ mod thrust_models {
 
     impl<T: ?Sized> Model for model::Vec<T> {
         type Ty = model::Vec<T>;
+    }
+
+    impl<T: Model> Model for [T] {
+        type Ty = model::Slice<<T as Model>::Ty>;
+    }
+
+    impl<T: ?Sized> Model for model::Slice<T> {
+        type Ty = model::Slice<T>;
+    }
+
+    impl<T: Model, const N: usize> Model for [T; N] {
+        type Ty = model::Array<model::Int, <T as Model>::Ty>;
     }
 
     impl<T> Model for Option<T> where T: Model {
@@ -739,4 +760,44 @@ fn _extern_spec_partialord_gt<T>(x: &T, y: &T) -> bool
   where T: thrust_models::Model + PartialOrd, T::Ty: PartialOrd
 {
     PartialOrd::gt(x, y)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == slice.1)]
+fn _extern_spec_slice_len<T>(slice: &[T]) -> usize
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::len(slice)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(index < slice.1)]
+#[thrust_macros::ensures(*result == slice.0[index])]
+fn _extern_spec_slice_index<T>(slice: &[T], index: usize) -> &T
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T] as std::ops::Index<usize>>::index(slice, index)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(index < (*slice).1)]
+#[thrust_macros::ensures(
+    *result == (*slice).0[index] &&
+    !result == (!slice).0[index] &&
+    !slice == thrust_models::model::Slice((*slice).0.store(index, !result), (*slice).1)
+)]
+fn _extern_spec_slice_index_mut<T>(slice: &mut [T], index: usize) -> &mut T
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T] as std::ops::IndexMut<usize>>::index_mut(slice, index)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(result == (slice.1 == 0))]
+fn _extern_spec_slice_is_empty<T>(slice: &[T]) -> bool
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::is_empty(slice)
 }
