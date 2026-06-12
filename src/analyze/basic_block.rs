@@ -145,6 +145,10 @@ pub struct Analyzer<'tcx, 'ctx> {
     local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>,
     // TODO: remove this
     prophecy_vars: HashMap<usize, TempVarIdx>,
+    /// Locals to be dropped after the terminator, in addition to those in
+    /// [`DropPoints`]. Used by [`visitor::RustCallVisitor`] for locals it keeps
+    /// alive past the call by turning a move into a borrow.
+    drops_after_terminator: Vec<Local>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -1162,6 +1166,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         tracing::info!(?local, "implicitly dropped after call");
                         self.drop_local(local);
                     }
+                    for local in std::mem::take(&mut self.drops_after_terminator) {
+                        tracing::info!(?local, "implicitly dropped after call (rust-call)");
+                        self.drop_local(local);
+                    }
                     self.type_goto(*target, outer_fn_param_vars);
                 }
             }
@@ -1346,6 +1354,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             env,
             local_decls,
             prophecy_vars,
+            drops_after_terminator: Default::default(),
         }
     }
 
