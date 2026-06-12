@@ -308,7 +308,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 );
                 if let Some(closure_fun_ty) = closure_fun_ty.clone() {
                     self.type_builder.register_closure_type_param(
-                        analyze::TypeParam::GenericType(self.local_def_id.to_def_id(), ty.index),
+                        analyze::TypeParam::GenericType(self.type_builder.owner_fn_id, ty.index),
                         closure_fun_ty,
                     );
                 };
@@ -330,8 +330,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         if trait_ref.self_ty() != param_ty.to_ty(self.tcx) {
             return None;
         }
+        tracing::debug!(?trait_ref.args);
 
         let receiver_type = self.type_builder.build(trait_ref.args.type_at(0));
+
         use mir_ty::ClosureKind::*;
         let receiver_type = match self.tcx.fn_trait_kind_from_def_id(trait_ref.def_id)? {
             Fn => rty::PointerType::immut_to(receiver_type).into(),
@@ -339,18 +341,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             FnOnce => receiver_type,
         };
 
-        let mir_ty::Tuple(other_params) = trait_ref.args.type_at(1).kind() else {
-            return None;
-        };
-
-        let other_params = other_params.iter().map(|ty| {
-            let ty = self
-                .instantiate_generics(ty, self.generic_args)
-                .unwrap_or(ty);
-            self.type_builder.build(ty)
-        });
-        let params = std::iter::once(receiver_type)
-            .chain(other_params)
+        let other_params = self.type_builder.build(trait_ref.args.type_at(1));
+        let params = [receiver_type, other_params]
+            .into_iter()
             .map(|ty| rty::RefinedType::unrefined(ty.vacuous()))
             .collect();
         tracing::debug!("found the signature for closure trait: {params:#?}");
