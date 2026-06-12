@@ -68,11 +68,11 @@ Integration test examples are located under `tests/ui/` and can be executed usin
 
 ## Annotation
 
-Thrust can verify a wide range of programs without explicit annotations, but you can use `#[thrust::requires(expr)]` and `#[thrust::ensures(expr)]` to annotate the precondition and postcondition of a function, aiding in verification or specifying the specification. Here, `expr` is a logical expression that supports basic integer, boolean, and reference operations.
+Thrust can verify a wide range of programs without explicit annotations, but you can use `#[thrust_macros::requires(expr)]` and `#[thrust_macros::ensures(expr)]` to annotate the precondition and postcondition of a function, aiding in verification or specifying the intended behavior. Here, `expr` is an ordinary Rust expression that Thrust interprets as a logical formula. It supports the usual integer, boolean, and comparison operators, calls to functions declared with `#[thrust_macros::predicate]`, and the model operations described below.
 
 ```rust
-#[thrust::requires(n >= 0)]
-#[thrust::ensures((result * 2) == n * (n + 1))]
+#[thrust_macros::requires(n >= 0)]
+#[thrust_macros::ensures((result * 2) == n * (n + 1))]
 fn sum(n: i32) -> i32 {
     if n == 0 {
         0
@@ -82,21 +82,29 @@ fn sum(n: i32) -> i32 {
 }
 ```
 
-You can use the `^` unary operator to denote the value of a mutable reference after the function is called. Note that in the current implementation, you need to specify both `requires` and `ensures` when using either one.
+In an `ensures` expression, the special identifier `result` refers to the return value of the function. `requires` and `ensures` are independent: you can write either one on its own, and a missing one defaults to `true`.
+
+### Mutable references
+
+Within an annotation, a mutable reference `ma: &mut T` is modeled by its value at the time the function is called and its value when the function returns (the *prophecy* value). Use the deref operator `*ma` to denote the current value and the unary `!ma` to denote the final value. You can also construct a mutable-reference model directly with `thrust_models::model::Mut::new(current, final)`.
 
 ```rust
-#[thrust::requires(true)]
-#[thrust::ensures(^ma == *ma + a)]
+use thrust_models::model::Mut;
+
+// `add` increments the referent by `a`. Equivalently, `!ma == *ma + a`.
+#[thrust_macros::ensures(ma == Mut::new(*ma, *ma + a))]
 fn add(ma: &mut i32, a: i32) {
     *ma += a;
 }
 ```
 
-The conditions on `thrust::requires` and `thrust::ensures` are internally encoded as refinement types for the parameter and return types. You can also specify these refinement types directly using `#[thrust::param(param: type)]` and `#[thrust::ret(type)]`.
+### Refinement types
+
+The conditions on `requires`/`ensures` are internally encoded as refinement types of the parameter and return types. You can also specify these refinement types directly. A refinement type is written `{ binder: type | formula }`, where `type` is a Rust type and `formula` constrains the value bound to `binder`. Use `#[thrust_macros::param(name: type)]` for a parameter and `#[thrust_macros::ret(type)]` for the return value:
 
 ```rust
-#[thrust::param(n: { x: int | x >= 0 })]
-#[thrust::ret({ x: int | (x * 2) == n * (n + 1) })]
+#[thrust_macros::param(n: { x: i32 | x >= 0 })]
+#[thrust_macros::ret({ x: i32 | (x * 2) == n * (n + 1) })]
 fn sum(n: i32) -> i32 {
     if n == 0 {
         0
@@ -106,7 +114,18 @@ fn sum(n: i32) -> i32 {
 }
 ```
 
-The bodies of functions marked with `#[thrust::trusted]` are not analyzed by Thrust. Additionally, `#[thrust::callable]` is an alias for `#[thrust::requires(true)]` and `#[thrust::ensures(true)]`.
+`#[thrust_macros::sig(..)]` is a shorthand that combines the parameter and return refinements into a single function-signature-shaped annotation:
+
+```rust
+#[thrust_macros::sig(fn(x: { v: i32 | v > 0 }) -> { r: i32 | r >= x })]
+fn g(x: i32) -> i32 {
+    x
+}
+```
+
+Refinements may be nested inside generic arguments and reference types, e.g. `Box<{ v: i64 | v > 0 }>` or `&mut { v: i32 | v >= 0 }`.
+
+The bodies of functions marked with `#[thrust::trusted]` are not analyzed by Thrust. Additionally, `#[thrust::callable]` is an alias for `#[thrust_macros::requires(true)]` and `#[thrust_macros::ensures(true)]`.
 
 ```rust
 #[thrust::trusted]
@@ -128,11 +147,12 @@ Several environment variables are used by Thrust to configure its behavior:
 
 The implementation of the Thrust is largely divided into the following modules.
 
-- `analyze`: MIR analysis. Further divided into the modules corresponding to the program units: `analyze::crate_`, `analyze::local_def`, and `analyze::basic_block`.
+- `analyze`: MIR analysis. Further divided into the modules corresponding to the program units: `analyze::crate_`, `analyze::local_def`, and `analyze::basic_block`. `analyze::annot` and `analyze::annot_fn` translate the lowered annotation attributes into refinement types and formulas.
 - `refine`: Typing environment and related implementations.
 - `rty`: Refinement type primitives.
 - `chc`: CHC and logic primitives, and it also implements an invocation of the underlying CHC solver.
-- `annot`: Refinement type annotation parser.
+
+The surface annotation syntax (`#[thrust_macros::requires]`, `ensures`, `param`, `ret`, `sig`, `predicate`, `invariant!`, `pre!`/`post!`, …) is implemented in the `thrust-macros` crate. These procedural macros expand into a small set of internal plugin attributes — chiefly `#[thrust::formula_fn]` companion functions (written as ordinary Rust over the `thrust_models` model types) together with `#[thrust::requires_path]`, `#[thrust::ensures_path]`, and `#[thrust::refinement_path(..)]` markers that link those companions to the function being specified. `analyze::annot_fn` then reads the type-checked HIR of each `formula_fn` to build the corresponding `chc::Formula`/`rty::Refinement`. The model types themselves are declared in `std.rs`, which Thrust injects into every crate it analyzes.
 
 The implementation generates subtyping constraints in the form of CHCs (`chc::System`). The entry point is `analyze::crate_::Analyzer::run`, followed by `analyze::local_def::Analyzer::run` and `analyze::basic_block::Analyzer::run`, while accumulating the necessary information in `analyze::Analyzer`. Once `chc::System` is collected for the entire input, it invokes an external CHC solver via the `chc::solver` module and subsequently reports the result.
 
