@@ -288,6 +288,11 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
                 let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.clause, fo)));
                 write!(f, "(or {})", fs)
             }
+            chc::Formula::Implies(lhs, rhs) => {
+                let lhs = Formula::new(self.ctx, self.clause, lhs);
+                let rhs = Formula::new(self.ctx, self.clause, rhs);
+                write!(f, "(=> {lhs} {rhs})")
+            }
             chc::Formula::Exists(vars, fo) => {
                 let vars =
                     List::closed(vars.iter().map(|(v, s)| {

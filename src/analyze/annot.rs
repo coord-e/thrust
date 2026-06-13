@@ -145,6 +145,14 @@ pub fn exists_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn implies_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("implies"),
+    ]
+}
+
 pub fn invariant_marker_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
