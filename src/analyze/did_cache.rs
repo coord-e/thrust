@@ -53,6 +53,10 @@ impl<'tcx> DefIdCache<'tcx> {
         self.tcx.lang_items().owned_box()
     }
 
+    pub fn vec(&self) -> Option<DefId> {
+        self.tcx.get_diagnostic_item(Symbol::intern("Vec"))
+    }
+
     pub fn unique(&self) -> Option<DefId> {
         *self.def_ids.unique.get_or_init(|| {
             let box_did = self.box_()?;

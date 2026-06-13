@@ -320,6 +320,23 @@ impl<'tcx> TypeBuilder<'tcx> {
                 if let Some(model_ty) = self.model_adt(def, params) {
                     return model_ty;
                 }
+                // Treat Box and Vec as opaque types to avoid traversing internal structure
+                if Some(def.did()) == self.def_ids.box_() {
+                    let elem_ty = self.build(params.type_at(0));
+                    return rty::PointerType::own(elem_ty).into();
+                }
+                if Some(def.did()) == self.def_ids.vec() {
+                    let elem_ty = self.build(params.type_at(0));
+                    // Vec is represented as a tuple of (Array<Int, T>, Int) in the model
+                    let idx_ty = rty::Type::int();
+                    let array_ty = rty::ArrayType::new(idx_ty, elem_ty.clone());
+                    let len_ty = rty::Type::int();
+                    return rty::TupleType::new(vec![
+                        rty::PointerType::own(rty::Type::Array(array_ty)).into(),
+                        rty::PointerType::own(len_ty).into(),
+                    ])
+                    .into();
+                }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx, def.did());
                     let args: IndexVec<_, _> = params
@@ -520,6 +537,23 @@ where
             mir_ty::TyKind::Adt(def, params) => {
                 if let Some(model_ty) = self.model_adt(def, params) {
                     return model_ty;
+                }
+                // Treat Box and Vec as opaque types to avoid traversing internal structure
+                if Some(def.did()) == self.inner.def_ids.box_() {
+                    let elem_ty = self.build(params.type_at(0));
+                    return rty::PointerType::own(elem_ty).into();
+                }
+                if Some(def.did()) == self.inner.def_ids.vec() {
+                    let elem_ty = self.build(params.type_at(0));
+                    // Vec is represented as a tuple of (Array<Int, T>, Int) in the model
+                    let idx_ty = rty::Type::int();
+                    let array_ty = rty::ArrayType::new(idx_ty, elem_ty.clone());
+                    let len_ty = rty::Type::int();
+                    return rty::TupleType::new(vec![
+                        rty::PointerType::own(rty::Type::Array(array_ty)).into(),
+                        rty::PointerType::own(len_ty).into(),
+                    ])
+                    .into();
                 }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.inner.tcx, def.did());
