@@ -1051,6 +1051,7 @@ enum Path {
     Deref(Box<Path>),
     TupleProj(Box<Path>, usize),
     Downcast(Box<Path>, VariantIdx, FieldIdx),
+    Index(Box<Path>, Local),
 }
 
 impl<'tcx> From<Place<'tcx>> for Path {
@@ -1067,6 +1068,7 @@ impl<'tcx> From<Place<'tcx>> for Path {
                     };
                     Path::Downcast(Box::new(path), variant_idx, field_idx)
                 }
+                Some(PlaceElem::Index(local)) => Path::Index(Box::new(path), local),
                 None => break,
                 _ => unimplemented!(),
             };
@@ -1098,6 +1100,29 @@ where
             Path::Downcast(path, variant_idx, field_idx) => {
                 self.path_type(path)
                     .downcast(*variant_idx, *field_idx, &self.enum_defs)
+            }
+            Path::Index(path, idx_local) => {
+                let inner_pty = self.path_type(path);
+                let idx_pty = self.local_type(*idx_local);
+                // Normalize to an Array PlaceType:
+                //   slice model (Tuple) → get field 0 (Box<Array>) then deref
+                //   static array (Array) → already an Array
+                let arr_pty = match inner_pty.ty.clone() {
+                    rty::Type::Tuple(_) => inner_pty.tuple_proj(0).deref(),
+                    rty::Type::Array(_) => inner_pty,
+                    ty => unimplemented!("PlaceElem::Index on non-array/slice type: {:?}", ty),
+                };
+                let rty::Type::Array(arr_ty) = arr_pty.ty.clone() else {
+                    unreachable!("expected Array type after index normalization")
+                };
+                let elem_refined_ty = *arr_ty.elem;
+                let mut builder = refine::PlaceTypeBuilder::default();
+                let (_, arr_term) = builder.subsume(arr_pty);
+                let (_, idx_term) = builder.subsume(idx_pty);
+                let (elem_ty, value_var_ex) = builder.subsume_rty(elem_refined_ty);
+                let elem_term = crate::chc::Term::var(value_var_ex.into());
+                builder.push_formula(elem_term.clone().equal_to(arr_term.select(idx_term)));
+                builder.build(elem_ty, elem_term)
             }
         }
     }

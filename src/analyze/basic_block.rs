@@ -476,6 +476,27 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
+                // PtrMetadata extracts the length from a fat-pointer slice (&[T]).
+                // In the model, &[T] is &immut TupleType([Box<Array<Int,T>>, Box<Int>]),
+                // so the length is (*operand).1.
+                if op == mir::UnOp::PtrMetadata {
+                    if let rty::Type::Pointer(ref ptr) = operand_ty.ty {
+                        if matches!(ptr.kind, rty::PointerKind::Ref(rty::RefKind::Immut))
+                            && operand_ty
+                                .ty
+                                .as_pointer()
+                                .unwrap()
+                                .elem
+                                .ty
+                                .as_tuple()
+                                .is_some()
+                        {
+                            return operand_ty.deref().tuple_proj(1).deref();
+                        }
+                    }
+                    unimplemented!("PtrMetadata on {:?}", operand_ty.ty);
+                }
+
                 let mut builder = PlaceTypeBuilder::default();
                 let (operand_ty, operand_term) = builder.subsume(operand_ty);
                 match (&operand_ty, op) {
@@ -535,63 +556,93 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 builder.build(rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
             }
             Rvalue::Aggregate(kind, fields) => {
-                // elaboration: all fields are boxed
-                let field_tys: Vec<_> = fields
-                    .into_iter()
-                    .map(|operand| self.operand_type(operand).boxed())
-                    .collect();
                 match *kind {
-                    mir::AggregateKind::Adt(did, variant_idx, args, _, _)
-                        if self.tcx.def_kind(did) == DefKind::Enum =>
-                    {
-                        let enum_def = self.ctx.get_or_register_enum_def(did);
-                        let variant_def = &enum_def.variants[variant_idx];
-                        let variant_rtys = variant_def
-                            .field_tys
-                            .clone()
+                    mir::AggregateKind::Array(mir_elem_ty) => {
+                        // Elements go directly into the array — do not box them.
+                        let elem_ptys: Vec<_> = fields
                             .into_iter()
-                            .map(|ty| rty::RefinedType::unrefined(ty.vacuous()));
-
-                        let rty_args: IndexVec<_, _> = args
-                            .types()
-                            .map(|ty| {
-                                self.type_builder
-                                    .for_template(&mut self.ctx)
-                                    .with_scope(&self.env)
-                                    .build_refined(ty)
-                            })
+                            .map(|operand| self.operand_type(operand))
                             .collect();
-                        for (field_pty, mut variant_rty) in
-                            field_tys.clone().into_iter().zip(variant_rtys)
-                        {
-                            variant_rty.instantiate_ty_params(rty_args.clone());
-                            let cs = self
-                                .env
-                                .relate_sub_refined_type(&field_pty.into(), &variant_rty.boxed());
-                            self.ctx.extend_clauses(cs);
-                        }
-
-                        let sort_args: Vec<_> =
-                            rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
-                        let ty = rty::EnumType::new(enum_def.name.clone(), rty_args).into();
-
                         let mut builder = PlaceTypeBuilder::default();
-                        let mut field_terms = Vec::new();
-                        for field_ty in field_tys {
-                            let (_, field_term) = builder.subsume(field_ty);
-                            field_terms.push(field_term);
+                        let elem_ty = elem_ptys.first().map_or_else(
+                            || self.type_builder.build(mir_elem_ty).vacuous(),
+                            |p| p.ty.clone(),
+                        );
+                        let base_idx = builder.push_existential(chc::Sort::array(
+                            chc::Sort::int(),
+                            elem_ty.to_sort(),
+                        ));
+                        let mut arr_term: chc::Term<PlaceTypeVar> = chc::Term::var(base_idx.into());
+                        for (i, pty) in elem_ptys.into_iter().enumerate() {
+                            let (_, elem_term) = builder.subsume(pty);
+                            arr_term = arr_term.store(chc::Term::int(i as i64), elem_term);
                         }
                         builder.build(
-                            ty,
-                            chc::Term::datatype_ctor(
-                                enum_def.name,
-                                sort_args,
-                                variant_def.name.clone(),
-                                field_terms,
-                            ),
+                            rty::ArrayType::new(rty::Type::int(), elem_ty).into(),
+                            arr_term,
                         )
                     }
-                    _ => PlaceType::tuple(field_tys),
+                    other => {
+                        // elaboration: all fields are boxed
+                        let field_tys: Vec<_> = fields
+                            .into_iter()
+                            .map(|operand| self.operand_type(operand).boxed())
+                            .collect();
+                        match other {
+                            mir::AggregateKind::Adt(did, variant_idx, args, _, _)
+                                if self.tcx.def_kind(did) == DefKind::Enum =>
+                            {
+                                let enum_def = self.ctx.get_or_register_enum_def(did);
+                                let variant_def = &enum_def.variants[variant_idx];
+                                let variant_rtys = variant_def
+                                    .field_tys
+                                    .clone()
+                                    .into_iter()
+                                    .map(|ty| rty::RefinedType::unrefined(ty.vacuous()));
+
+                                let rty_args: IndexVec<_, _> = args
+                                    .types()
+                                    .map(|ty| {
+                                        self.type_builder
+                                            .for_template(&mut self.ctx)
+                                            .with_scope(&self.env)
+                                            .build_refined(ty)
+                                    })
+                                    .collect();
+                                for (field_pty, mut variant_rty) in
+                                    field_tys.clone().into_iter().zip(variant_rtys)
+                                {
+                                    variant_rty.instantiate_ty_params(rty_args.clone());
+                                    let cs = self.env.relate_sub_refined_type(
+                                        &field_pty.into(),
+                                        &variant_rty.boxed(),
+                                    );
+                                    self.ctx.extend_clauses(cs);
+                                }
+
+                                let sort_args: Vec<_> =
+                                    rty_args.iter().map(|rty| rty.ty.to_sort()).collect();
+                                let ty = rty::EnumType::new(enum_def.name.clone(), rty_args).into();
+
+                                let mut builder = PlaceTypeBuilder::default();
+                                let mut field_terms = Vec::new();
+                                for field_ty in field_tys {
+                                    let (_, field_term) = builder.subsume(field_ty);
+                                    field_terms.push(field_term);
+                                }
+                                builder.build(
+                                    ty,
+                                    chc::Term::datatype_ctor(
+                                        enum_def.name,
+                                        sort_args,
+                                        variant_def.name.clone(),
+                                        field_terms,
+                                    ),
+                                )
+                            }
+                            _ => PlaceType::tuple(field_tys),
+                        }
+                    }
                 }
             }
             Rvalue::Cast(
@@ -608,6 +659,27 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
             }
+            Rvalue::Cast(
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::Unsize, _),
+                operand,
+                _ty,
+            ) => {
+                // &[T; N] → &[T]: build the slice model (Array<Int,T>, N).
+                // Read MIR type before consuming operand.
+                let src_mir_ty = operand.ty(&self.local_decls, self.tcx);
+                let mir_ty::TyKind::Ref(_, inner_mir_ty, _) = src_mir_ty.kind() else {
+                    unimplemented!("Unsize coercion of non-reference: {:?}", src_mir_ty)
+                };
+                let mir_ty::TyKind::Array(_, len_const) = inner_mir_ty.kind() else {
+                    unimplemented!("Unsize coercion of non-array reference: {:?}", inner_mir_ty)
+                };
+                let n = len_const
+                    .try_to_target_usize(self.tcx)
+                    .expect("array length must be a known constant");
+                let arr_pty = self.operand_type(operand).deref();
+                let n_pty = PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(n as i64));
+                PlaceType::tuple(vec![arr_pty.boxed(), n_pty.boxed()]).immut()
+            }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
                 let ty = self.env.place_type(place);
@@ -621,6 +693,32 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let mut builder = PlaceTypeBuilder::default();
                 let (_, term) = builder.subsume(ty);
                 builder.build(rty::Type::Int, chc::Term::datatype_discr(sym, term))
+            }
+            Rvalue::Len(place) => {
+                let model_place = self.elaborate_place(&place);
+                let place_ty = self.env.place_type(model_place);
+                match &place_ty.ty {
+                    rty::Type::Tuple(_) => {
+                        // Slice model: TupleType([Box<Array<Int,T>>, Box<Int>])
+                        // Length is element 1 (boxed Int): project then deref the box
+                        place_ty.tuple_proj(1).deref()
+                    }
+                    rty::Type::Array(_) => {
+                        // Static array [T; N]: length is the const N from the MIR type
+                        let mir_ty = place.ty(&self.local_decls, self.tcx).ty;
+                        let mir_ty::TyKind::Array(_, len_const) = mir_ty.kind() else {
+                            unimplemented!(
+                                "Rvalue::Len: Array model type but MIR type is {:?}",
+                                mir_ty
+                            )
+                        };
+                        let n = len_const
+                            .try_to_target_usize(self.tcx)
+                            .expect("array length must be a known constant");
+                        PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(n as i64))
+                    }
+                    _ => unimplemented!("Rvalue::Len for model type: {:?}", place_ty.ty),
+                }
             }
             _ => unimplemented!(
                 "rvalue={:?} ({:?})",
