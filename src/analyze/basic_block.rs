@@ -957,7 +957,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     /// Schedules `local` to be implicitly dropped after this block's terminator,
     /// in addition to the liveness-derived drop points.
-    fn schedule_drop_after_terminator(&mut self, local: Local) {
+    fn drop_after_terminator(&mut self, local: Local) {
         self.drop_points.insert_after_terminator(local);
     }
 

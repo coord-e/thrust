@@ -122,11 +122,11 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for RustCallVisitor<'a, 'tcx, 
                     // FnOnce::call_once consumes the closure, but the resolved function
                     // only borrows it: drop the borrow and the environment after the
                     // call to resolve the prophecies of the captured mutable borrows.
-                    self.analyzer
-                        .schedule_drop_after_terminator(borrowed_closure_local);
+                    self.analyzer.drop_after_terminator(borrowed_closure_local);
+                    // since the original MIR moved `arg_closure_place` into the call,
+                    // the drop-point analysis never schedules a drop for it
                     if arg_closure_place.projection.is_empty() {
-                        self.analyzer
-                            .schedule_drop_after_terminator(arg_closure_place.local);
+                        self.analyzer.drop_after_terminator(arg_closure_place.local);
                     }
                     tracing::debug!("applied mut-borrow for closure argument");
                 }

@@ -11,9 +11,7 @@ pub struct DropPoints {
     after_statements: Vec<DenseBitSet<Local>>,
     after_terminator: HashMap<BasicBlock, DenseBitSet<Local>>,
     /// Locals dropped after the terminator regardless of the target, in
-    /// addition to the liveness-derived sets above. Kept as a `Vec` because
-    /// these locals are created during elaboration and thus lie outside the
-    /// bitset domains, which are sized to the original body's locals.
+    /// addition to the liveness-derived sets above.
     after_terminator_extra: Vec<Local>,
 }
 
@@ -30,10 +28,14 @@ impl DropPoints {
             .iter()
             .position(|s| s.contains(local))
             .or_else(|| {
-                (self.after_terminator.values().any(|s| s.contains(local))
-                    || self.after_terminator_extra.contains(&local))
-                .then_some(self.after_statements.len())
+                self.is_after_terminator(local)
+                    .then_some(self.after_statements.len())
             })
+    }
+
+    fn is_after_terminator(&self, local: Local) -> bool {
+        self.after_terminator.values().any(|s| s.contains(local))
+            || self.after_terminator_extra.contains(&local)
     }
 
     pub fn remove_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
