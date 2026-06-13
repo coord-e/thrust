@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
@@ -11,8 +11,9 @@ pub struct DropPoints {
     after_statements: Vec<DenseBitSet<Local>>,
     after_terminator: HashMap<BasicBlock, DenseBitSet<Local>>,
     /// Locals dropped after the terminator regardless of the target, in
-    /// addition to the liveness-derived sets above.
-    after_terminator_extra: Vec<Local>,
+    /// addition to the liveness-derived sets above. A set, since the same local
+    /// must not be dropped twice; ordered by index to keep drops deterministic.
+    after_terminator_extra: BTreeSet<Local>,
 }
 
 impl DropPoints {
@@ -51,7 +52,7 @@ impl DropPoints {
     }
 
     pub fn insert_after_terminator(&mut self, local: Local) {
-        self.after_terminator_extra.push(local);
+        self.after_terminator_extra.insert(local);
     }
 
     pub fn after_terminator(&self, target: &BasicBlock) -> Vec<Local> {
