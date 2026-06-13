@@ -165,8 +165,11 @@ fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> Use
 }
 
 fn unbox_forall_pred_var_def(pred: ForallPred) -> ForallPred {
-    let args = pred.args.into_iter().map(unbox_sort).collect();
-    ForallPred { args, ..pred }
+    let args = pred.type_parameters.into_iter().map(unbox_sort).collect();
+    ForallPred {
+        type_parameters: args,
+        ..pred
+    }
 }
 
 /// Remove all `Box` sorts and `Box`/`BoxCurrent` terms from the system.

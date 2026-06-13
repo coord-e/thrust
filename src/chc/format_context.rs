@@ -349,7 +349,7 @@ impl FormatContext {
     }
 
     pub fn forall_pred(&self, p: &chc::ForallPred) -> impl std::fmt::Display {
-        let ss = SortSymbols::new(&p.args);
+        let ss = SortSymbols::new(&p.type_parameters);
         format!("{}{}", p.inner, ss)
     }
 

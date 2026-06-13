@@ -1050,7 +1050,7 @@ impl UserDefinedPred {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ForallPred {
     inner: String,
-    args: Vec<Sort>,
+    type_parameters: Vec<Sort>,
 }
 
 impl std::fmt::Display for ForallPred {
@@ -1066,7 +1066,7 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         let args = allocator.intersperse(
-            self.args.iter().map(|a| a.pretty(allocator)),
+            self.type_parameters.iter().map(|a| a.pretty(allocator)),
             allocator.text(", "),
         );
         allocator
@@ -1083,7 +1083,10 @@ where
 
 impl ForallPred {
     pub fn new(inner: String, args: Vec<Sort>) -> Self {
-        Self { inner, args }
+        Self {
+            inner,
+            type_parameters: args,
+        }
     }
 }
 

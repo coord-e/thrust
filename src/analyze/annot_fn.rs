@@ -761,19 +761,13 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 def_id
                             };
 
-                            let typeck_results = self.tcx.typeck(self.local_def_id);
                             let pred = if is_unresolved_args {
-                                let sig: Vec<chc::Sort> = args
-                                    .iter()
-                                    .map(|e| {
-                                        let ty = typeck_results.expr_ty(e);
-                                        let ty = self
-                                            .instantiate_generics(ty, generic_args)
-                                            .unwrap_or(ty);
-                                        self.type_builder.build(ty).to_sort()
-                                    })
+                                tracing::debug!(?self.local_def_id, ?generic_args, ?self.type_builder.owner_fn_id);
+                                let type_params = generic_args
+                                    .types()
+                                    .map(|ty| self.type_builder.build(ty).to_sort())
                                     .collect();
-                                let pred = refine::forall_pred(self.tcx, pred_def_id, sig);
+                                let pred = refine::forall_pred(self.tcx, pred_def_id, type_params);
                                 self.analyzer
                                     .system
                                     .borrow_mut()
