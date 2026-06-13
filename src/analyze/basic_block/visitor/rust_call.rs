@@ -123,8 +123,13 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for RustCallVisitor<'a, 'tcx, 
                     // only borrows it: drop the borrow and the environment after the
                     // call to resolve the prophecies of the captured mutable borrows.
                     self.analyzer.drop_after_terminator(borrowed_closure_local);
-                    // since the original MIR moved `arg_closure_place` into the call,
-                    // the drop-point analysis never schedules a drop for it
+                    // The original MIR moves the closure into the call, so `moved_locals`
+                    // dropped its drop obligation, expecting the callee to consume it; we
+                    // must restore it. `moved_locals` only steals whole-local moves, so we
+                    // only restore those: with a projection the obligation was never stolen
+                    // and the normal drop machinery still handles it (re-adding it would
+                    // double-drop). In practice a non-`Copy` closure (the only kind reaching
+                    // this case) is always moved through a projection-less temporary.
                     if arg_closure_place.projection.is_empty() {
                         self.analyzer.drop_after_terminator(arg_closure_place.local);
                     }
