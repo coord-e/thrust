@@ -18,7 +18,6 @@ use rustc_span::def_id::{DefId, LocalDefId};
 use rustc_span::Symbol;
 
 use crate::analyze;
-use crate::annot::{AnnotFormula, AnnotParser, Resolver};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{self, BasicBlockType, TypeBuilder};
@@ -725,103 +724,48 @@ impl<'tcx> Analyzer<'tcx> {
         None
     }
 
-    // TODO: reduce number of args
-    fn extract_require_annot<T>(
+    fn extract_require_annot(
         &self,
         local_def_id: LocalDefId,
-        resolver: T,
-        self_type_name: Option<String>,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
-    ) -> Option<AnnotFormula<T::Output>>
-    where
-        T: Resolver<Output = rty::FunctionParamIdx>,
-    {
-        let mut require_annot = None;
-        let parser = AnnotParser::new(&resolver, self_type_name);
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(local_def_id.to_def_id(), &analyze::annot::requires_path())
-        {
-            if require_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let require = parser.parse_formula(ts).unwrap();
-            require_annot = Some(require);
-        }
-
-        if let Some(formula_def_id) =
-            self.extract_path_with_attr(local_def_id, &analyze::annot::requires_path_path())
-        {
-            let Some(formula_def_id) = formula_def_id.as_local() else {
-                panic!(
-                    "require annotation with path is expected to refer to a local def, but found: {:?}",
-                    formula_def_id
-                );
-            };
-            if require_annot.is_some() {
-                unimplemented!();
-            }
-            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
-                panic!(
-                    "require annotation {:?} is not a formula function",
-                    formula_def_id
-                );
-            };
-            require_annot = Some(formula_fn.to_require_annot());
-        }
-
-        require_annot
+    ) -> Option<chc::Formula<rty::FunctionParamIdx>> {
+        let formula_def_id =
+            self.extract_path_with_attr(local_def_id, &analyze::annot::requires_path_path())?;
+        let Some(formula_def_id) = formula_def_id.as_local() else {
+            panic!(
+                "require annotation with path is expected to refer to a local def, but found: {:?}",
+                formula_def_id
+            );
+        };
+        let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+            panic!(
+                "require annotation {:?} is not a formula function",
+                formula_def_id
+            );
+        };
+        Some(formula_fn.to_require_formula())
     }
 
-    // TODO: reduce number of args
-    fn extract_ensure_annot<T>(
+    fn extract_ensure_annot(
         &self,
         local_def_id: LocalDefId,
-        resolver: T,
-        self_type_name: Option<String>,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
-    ) -> Option<AnnotFormula<T::Output>>
-    where
-        T: Resolver<Output = rty::RefinedTypeVar<rty::FunctionParamIdx>>,
-    {
-        let mut ensure_annot = None;
-
-        let parser = AnnotParser::new(&resolver, self_type_name);
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(local_def_id.to_def_id(), &analyze::annot::ensures_path())
-        {
-            if ensure_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ensure = parser.parse_formula(ts).unwrap();
-            ensure_annot = Some(ensure);
-        }
-
-        if let Some(formula_def_id) =
-            self.extract_path_with_attr(local_def_id, &analyze::annot::ensures_path_path())
-        {
-            let Some(formula_def_id) = formula_def_id.as_local() else {
-                panic!(
-                    "ensure annotation with path is expected to refer to a local def, but found: {:?}",
-                    formula_def_id
-                );
-            };
-            if ensure_annot.is_some() {
-                unimplemented!();
-            }
-            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
-                panic!(
-                    "ensure annotation {:?} is not a formula function",
-                    formula_def_id
-                );
-            };
-            ensure_annot = Some(formula_fn.to_ensure_annot());
-        }
-
-        ensure_annot
+    ) -> Option<chc::Formula<rty::RefinedTypeVar<rty::FunctionParamIdx>>> {
+        let formula_def_id =
+            self.extract_path_with_attr(local_def_id, &analyze::annot::ensures_path_path())?;
+        let Some(formula_def_id) = formula_def_id.as_local() else {
+            panic!(
+                "ensure annotation with path is expected to refer to a local def, but found: {:?}",
+                formula_def_id
+            );
+        };
+        let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+            panic!(
+                "ensure annotation {:?} is not a formula function",
+                formula_def_id
+            );
+        };
+        Some(formula_fn.to_ensure_formula())
     }
 
     /// Collects every `#[thrust::refinement_path(..)]` path statement in the

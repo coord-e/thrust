@@ -6,10 +6,8 @@ use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeAndMut};
 use rustc_span::def_id::{DefId, LocalDefId};
-use rustc_span::symbol::Ident;
 
 use crate::analyze;
-use crate::annot::{self, AnnotFormula, AnnotParser, ResolverExt as _};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{self, BasicBlockType, TypeBuilder};
@@ -54,85 +52,11 @@ pub struct Analyzer<'tcx, 'ctx> {
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
-    fn extract_param_annots<T>(
-        &self,
-        resolver: T,
-        self_type_name: Option<String>,
-    ) -> Vec<(Ident, rty::RefinedType<T::Output>)>
-    where
-        T: annot::Resolver,
-    {
-        let mut param_annots = Vec::new();
-        let parser = AnnotParser::new(&resolver, self_type_name);
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::param_path())
-        {
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let (ident, ts) = analyze::annot::split_param(&ts);
-            let param = parser.parse_rty(ts).unwrap();
-            param_annots.push((ident, param));
-        }
-        param_annots
-    }
-
-    fn extract_ret_annot<T>(
-        &self,
-        resolver: T,
-        self_type_name: Option<String>,
-    ) -> Option<rty::RefinedType<T::Output>>
-    where
-        T: annot::Resolver,
-    {
-        let mut ret_annot = None;
-        let parser = AnnotParser::new(&resolver, self_type_name);
-        for attrs in self
-            .tcx
-            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::ret_path())
-        {
-            if ret_annot.is_some() {
-                unimplemented!();
-            }
-            let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-            let ret = parser.parse_rty(ts).unwrap();
-            ret_annot = Some(ret);
-        }
-        ret_annot
-    }
-
-    fn impl_type(&self) -> Option<rustc_middle::ty::Ty<'tcx>> {
-        use rustc_hir::def::DefKind;
-
-        let parent_def_id = self.tcx.parent(self.local_def_id.to_def_id());
-
-        if !matches!(self.tcx.def_kind(parent_def_id), DefKind::Impl { .. }) {
-            return None;
-        }
-
-        let self_ty = self.tcx.type_of(parent_def_id).instantiate_identity();
-
-        Some(self_ty)
-    }
-
     pub fn analyze_predicate_definition(&self) {
         self.define_as_predicate(refine::user_defined_pred(
             self.tcx,
             self.local_def_id.to_def_id(),
         ));
-
-        // For thrust::{requires,ensures} annotations which does not know DefId of the predicate
-        // during parsing, we also define a predicate with a name based on the self type name
-        //
-        // TODO: remove this after we dropped old annotation parser impl
-        //       (then move this to crate_::Analyzer)
-        let pred_item_name = self
-            .tcx
-            .item_name(self.local_def_id.to_def_id())
-            .to_string();
-        if let Some(self_ty) = self.impl_type() {
-            let name = chc::UserDefinedPred::new(self_ty.to_string() + "_" + &pred_item_name);
-            self.define_as_predicate(name);
-        }
     }
 
     fn define_as_predicate(&self, pred: chc::UserDefinedPred) {
@@ -239,54 +163,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .is_some()
     }
 
-    // TODO: unify this logic with extraction functions above
     pub fn is_fully_annotated(&self) -> bool {
         let has_requires = self
-            .tcx
-            .get_attrs_by_path(
-                self.local_def_id.to_def_id(),
-                &analyze::annot::requires_path(),
-            )
-            .next()
-            .is_some()
-            || self
-                .ctx
-                .extract_path_with_attr(self.local_def_id, &analyze::annot::requires_path_path())
-                .is_some();
+            .ctx
+            .extract_path_with_attr(self.local_def_id, &analyze::annot::requires_path_path())
+            .is_some();
         let has_ensures = self
-            .tcx
-            .get_attrs_by_path(
-                self.local_def_id.to_def_id(),
-                &analyze::annot::ensures_path(),
-            )
-            .next()
-            .is_some()
-            || self
-                .ctx
-                .extract_path_with_attr(self.local_def_id, &analyze::annot::ensures_path_path())
-                .is_some();
-        let annotated_params: Vec<_> = self
-            .tcx
-            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::param_path())
-            .map(|attrs| {
-                let ts = analyze::annot::extract_annot_tokens(attrs.clone());
-                let (ident, _) = analyze::annot::split_param(&ts);
-                ident
-            })
-            .collect();
-        let has_ret = self
-            .tcx
-            .get_attrs_by_path(self.local_def_id.to_def_id(), &analyze::annot::ret_path())
-            .next()
+            .ctx
+            .extract_path_with_attr(self.local_def_id, &analyze::annot::ensures_path_path())
             .is_some();
 
-        let arg_names = self.tcx.fn_arg_idents(self.local_def_id.to_def_id());
-        let all_params_annotated = arg_names
-            .iter()
-            .all(|ident| ident.is_some_and(|i| annotated_params.contains(&i)));
-        self.is_annotated_as_callable()
-            || (has_requires && has_ensures)
-            || (all_params_annotated && has_ret)
+        self.is_annotated_as_callable() || (has_requires && has_ensures)
     }
 
     pub fn local_trait_item_id(&self) -> Option<LocalDefId> {
@@ -353,62 +240,26 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .ctx
             .fn_sig_with_body(self.local_def_id.to_def_id(), &self.body);
 
-        let mut param_resolver = analyze::annot::ParamResolver::default();
-        for (input_ident, input_ty) in self
-            .tcx
-            .fn_arg_idents(self.local_def_id.to_def_id())
-            .iter()
-            .zip(sig.inputs())
-        {
-            let input_ty = self.type_builder.build(*input_ty);
-            param_resolver.push_param(
-                input_ident
-                    .map(|i| i.name)
-                    .unwrap_or(rustc_span::Symbol::intern("")),
-                input_ty.to_sort(),
-            );
-        }
-
-        let output_ty = self.type_builder.build(sig.output());
-        let result_param_resolver = annot::StackedResolver::default()
-            .resolver(analyze::annot::ResultResolver::new(output_ty.to_sort()))
-            .resolver((&param_resolver).map(rty::RefinedTypeVar::Free));
-
-        let self_type_name = self.impl_type().map(|ty| ty.to_string());
-
         // Formula translation for `pre!(f(..))`/`post!(f(..), result)` is read-only. If a callable
         // parameter resolves to a deferred closure/function def, force its analysis here so the
         // translator can later find the cached contract.
         self.precompute_callable_param_contracts(&sig);
 
-        let mut require_annot = self.ctx.extract_require_annot(
-            self.local_def_id,
-            &param_resolver,
-            self_type_name.clone(),
-            self.generic_args,
-        );
-
-        let mut ensure_annot = self.ctx.extract_ensure_annot(
-            self.local_def_id,
-            &result_param_resolver,
-            self_type_name.clone(),
-            self.generic_args,
-        );
+        let mut require_annot = self
+            .ctx
+            .extract_require_annot(self.local_def_id, self.generic_args);
+        let mut ensure_annot = self
+            .ctx
+            .extract_ensure_annot(self.local_def_id, self.generic_args);
 
         if let Some(trait_item_id) = self.local_trait_item_id() {
             tracing::info!("trait item found: {:?}", trait_item_id);
-            let trait_require_annot = self.ctx.extract_require_annot(
-                trait_item_id,
-                &param_resolver,
-                self_type_name.clone(),
-                self.generic_args,
-            );
-            let trait_ensure_annot = self.ctx.extract_ensure_annot(
-                trait_item_id,
-                &result_param_resolver,
-                self_type_name.clone(),
-                self.generic_args,
-            );
+            let trait_require_annot = self
+                .ctx
+                .extract_require_annot(trait_item_id, self.generic_args);
+            let trait_ensure_annot = self
+                .ctx
+                .extract_ensure_annot(trait_item_id, self.generic_args);
 
             assert!(require_annot.is_none() || trait_require_annot.is_none());
             require_annot = require_annot.or(trait_require_annot);
@@ -417,23 +268,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             ensure_annot = ensure_annot.or(trait_ensure_annot);
         }
 
-        let param_annots = self.extract_param_annots(&param_resolver, self_type_name.clone());
-        let ret_annot = self.extract_ret_annot(&param_resolver, self_type_name);
-
         if self.is_annotated_as_callable() {
-            if require_annot.is_some() || ensure_annot.is_some() {
-                unimplemented!();
-            }
-            if !param_annots.is_empty() || ret_annot.is_some() {
-                unimplemented!();
-            }
-
-            require_annot = Some(AnnotFormula::top());
-            ensure_annot = Some(AnnotFormula::top());
+            assert!(require_annot.is_none() && ensure_annot.is_none());
+            require_annot = Some(chc::Formula::top());
+            ensure_annot = Some(chc::Formula::top());
         }
-
-        assert!(require_annot.is_none() || param_annots.is_empty());
-        assert!(ensure_annot.is_none() || ret_annot.is_none());
 
         let refinement_annots = self
             .ctx
@@ -443,7 +282,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let is_fully_annotated = self.is_fully_annotated();
 
         let mut builder = self.type_builder.for_function_template(&mut self.ctx, sig);
-        if let Some(AnnotFormula::Formula(require)) = require_annot {
+        if let Some(require) = require_annot {
             let formula = require.map_var(|idx| {
                 if idx.index() == sig.inputs().len() - 1 {
                     rty::RefinedTypeVar::Value
@@ -453,16 +292,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             });
             builder.param_refinement(formula.into());
         }
-        if let Some(AnnotFormula::Formula(ensure)) = ensure_annot {
+        if let Some(ensure) = ensure_annot {
             builder.ret_refinement(ensure.into());
-        }
-        for (ident, annot_rty) in param_annots {
-            use annot::Resolver as _;
-            let (idx, _) = param_resolver.resolve(ident).expect("unknown param");
-            builder.param_rty(idx, annot_rty);
-        }
-        if let Some(ret_rty) = ret_annot {
-            builder.ret_rty(ret_rty);
         }
         for (position, refinement) in refinement_annots {
             builder.refinement_at(&position, refinement);
