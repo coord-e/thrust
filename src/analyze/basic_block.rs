@@ -955,6 +955,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.drop_local(local);
     }
 
+    /// Schedules `local` to be implicitly dropped after this block's terminator,
+    /// in addition to the liveness-derived drop points.
+    fn drop_after_terminator(&mut self, local: Local) {
+        self.drop_points.insert_after_terminator(local);
+    }
+
     fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'tcx>) {
         let ty = self.type_builder.build(ty);
         let temp_var = self.env.push_temp_var(ty.vacuous());
@@ -1149,7 +1155,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     targets.clone(),
                     outer_fn_param_vars,
                     |a, target| {
-                        for local in a.drop_points.after_terminator(&target).iter() {
+                        for local in a.drop_points.after_terminator(&target) {
                             tracing::info!(?local, ?target, "implicitly dropped for target");
                             a.drop_local(local);
                         }
@@ -1158,7 +1164,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             TerminatorKind::Call { target, .. } => {
                 if let Some(target) = target {
-                    for local in self.drop_points.after_terminator(target).iter() {
+                    for local in self.drop_points.after_terminator(target) {
                         tracing::info!(?local, "implicitly dropped after call");
                         self.drop_local(local);
                     }
@@ -1166,7 +1172,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
             }
             TerminatorKind::Drop { target, .. } => {
-                for local in self.drop_points.after_terminator(target).iter() {
+                for local in self.drop_points.after_terminator(target) {
                     tracing::info!(?local, "dropped");
                     self.drop_local(local);
                 }
@@ -1178,7 +1184,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 target,
                 ..
             } => {
-                for local in self.drop_points.after_terminator(target).iter() {
+                for local in self.drop_points.after_terminator(target) {
                     tracing::info!(?local, "dropped");
                     self.drop_local(local);
                 }
