@@ -101,6 +101,47 @@ fn moved_locals<'tcx>(
     visitor.locals
 }
 
+/// For each local, the places (with a non-empty projection) that are moved out
+/// of it somewhere in `body` — i.e. partial field moves.
+///
+/// A wholesale drop of the parent would otherwise walk into such a moved-out
+/// sub-place and resolve the `&mut` prophecy it owns a second time (see
+/// `Env::dropping_assumption`). Whole-local moves are already excluded from the
+/// drop set by `moved_locals`; this captures the partial-move case it misses.
+///
+/// Moves of reference-typed places are skipped for the same reason as in
+/// `moved_locals`: `ReborrowVisitor`/`RustCallVisitor` turn them into reborrows,
+/// so the source still owns its prophecy and must be dropped normally.
+pub fn partial_moved_places<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    body: &Body<'tcx>,
+) -> HashMap<Local, Vec<mir::Place<'tcx>>> {
+    struct Visitor<'a, 'tcx> {
+        tcx: rustc_middle::ty::TyCtxt<'tcx>,
+        body: &'a Body<'tcx>,
+        moves: HashMap<Local, Vec<mir::Place<'tcx>>>,
+    }
+    impl<'tcx> mir::visit::Visitor<'tcx> for Visitor<'_, 'tcx> {
+        fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, _location: mir::Location) {
+            if let mir::Operand::Move(place) = operand {
+                if !place.projection.is_empty()
+                    && !place.ty(&self.body.local_decls, self.tcx).ty.is_ref()
+                {
+                    self.moves.entry(place.local).or_default().push(*place);
+                }
+            }
+        }
+    }
+    let mut visitor = Visitor {
+        tcx,
+        body,
+        moves: HashMap::new(),
+    };
+    use mir::visit::Visitor as _;
+    visitor.visit_body(body);
+    visitor.moves
+}
+
 fn def_local<'tcx>(data: &mir::BasicBlockData<'tcx>, statement_index: usize) -> Option<Local> {
     struct Visitor {
         local: Option<Local>,
