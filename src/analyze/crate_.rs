@@ -183,18 +183,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let param = generics.param_at(idx, self.tcx);
             let arg = match param.kind {
                 mir_ty::GenericParamDefKind::Type { .. } => {
-                    if constrained_params.contains(&param.index) {
-                        let new_param =
-                            mir_ty::Ty::new_param(self.tcx, param.index, param.name).into();
-                        tracing::debug!(
-                            "replace the cosnstrained param {:#?} with the new param {:#?}.",
-                            param,
-                            new_param
-                        );
+                    let new_param =
+                        mir_ty::Ty::new_param(self.tcx, param.index, param.name).into();
+                    tracing::debug!(
+                        "replace the cosnstrained param {:#?} with the new param {:#?}.",
+                        param,
                         new_param
-                    } else {
-                        self.tcx.types.i32.into()
-                    }
+                    );
+                    new_param
                 }
                 mir_ty::GenericParamDefKind::Const { .. } => {
                     unimplemented!()
