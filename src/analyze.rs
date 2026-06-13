@@ -207,12 +207,12 @@ impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
 }
 
 pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
-pub type TypeParamMap = HashMap<TypeParam, ForallSortIdx>;
+pub type TypeParamMap<'tcx> = HashMap<TypeParam<'tcx>, ForallSortIdx>;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
-pub enum TypeParam {
+pub enum TypeParam<'tcx> {
     GenericType(DefId, u32),
-    AssocType(DefId),
+    AssocType(DefId, mir_ty::GenericArgsRef<'tcx>),
 }
 
 #[derive(Debug, Clone)]
@@ -242,8 +242,8 @@ pub struct Analyzer<'tcx> {
 
     enum_defs: Rc<RefCell<EnumDefs>>,
 
-    type_params: Rc<RefCell<TypeParamMap>>,
-    closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
+    type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam<'tcx>, rty::FunctionType>>>,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
@@ -437,7 +437,7 @@ impl<'tcx> Analyzer<'tcx> {
         );
     }
 
-    pub fn get_closure_type(&self, type_param: TypeParam) -> Option<rty::FunctionType> {
+    pub fn get_closure_type(&self, type_param: TypeParam<'tcx>) -> Option<rty::FunctionType> {
         self.closure_type_params.borrow().get(&type_param).cloned()
     }
 

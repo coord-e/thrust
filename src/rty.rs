@@ -763,27 +763,55 @@ impl ParamType {
     }
 }
 
+/// A projection type representing an unresolved associated type.
+///
+/// This preserves the structural identity of projections like `<T as Iterator>::Item`
+/// or `<Map<I, F> as Iterator>::Item`, keeping them distinct even before normalization.
+///
+/// The `args` field stores the generic arguments (Self type + other args), which can
+/// recursively contain other types including params, ADTs, and other projections.
+/// For example, `<Map<I, F> as Iterator>::Item` would have `args = [Map<I, F>]`.
 #[derive(Debug, Clone)]
 pub struct AliasType {
     forall_sort_idx: ForallSortIdx,
+    args: Vec<Type<Closed>>,
 }
 
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &AliasType
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        self.forall_sort_idx.pretty(allocator)
+        let sort = self.forall_sort_idx.pretty(allocator);
+        if self.args.is_empty() {
+            sort
+        } else {
+            let args = allocator.intersperse(
+                self.args.iter().map(|ty| ty.pretty(allocator)),
+                allocator.text(",").append(allocator.line()),
+            );
+            sort.append(allocator.line())
+                .append(args.nest(2).angles())
+                .group()
+        }
     }
 }
 
 impl AliasType {
-    pub fn new(forall_sort_idx: ForallSortIdx) -> Self {
-        AliasType { forall_sort_idx }
+    pub fn new(forall_sort_idx: ForallSortIdx, args: Vec<Type<Closed>>) -> Self {
+        AliasType {
+            forall_sort_idx,
+            args,
+        }
     }
 
     pub fn forall_sort_index(&self) -> ForallSortIdx {
         self.forall_sort_idx
+    }
+
+    pub fn args(&self) -> &[Type<Closed>] {
+        &self.args
     }
 }
 
@@ -1163,10 +1191,13 @@ impl<T> Type<T> {
 
     pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
         match self {
-            Type::Int | Type::Bool | Type::String | Type::Never | Type::Alias(_) => {
-                Default::default()
-            }
+            Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
             Type::Param(ty) => std::iter::once(ty.type_param_index()).collect(),
+            Type::Alias(ty) => ty
+                .args()
+                .iter()
+                .flat_map(|ty| ty.free_ty_params())
+                .collect(),
             Type::Pointer(ty) => ty.free_ty_params(),
             Type::Function(ty) => ty.free_ty_params(),
             Type::Tuple(ty) => ty.free_ty_params(),
@@ -1731,7 +1762,7 @@ impl<FV> RefinedType<FV> {
     {
         self.refinement.subst_ty_params_in_sorts(subst);
         match &mut self.ty {
-            Type::Int | Type::Bool | Type::String | Type::Never | Type::Alias(_) => {}
+            Type::Int | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
                 if let Some(rty) = subst.get(ty.type_param_index()) {
                     let RefinedType {
@@ -1741,6 +1772,19 @@ impl<FV> RefinedType<FV> {
                     self.refinement.push_conj(refinement);
                     self.ty = replacement_ty;
                 }
+            }
+            Type::Alias(alias) => {
+                let subst_closed = subst.clone().strip_refinement();
+                let new_args: Vec<Type<Closed>> = alias
+                    .args()
+                    .iter()
+                    .map(|arg| {
+                        let mut arg_rty = RefinedType::unrefined(arg.clone());
+                        arg_rty.subst_ty_params(&subst_closed);
+                        arg_rty.ty
+                    })
+                    .collect();
+                self.ty = Type::Alias(AliasType::new(alias.forall_sort_index(), new_args));
             }
             Type::Pointer(ty) => ty.subst_ty_params(subst),
             Type::Function(ty) => {
@@ -1789,6 +1833,24 @@ impl<FV> RefinedType<FV> {
             (Type::Tuple(ty1), Type::Tuple(ty2)) => ty1.unify_ty_params(ty2),
             (Type::Array(ty1), Type::Array(ty2)) => ty1.unify_ty_params(ty2),
             (Type::Enum(ty1), Type::Enum(ty2)) => ty1.unify_ty_params(ty2),
+            (Type::Alias(a1), Type::Alias(a2))
+                if a1.forall_sort_index() == a2.forall_sort_index() =>
+            {
+                assert_eq!(a1.args().len(), a2.args().len());
+                let args1: Vec<RefinedType<FV>> = a1
+                    .args()
+                    .iter()
+                    .cloned()
+                    .map(|ty| RefinedType::unrefined(ty).vacuous())
+                    .collect();
+                let args2: Vec<RefinedType<FV>> = a2
+                    .args()
+                    .iter()
+                    .cloned()
+                    .map(|ty| RefinedType::unrefined(ty).vacuous())
+                    .collect();
+                unify_tys_params(args1, args2)
+            }
             (t1, t2) => panic!("unify_ty_params: mismatched types t1={:?}, t2={:?}", t1, t2),
         }
     }

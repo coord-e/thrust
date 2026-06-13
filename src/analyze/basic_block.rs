@@ -133,7 +133,7 @@ impl PrecondCapture {
 
 enum ResolvedCallable<'tcx> {
     Closure(DefId, mir_ty::GenericArgsRef<'tcx>),
-    Generic(TypeParam),
+    Generic(TypeParam<'tcx>),
 }
 
 pub struct Analyzer<'tcx, 'ctx> {

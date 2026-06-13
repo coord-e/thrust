@@ -80,8 +80,8 @@ pub struct TypeBuilder<'tcx> {
     /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
-    type_params: Rc<RefCell<TypeParamMap>>,
-    closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
+    type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam<'tcx>, rty::FunctionType>>>,
     system: Rc<RefCell<chc::System>>,
 }
 
@@ -90,8 +90,8 @@ impl<'tcx> TypeBuilder<'tcx> {
         tcx: mir_ty::TyCtxt<'tcx>,
         def_ids: DefIdCache<'tcx>,
         owner_fn_id: DefId,
-        type_params: Rc<RefCell<TypeParamMap>>,
-        closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
+        type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+        closure_type_params: Rc<RefCell<HashMap<TypeParam<'tcx>, rty::FunctionType>>>,
         system: Rc<RefCell<chc::System>>,
     ) -> Self {
         let generics = tcx.generics_of(owner_fn_id);
@@ -143,20 +143,26 @@ impl<'tcx> TypeBuilder<'tcx> {
         rty::ParamType::new(param_local_idx, *forall_sort_idx).into()
     }
 
-    fn translate_alias_type(&self, ty: &mir_ty::AliasTy) -> rty::Type<rty::Closed> {
+    fn translate_alias_type(&self, ty: &mir_ty::AliasTy<'tcx>) -> rty::Type<rty::Closed> {
         let mut type_params = self.type_params.borrow_mut();
         let index = type_params
-            .entry(TypeParam::AssocType(ty.def_id))
+            .entry(TypeParam::AssocType(ty.def_id, ty.args))
             .or_insert_with(|| {
                 let idx = self.system.borrow_mut().new_forall_sort();
                 tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?}.", idx, ty,);
                 idx
             });
 
-        rty::AliasType::new(*index).into()
+        let args: Vec<rty::Type<rty::Closed>> = ty.args.types().map(|t| self.build(t)).collect();
+
+        rty::AliasType::new(*index, args).into()
     }
 
-    pub fn register_closure_type_param(&self, type_param: TypeParam, fun_type: rty::FunctionType) {
+    pub fn register_closure_type_param(
+        &self,
+        type_param: TypeParam<'tcx>,
+        fun_type: rty::FunctionType,
+    ) {
         tracing::info!(?type_param, ?fun_type, "register_closure_type_param");
         self.closure_type_params
             .borrow_mut()
