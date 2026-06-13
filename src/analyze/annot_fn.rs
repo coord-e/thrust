@@ -256,7 +256,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .instantiate_generics(ty, self.generic_args)
             .unwrap_or(ty);
         let typing_env = mir_ty::TypingEnv::fully_monomorphized();
-        self.tcx.normalize_erasing_regions(typing_env, instantiated)
+        self.tcx
+            .try_normalize_erasing_regions(typing_env, instantiated)
+            .unwrap_or(instantiated)
     }
 
     pub fn to_formula_fn(&self) -> FormulaFn<'tcx> {

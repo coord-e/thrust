@@ -399,7 +399,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for input_ty in sig.inputs() {
             let inst = self
                 .tcx
-                .normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), *input_ty);
+                .try_normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), *input_ty)
+                .unwrap_or(*input_ty);
             let (fn_def_id, fn_args) = match inst.kind() {
                 mir_ty::TyKind::Closure(def_id, args) => {
                     (*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
