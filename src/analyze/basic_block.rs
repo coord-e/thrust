@@ -145,6 +145,10 @@ pub struct Analyzer<'tcx, 'ctx> {
     local_decls: IndexVec<Local, mir::LocalDecl<'tcx>>,
     // TODO: remove this
     prophecy_vars: HashMap<usize, TempVarIdx>,
+    /// Sub-places partially moved out of a local somewhere in the body, keyed by
+    /// that local. Consulted when dropping so a wholesale drop does not
+    /// re-resolve a moved-out `&mut` prophecy. Recomputed from `body`.
+    partial_moves: HashMap<Local, Vec<mir::Place<'tcx>>>,
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -952,7 +956,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn drop_local(&mut self, local: Local) {
-        self.env.drop_local(local);
+        match self.partial_moves.get(&local) {
+            Some(moved) => self.env.drop_local_with_moved(local, moved),
+            None => self.env.drop_local(local),
+        }
     }
 
     /// Schedules `local` to be implicitly dropped after this block's terminator,
@@ -1341,6 +1348,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
         let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
+        let partial_moves = drop_point::partial_moved_places(tcx, &body);
         Self {
             ctx,
             tcx,
@@ -1352,6 +1360,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             env,
             local_decls,
             prophecy_vars,
+            partial_moves,
         }
     }
 
@@ -1363,6 +1372,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn body(&mut self, body: Body<'tcx>) -> &mut Self {
         self.local_decls = body.local_decls.clone();
         self.body = Cow::Owned(body);
+        self.partial_moves = drop_point::partial_moved_places(self.tcx, &self.body);
         self
     }
 
