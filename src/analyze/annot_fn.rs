@@ -368,6 +368,16 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         Some(rty::RefinedType::unrefined(ret_ty))
     }
 
+    fn register_forall_pred(&self, type_params: Vec<chc::Sort>) -> chc::ForallPred {
+        let predicate =
+            refine::forall_pred(self.tcx, self.local_def_id.to_def_id(), type_params.clone());
+        self.analyzer
+            .system
+            .borrow_mut()
+            .register_forall_pred(predicate.clone());
+        predicate
+    }
+
     fn type_param_as_callable_sig(&self, param_ty: mir_ty::ParamTy) -> Option<rty::FunctionType> {
         let param_ty = self
             .instantiate_generics(param_ty, self.generic_args)
@@ -381,14 +391,34 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 self.instantiate_generics(*clause, self.generic_args)
                     .unwrap_or(*clause)
             });
-        let params = predicates.clone().find_map(|clause| {
-            self.closure_trait_args(param_ty, clause.as_trait_clause()?.skip_binder())
-        });
-        let ret = predicates.find_map(|clause| {
-            self.closure_trait_ret(param_ty, clause.as_projection_clause()?.skip_binder())
-        });
 
-        Some(rty::FunctionType::new(params?, ret?))
+        let mut params = predicates.clone().find_map(|clause| {
+            self.closure_trait_args(param_ty, clause.as_trait_clause()?.skip_binder())
+        })?;
+        let mut ret = predicates.find_map(|clause| {
+            self.closure_trait_ret(param_ty, clause.as_projection_clause()?.skip_binder())
+        })?;
+
+        let receiver = rty::FunctionParamIdx::from_usize(0);
+        let arg = rty::FunctionParamIdx::from_usize(1);
+
+        let free = |idx| chc::Term::var(rty::RefinedTypeVar::Free(idx));
+        let value = chc::Term::var(rty::RefinedTypeVar::Value);
+
+        let type_params = vec![self.type_builder.build(param_ty.to_ty(self.tcx)).to_sort()];
+
+        let pre_pred = self.register_forall_pred(type_params.clone());
+        let post_pred = self.register_forall_pred(type_params);
+
+        params[receiver].extend_refinement(
+            chc::Atom::new(pre_pred.into(), vec![value.clone(), free(arg)]).into(),
+        );
+
+        ret.extend_refinement(
+            chc::Atom::new(post_pred.into(), vec![free(receiver), free(arg), value]).into(),
+        );
+
+        Some(rty::FunctionType::new(params, ret))
     }
 
     /// Extracts the logical argument terms passed to `closure_precondition`/
