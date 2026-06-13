@@ -10,6 +10,11 @@ pub struct DropPoints {
     pub before_statements: Vec<Local>,
     after_statements: Vec<DenseBitSet<Local>>,
     after_terminator: HashMap<BasicBlock, DenseBitSet<Local>>,
+    /// Locals dropped after the terminator regardless of the target, in
+    /// addition to the liveness-derived sets above. Kept as a `Vec` because
+    /// these locals are created during elaboration and thus lie outside the
+    /// bitset domains, which are sized to the original body's locals.
+    after_terminator_extra: Vec<Local>,
 }
 
 impl DropPoints {
@@ -25,10 +30,9 @@ impl DropPoints {
             .iter()
             .position(|s| s.contains(local))
             .or_else(|| {
-                self.after_terminator
-                    .values()
-                    .any(|s| s.contains(local))
-                    .then_some(self.after_statements.len())
+                (self.after_terminator.values().any(|s| s.contains(local))
+                    || self.after_terminator_extra.contains(&local))
+                .then_some(self.after_statements.len())
             })
     }
 
@@ -44,10 +48,16 @@ impl DropPoints {
         self.after_statements[statement_index].clone()
     }
 
-    pub fn after_terminator(&self, target: &BasicBlock) -> DenseBitSet<Local> {
+    pub fn insert_after_terminator(&mut self, local: Local) {
+        self.after_terminator_extra.push(local);
+    }
+
+    pub fn after_terminator(&self, target: &BasicBlock) -> Vec<Local> {
         let mut t = self.after_terminator[target].clone();
         t.union(self.after_statements.last().unwrap());
-        t
+        t.iter()
+            .chain(self.after_terminator_extra.iter().copied())
+            .collect()
     }
 }
 
@@ -197,6 +207,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
             before_statements: Default::default(),
             after_statements,
             after_terminator,
+            after_terminator_extra: Default::default(),
         }
     }
 }

@@ -123,12 +123,10 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for RustCallVisitor<'a, 'tcx, 
                     // only borrows it: drop the borrow and the environment after the
                     // call to resolve the prophecies of the captured mutable borrows.
                     self.analyzer
-                        .drops_after_terminator
-                        .push(borrowed_closure_local);
+                        .schedule_drop_after_terminator(borrowed_closure_local);
                     if arg_closure_place.projection.is_empty() {
                         self.analyzer
-                            .drops_after_terminator
-                            .push(arg_closure_place.local);
+                            .schedule_drop_after_terminator(arg_closure_place.local);
                     }
                     tracing::debug!("applied mut-borrow for closure argument");
                 }
