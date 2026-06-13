@@ -659,6 +659,27 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
             }
+            Rvalue::Cast(
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::Unsize, _),
+                operand,
+                _ty,
+            ) => {
+                // &[T; N] → &[T]: build the slice model (Array<Int,T>, N).
+                // Read MIR type before consuming operand.
+                let src_mir_ty = operand.ty(&self.local_decls, self.tcx);
+                let mir_ty::TyKind::Ref(_, inner_mir_ty, _) = src_mir_ty.kind() else {
+                    unimplemented!("Unsize coercion of non-reference: {:?}", src_mir_ty)
+                };
+                let mir_ty::TyKind::Array(_, len_const) = inner_mir_ty.kind() else {
+                    unimplemented!("Unsize coercion of non-array reference: {:?}", inner_mir_ty)
+                };
+                let n = len_const
+                    .try_to_target_usize(self.tcx)
+                    .expect("array length must be a known constant");
+                let arr_pty = self.operand_type(operand).deref();
+                let n_pty = PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(n as i64));
+                PlaceType::tuple(vec![arr_pty.boxed(), n_pty.boxed()]).immut()
+            }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
                 let ty = self.env.place_type(place);
