@@ -102,6 +102,7 @@ enum FormulaOrTerm<T> {
     BinOp(chc::Term<T>, AmbiguousBinOp, chc::Term<T>),
     And(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
     Or(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
+    Implies(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
     Not(Box<FormulaOrTerm<T>>),
     Literal(bool),
 }
@@ -124,6 +125,7 @@ impl<T> FormulaOrTerm<T> {
             }
             FormulaOrTerm::And(lhs, rhs) => lhs.into_formula()?.and(rhs.into_formula()?),
             FormulaOrTerm::Or(lhs, rhs) => lhs.into_formula()?.or(rhs.into_formula()?),
+            FormulaOrTerm::Implies(lhs, rhs) => lhs.into_formula()?.implies(rhs.into_formula()?),
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_formula()?.not(),
             FormulaOrTerm::Literal(b) => {
                 if b {
@@ -148,6 +150,7 @@ impl<T> FormulaOrTerm<T> {
             FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Lt, rhs) => lhs.lt(rhs),
             FormulaOrTerm::And(lhs, rhs) => lhs.into_term()?.and(rhs.into_term()?),
             FormulaOrTerm::Or(lhs, rhs) => lhs.into_term()?.or(rhs.into_term()?),
+            FormulaOrTerm::Implies(lhs, rhs) => lhs.into_term()?.not().or(rhs.into_term()?),
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_term()?.not(),
             FormulaOrTerm::Literal(b) => chc::Term::bool(b),
         };
@@ -675,6 +678,14 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             assert_eq!(args.len(), 1, "FnParam::at_entry takes exactly 1 argument");
                             let t = self.to_term(&args[0]);
                             return FormulaOrTerm::Term(t);
+                        }
+                        if Some(def_id) == self.def_ids.implies() {
+                            let [lhs, rhs] = args else {
+                                panic!("implies takes exactly 2 arguments");
+                            };
+                            let lhs = self.to_formula_or_term(lhs);
+                            let rhs = self.to_formula_or_term(rhs);
+                            return FormulaOrTerm::Implies(lhs.into(), rhs.into());
                         }
                         if Some(def_id) == self.def_ids.mut_model_new() {
                             assert_eq!(args.len(), 2, "Mut::new takes exactly 2 arguments");

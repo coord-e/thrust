@@ -54,7 +54,7 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
 }
 
 pub fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let expr = crate::formula::wrap_expr(attr.into());
+    let expr = crate::formula::expand(attr.into());
     let mut func = parse_macro_input!(item as FnItemWithSignature);
 
     let (req_expr, ens_expr) = match extract_requires_ensures(&mut func) {
@@ -69,7 +69,7 @@ pub fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 pub fn expand_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let expr = crate::formula::wrap_expr(attr.into());
+    let expr = crate::formula::expand(attr.into());
     let mut func = parse_macro_input!(item as FnItemWithSignature);
 
     let (req_expr, ens_expr) = match extract_requires_ensures(&mut func) {

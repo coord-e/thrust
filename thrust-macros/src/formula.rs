@@ -7,7 +7,7 @@
 //! which parses formulas as [`syn::Expr`] — never chokes on it, and gives one
 //! place to run preprocessing before the body reaches rustc / HIR lowering.
 //!
-//! The only pass today is implication desugaring; further passes can be appended
+//! The only pass today is implication lowering; further passes can be appended
 //! in [`expand`].
 
 use proc_macro2::{Group, Punct, Spacing, TokenStream, TokenTree};
@@ -96,7 +96,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 
     // `==>` is desugared to assignment (the lowest-precedence, right-associative
     // operator) so `syn` reproduces its precedence, then each assignment node is
-    // rewritten into `!lhs || rhs`.
+    // rewritten into a marker call that the analyzer lowers to `chc::Formula::Implies`.
     let desugared = desugar_arrows(input);
     let mut expr: syn::Expr = match syn::parse2(desugared) {
         Ok(expr) => expr,
@@ -104,9 +104,9 @@ pub fn expand(input: TokenStream) -> TokenStream {
     };
 
     // Rewrites each assignment `lhs = rhs` (produced by [`desugar_arrows`] from
-    // `lhs ==> rhs`) into `(!(lhs)) || (rhs)`. Visiting post-order means nested
-    // implications are rewritten innermost-first, so the right-associative chain
-    // `a ==> b ==> c` becomes `!a || (!b || c)`.
+    // `lhs ==> rhs`) into `thrust_models::implies(lhs, rhs)`. Visiting
+    // post-order means nested implications are rewritten innermost-first, so the
+    // right-associative chain `a ==> b ==> c` becomes `implies(a, implies(b, c))`.
     struct ImplicationRewriter;
 
     impl VisitMut for ImplicationRewriter {
@@ -115,7 +115,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             if let syn::Expr::Assign(assign) = expr {
                 let left = &assign.left;
                 let right = &assign.right;
-                *expr = syn::parse_quote!((!(#left)) || (#right));
+                *expr = syn::parse_quote!(thrust_models::implies((#left), (#right)));
             }
         }
     }
@@ -213,21 +213,24 @@ mod tests {
 
     #[test]
     fn desugars_implication() {
-        assert_eq!(expand_expr("a ==> b"), expect("(!(a)) || (b)"));
+        assert_eq!(
+            expand_expr("a ==> b"),
+            expect("thrust_models::implies((a), (b))")
+        );
         // right-associative
         assert_eq!(
             expand_expr("a ==> b ==> c"),
-            expect("(!(a)) || ((!(b)) || (c))")
+            expect("thrust_models::implies((a), (thrust_models::implies((b), (c))))")
         );
         // lower precedence than `||` and `==`
         assert_eq!(
             expand_expr("a || b ==> c == d"),
-            expect("(!(a || b)) || (c == d)")
+            expect("thrust_models::implies((a || b), (c == d))")
         );
         // nested inside a closure argument
         assert_eq!(
             expand_expr("exists(|x| a ==> b)"),
-            expect("exists(|x| (!(a)) || (b))")
+            expect("exists(|x| thrust_models::implies((a), (b)))")
         );
     }
 
