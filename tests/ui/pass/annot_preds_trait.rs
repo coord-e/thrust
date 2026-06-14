@@ -25,15 +25,10 @@ trait Double {
 
 #[thrust_macros::context]
 impl Double for A {
-    // Write concrete definitions for predicates in `impl` blocks
+    // Write concrete definitions for predicates in `impl` blocks, in Rust syntax.
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
-        // (tuple_proj<Int>.0 self) is equivalent to self.x
-        // self.x * 2 == doubled.x is written as following:
-        "(=
-            (* (tuple_proj<Int>.0 self_) 2)
-            (tuple_proj<Int>.0 doubled)
-        )"; true
+        self.x * 2 == doubled.x
     }
 
     // Check if this method complies with annotations in

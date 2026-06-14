@@ -136,6 +136,40 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn define_as_predicate(&self, pred: chc::UserDefinedPred) {
+        let sig = self.ctx.fn_sig(self.local_def_id.to_def_id());
+        let arg_sorts = sig
+            .inputs()
+            .iter()
+            .map(|input_ty| self.type_builder.build(*input_ty).to_sort());
+
+        // A predicate marked `formula_fn` carries a Rust-expression body that has
+        // been translated into a `chc::Formula`; otherwise the body is a raw
+        // SMT-LIB2 string literal.
+        if self.is_annotated_as_formula_fn() {
+            // Name the parameters `v{i}` to match how `chc::TermVarIdx` renders the
+            // formula's variables (see `chc::UserDefinedPredBody::Formula`).
+            let arg_name_and_sorts = arg_sorts
+                .enumerate()
+                .map(|(i, sort)| (format!("v{i}"), sort))
+                .collect::<Vec<_>>();
+
+            let formula_fn = self
+                .ctx
+                .formula_fn_with_args(self.local_def_id, self.tcx.mk_args(&[]))
+                .expect("predicate formula function is not registered");
+            let formula = formula_fn
+                .formula()
+                .clone()
+                .map_var(|idx| chc::TermVarIdx::from(idx.index()));
+
+            self.ctx.system.borrow_mut().push_pred_define_formula(
+                pred,
+                chc::UserDefinedPredSig::from(arg_name_and_sorts),
+                formula,
+            );
+            return;
+        }
+
         // function's body
         use rustc_hir::{Block, Expr, ExprKind};
 
@@ -163,12 +197,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .name
                     .to_string()
             });
-
-        let sig = self.ctx.fn_sig(self.local_def_id.to_def_id());
-        let arg_sorts = sig
-            .inputs()
-            .iter()
-            .map(|input_ty| self.type_builder.build(*input_ty).to_sort());
 
         let arg_name_and_sorts = arg_names.into_iter().zip(arg_sorts).collect::<Vec<_>>();
 

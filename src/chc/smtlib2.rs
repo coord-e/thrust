@@ -89,11 +89,11 @@ impl<T> List<T> {
 }
 
 /// A wrapper around a [`chc::Term`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Term<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    // we need clause to select box/mut selector/constructor based on sort
-    clause: &'a chc::Clause,
+    // we need variable sorts to select box/mut selector/constructor
+    sorts: &'a dyn chc::TermSortEnv,
     inner: &'a chc::Term,
 }
 
@@ -106,49 +106,49 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
             chc::Term::Bool(b) => write!(f, "{}", b),
             chc::Term::String(s) => write!(f, "\"{}\"", s.escape_default()),
             chc::Term::Box(t) => {
-                let s = self.clause.term_sort(t);
+                let s = self.sorts.term_sort(t);
                 write!(
                     f,
                     "({} {})",
                     self.ctx.box_ctor(&s),
-                    Term::new(self.ctx, self.clause, t)
+                    Term::new(self.ctx, self.sorts, t)
                 )
             }
             chc::Term::Mut(t1, t2) => {
-                let s = self.clause.term_sort(t1);
+                let s = self.sorts.term_sort(t1);
                 write!(
                     f,
                     "({} {} {})",
                     self.ctx.mut_ctor(&s),
-                    Term::new(self.ctx, self.clause, t1),
-                    Term::new(self.ctx, self.clause, t2)
+                    Term::new(self.ctx, self.sorts, t1),
+                    Term::new(self.ctx, self.sorts, t2)
                 )
             }
             chc::Term::BoxCurrent(t) => {
-                let s = self.clause.term_sort(t).deref();
+                let s = self.sorts.term_sort(t).deref();
                 write!(
                     f,
                     "({} {})",
                     self.ctx.box_current(&s),
-                    Term::new(self.ctx, self.clause, t)
+                    Term::new(self.ctx, self.sorts, t)
                 )
             }
             chc::Term::MutCurrent(t) => {
-                let s = self.clause.term_sort(t).deref();
+                let s = self.sorts.term_sort(t).deref();
                 write!(
                     f,
                     "({} {})",
                     self.ctx.mut_current(&s),
-                    Term::new(self.ctx, self.clause, t)
+                    Term::new(self.ctx, self.sorts, t)
                 )
             }
             chc::Term::MutFinal(t) => {
-                let s = self.clause.term_sort(t).deref();
+                let s = self.sorts.term_sort(t).deref();
                 write!(
                     f,
                     "({} {})",
                     self.ctx.mut_final(&s),
-                    Term::new(self.ctx, self.clause, t)
+                    Term::new(self.ctx, self.sorts, t)
                 )
             }
             chc::Term::App(fn_, args) => {
@@ -156,11 +156,11 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     f,
                     "({} {})",
                     fn_,
-                    List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
+                    List::open(args.iter().map(|t| Term::new(self.ctx, self.sorts, t)))
                 )
             }
             chc::Term::Tuple(ts) => {
-                let ss: Vec<_> = ts.iter().map(|t| self.clause.term_sort(t)).collect();
+                let ss: Vec<_> = ts.iter().map(|t| self.sorts.term_sort(t)).collect();
                 if ss.is_empty() {
                     write!(f, "{}", self.ctx.tuple_ctor(&ss),)
                 } else {
@@ -168,17 +168,17 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                         f,
                         "({} {})",
                         self.ctx.tuple_ctor(&ss),
-                        List::open(ts.iter().map(|t| Term::new(self.ctx, self.clause, t)))
+                        List::open(ts.iter().map(|t| Term::new(self.ctx, self.sorts, t)))
                     )
                 }
             }
             chc::Term::TupleProj(t, i) => {
-                let s = self.clause.term_sort(t);
+                let s = self.sorts.term_sort(t);
                 write!(
                     f,
                     "({} {})",
                     self.ctx.tuple_proj(s.as_tuple().unwrap(), *i),
-                    Term::new(self.ctx, self.clause, t)
+                    Term::new(self.ctx, self.sorts, t)
                 )
             }
             chc::Term::DatatypeCtor(sort, sym, args) => {
@@ -189,17 +189,17 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                         f,
                         "({} {})",
                         self.ctx.datatype_ctor(sort, sym),
-                        List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
+                        List::open(args.iter().map(|t| Term::new(self.ctx, self.sorts, t)))
                     )
                 }
             }
             chc::Term::DatatypeDiscr(_s, t) => {
-                let s = self.clause.term_sort(t).into_datatype().unwrap();
+                let s = self.sorts.term_sort(t).into_datatype().unwrap();
                 write!(
                     f,
                     "({} {})",
                     self.ctx.datatype_discr(&s),
-                    Term::new(self.ctx, self.clause, t)
+                    Term::new(self.ctx, self.sorts, t)
                 )
             }
             chc::Term::FormulaExistentialVar(_, name) => write!(f, "{}", name),
@@ -208,23 +208,27 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
 }
 
 impl<'ctx, 'a> Term<'ctx, 'a> {
-    pub fn new(ctx: &'ctx FormatContext, clause: &'a chc::Clause, inner: &'a chc::Term) -> Self {
-        Self { ctx, clause, inner }
+    pub fn new(
+        ctx: &'ctx FormatContext,
+        sorts: &'a dyn chc::TermSortEnv,
+        inner: &'a chc::Term,
+    ) -> Self {
+        Self { ctx, sorts, inner }
     }
 }
 
 /// A wrapper around a [`chc::Atom`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Atom<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    clause: &'a chc::Clause,
+    sorts: &'a dyn chc::TermSortEnv,
     inner: &'a chc::Atom,
 }
 
 impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(guard) = &self.inner.guard {
-            let guard = Formula::new(self.ctx, self.clause, guard);
+            let guard = Formula::new(self.ctx, self.sorts, guard);
             write!(f, "(=> {} ", guard)?;
         }
         if self.inner.pred.is_negative() {
@@ -241,7 +245,7 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
                 self.inner
                     .args
                     .iter()
-                    .map(|t| Term::new(self.ctx, self.clause, t)),
+                    .map(|t| Term::new(self.ctx, self.sorts, t)),
             );
             write!(f, "({} {})", pred, args)?;
         }
@@ -256,16 +260,20 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
 }
 
 impl<'ctx, 'a> Atom<'ctx, 'a> {
-    pub fn new(ctx: &'ctx FormatContext, clause: &'a chc::Clause, inner: &'a chc::Atom) -> Self {
-        Self { ctx, clause, inner }
+    pub fn new(
+        ctx: &'ctx FormatContext,
+        sorts: &'a dyn chc::TermSortEnv,
+        inner: &'a chc::Atom,
+    ) -> Self {
+        Self { ctx, sorts, inner }
     }
 }
 
 /// A wrapper around a [`chc::Formula`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Formula<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    clause: &'a chc::Clause,
+    sorts: &'a dyn chc::TermSortEnv,
     inner: &'a chc::Formula,
 }
 
@@ -273,19 +281,19 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.inner {
             chc::Formula::Atom(atom) => {
-                let atom = Atom::new(self.ctx, self.clause, atom);
+                let atom = Atom::new(self.ctx, self.sorts, atom);
                 write!(f, "{}", atom)
             }
             chc::Formula::Not(fo) => {
-                let fo = Formula::new(self.ctx, self.clause, fo);
+                let fo = Formula::new(self.ctx, self.sorts, fo);
                 write!(f, "(not {})", fo)
             }
             chc::Formula::And(fs) => {
-                let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.clause, fo)));
+                let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.sorts, fo)));
                 write!(f, "(and {})", fs)
             }
             chc::Formula::Or(fs) => {
-                let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.clause, fo)));
+                let fs = List::open(fs.iter().map(|fo| Formula::new(self.ctx, self.sorts, fo)));
                 write!(f, "(or {})", fs)
             }
             chc::Formula::Exists(vars, fo) => {
@@ -293,7 +301,7 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
                     List::closed(vars.iter().map(|(v, s)| {
                         List::closed([v.to_string(), self.ctx.fmt_sort(s).to_string()])
                     }));
-                let fo = Formula::new(self.ctx, self.clause, fo);
+                let fo = Formula::new(self.ctx, self.sorts, fo);
                 write!(f, "(exists {vars} {fo})")
             }
         }
@@ -301,16 +309,20 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
 }
 
 impl<'ctx, 'a> Formula<'ctx, 'a> {
-    pub fn new(ctx: &'ctx FormatContext, clause: &'a chc::Clause, inner: &'a chc::Formula) -> Self {
-        Self { ctx, clause, inner }
+    pub fn new(
+        ctx: &'ctx FormatContext,
+        sorts: &'a dyn chc::TermSortEnv,
+        inner: &'a chc::Formula,
+    ) -> Self {
+        Self { ctx, sorts, inner }
     }
 }
 
 /// A wrapper around a [`chc::Body`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Body<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    clause: &'a chc::Clause,
+    sorts: &'a dyn chc::TermSortEnv,
     inner: &'a chc::Body,
 }
 
@@ -320,16 +332,20 @@ impl<'ctx, 'a> std::fmt::Display for Body<'ctx, 'a> {
             self.inner
                 .atoms
                 .iter()
-                .map(|a| Atom::new(self.ctx, self.clause, a)),
+                .map(|a| Atom::new(self.ctx, self.sorts, a)),
         );
-        let formula = Formula::new(self.ctx, self.clause, &self.inner.formula);
+        let formula = Formula::new(self.ctx, self.sorts, &self.inner.formula);
         write!(f, "(and {atoms} {formula})")
     }
 }
 
 impl<'ctx, 'a> Body<'ctx, 'a> {
-    pub fn new(ctx: &'ctx FormatContext, clause: &'a chc::Clause, inner: &'a chc::Body) -> Self {
-        Self { ctx, clause, inner }
+    pub fn new(
+        ctx: &'ctx FormatContext,
+        sorts: &'a dyn chc::TermSortEnv,
+        inner: &'a chc::Body,
+    ) -> Self {
+        Self { ctx, sorts, inner }
     }
 }
 
@@ -577,10 +593,27 @@ impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
         );
         write!(
             f,
-            "(define-fun {name} {params} Bool {body})",
+            "(define-fun {name} {params} Bool ",
             name = self.inner.symbol,
-            body = &self.inner.body,
-        )
+        )?;
+        match &self.inner.body {
+            chc::UserDefinedPredBody::Raw(body) => write!(f, "{body}")?,
+            chc::UserDefinedPredBody::Formula(formula) => {
+                // Term display resolves variable sorts (for box/mut/tuple
+                // constructors) through a `TermSortEnv`: here, the predicate's
+                // parameter sorts in order. The formula's `Var(v{i})` and the
+                // `(v{i} Sort)` parameter list above both render via `TermVarIdx`,
+                // so they line up by index.
+                let sorts: rustc_index::IndexVec<chc::TermVarIdx, chc::Sort> = self
+                    .inner
+                    .sig
+                    .iter()
+                    .map(|(_, sort)| sort.clone())
+                    .collect();
+                write!(f, "{}", Formula::new(self.ctx, &sorts, formula))?;
+            }
+        }
+        write!(f, ")")
     }
 }
 
