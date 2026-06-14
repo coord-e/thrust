@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Mutability};
@@ -6,7 +8,7 @@ use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
 use super::basic_block::BasicBlockType;
-use crate::analyze::DefIdCache;
+use crate::analyze::{DefIdCache, TypeParam, TypeParamMap};
 use crate::chc;
 use crate::refine;
 use crate::rty;
@@ -71,17 +73,28 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
+    pub owner_fn_id: DefId,
     typing_env: mir_ty::TypingEnv<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
     /// These indices may differ because we skip lifetime parameters and they always need to be
     /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
+    type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam<'tcx>, rty::FunctionType>>>,
+    system: Rc<RefCell<chc::System>>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
-    pub fn new(tcx: mir_ty::TyCtxt<'tcx>, def_ids: DefIdCache<'tcx>, def_id: DefId) -> Self {
-        let generics = tcx.generics_of(def_id);
+    pub fn new(
+        tcx: mir_ty::TyCtxt<'tcx>,
+        def_ids: DefIdCache<'tcx>,
+        owner_fn_id: DefId,
+        type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+        closure_type_params: Rc<RefCell<HashMap<TypeParam<'tcx>, rty::FunctionType>>>,
+        system: Rc<RefCell<chc::System>>,
+    ) -> Self {
+        let generics = tcx.generics_of(owner_fn_id);
         let mut param_idx_mapping: HashMap<u32, rty::TypeParamIdx> = Default::default();
         for i in 0..generics.count() {
             let generic_param = generics.param_at(i, tcx);
@@ -93,21 +106,67 @@ impl<'tcx> TypeBuilder<'tcx> {
                 mir_ty::GenericParamDefKind::Const { .. } => {}
             }
         }
-        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, def_id);
+
+        tracing::debug!("TypeBuilder is created for {owner_fn_id:?}.");
+        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, owner_fn_id);
         Self {
             tcx,
             def_ids,
+            owner_fn_id,
             typing_env,
             param_idx_mapping,
+            type_params,
+            closure_type_params,
+            system,
         }
     }
 
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
-        let index = *self
+        let param_local_idx = *self
             .param_idx_mapping
             .get(&ty.index)
             .expect("unknown type param idx");
-        rty::ParamType::new(index).into()
+
+        let mut type_params = self.type_params.borrow_mut();
+        let forall_sort_idx = type_params
+            .entry(TypeParam::GenericType(self.owner_fn_id, ty.index))
+            .or_insert_with(|| {
+                let idx = self.system.borrow_mut().new_forall_sort();
+                tracing::debug!(
+                    "issue the new ForallSortIdx {} for ParamTy {:?} at {:?}.",
+                    idx,
+                    ty,
+                    self.owner_fn_id
+                );
+                idx
+            });
+        rty::ParamType::new(param_local_idx, *forall_sort_idx).into()
+    }
+
+    fn translate_alias_type(&self, ty: &mir_ty::AliasTy<'tcx>) -> rty::Type<rty::Closed> {
+        let mut type_params = self.type_params.borrow_mut();
+        let index = type_params
+            .entry(TypeParam::AssocType(ty.def_id, ty.args))
+            .or_insert_with(|| {
+                let idx = self.system.borrow_mut().new_forall_sort();
+                tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?}.", idx, ty,);
+                idx
+            });
+
+        let args: Vec<rty::Type<rty::Closed>> = ty.args.types().map(|t| self.build(t)).collect();
+
+        rty::AliasType::new(*index, args).into()
+    }
+
+    pub fn register_closure_type_param(
+        &self,
+        type_param: TypeParam<'tcx>,
+        fun_type: rty::FunctionType,
+    ) {
+        tracing::info!(?type_param, ?fun_type, "register_closure_type_param");
+        self.closure_type_params
+            .borrow_mut()
+            .insert(type_param, fun_type);
     }
 
     /// Replaces {closure} types with thrust_models::Closure<{closure}>.
@@ -152,19 +211,36 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     fn resolve_model_ty(&self, orig_ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        tracing::debug!("attempting to resolve the type {:#?}.", orig_ty);
         let ty = self.replace_closure_model(orig_ty);
 
         let Some(model_ty_def_id) = self.def_ids.model_ty() else {
             return ty;
         };
         let args = self.tcx.mk_args(&[ty.into()]);
+        tracing::debug!("generic args are {:#?}.", args);
         let projection_ty = mir_ty::Ty::new_projection(self.tcx, model_ty_def_id, args);
         if let Ok(normalized_ty) = self
             .tcx
             .try_normalize_erasing_regions(self.typing_env, projection_ty)
         {
-            return normalized_ty;
+            tracing::debug!(
+                "the type {:#?} is normalized as the type {:#?}.",
+                orig_ty,
+                normalized_ty
+            );
+            let contains_model_ty_alias = normalized_ty.walk().any(|arg| {
+                if let mir_ty::GenericArgKind::Type(t) = arg.kind() {
+                    matches!(t.kind(), mir_ty::TyKind::Alias(_, alias_ty) if alias_ty.def_id == model_ty_def_id)
+                } else {
+                    false
+                }
+            });
+            if !contains_model_ty_alias {
+                return normalized_ty;
+            }
         }
+        tracing::debug!("the type {:#?} is replaced as the {:#?}.", orig_ty, ty);
         ty
     }
 
@@ -212,6 +288,10 @@ impl<'tcx> TypeBuilder<'tcx> {
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
             }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                rty::PointerType::mut_to(elem_ty).into()
+            }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
                 let elems = ts
@@ -237,6 +317,23 @@ impl<'tcx> TypeBuilder<'tcx> {
                 if let Some(model_ty) = self.model_adt(def, params) {
                     return model_ty;
                 }
+                // Treat Box and Vec as opaque types to avoid traversing internal structure
+                if Some(def.did()) == self.def_ids.box_() {
+                    let elem_ty = self.build(params.type_at(0));
+                    return rty::PointerType::own(elem_ty).into();
+                }
+                if Some(def.did()) == self.def_ids.vec() {
+                    let elem_ty = self.build(params.type_at(0));
+                    // Vec is represented as a tuple of (Array<Int, T>, Int) in the model
+                    let idx_ty = rty::Type::int();
+                    let array_ty = rty::ArrayType::new(idx_ty, elem_ty.clone());
+                    let len_ty = rty::Type::int();
+                    return rty::TupleType::new(vec![
+                        rty::PointerType::own(rty::Type::Array(array_ty)).into(),
+                        rty::PointerType::own(len_ty).into(),
+                    ])
+                    .into();
+                }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx, def.did());
                     let args: IndexVec<_, _> = params
@@ -257,6 +354,19 @@ impl<'tcx> TypeBuilder<'tcx> {
                 } else {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
+            }
+            mir_ty::TyKind::Alias(mir_ty::AliasTyKind::Projection, ty) => {
+                if let Some(model_ty_def_id) = self.def_ids.model_ty() {
+                    let arg_ty = ty.args.type_at(0);
+
+                    if ty.def_id == model_ty_def_id
+                        && matches!(arg_ty.kind(), mir_ty::TyKind::Param(_))
+                    {
+                        return self.build(arg_ty);
+                    }
+                }
+
+                self.translate_alias_type(ty)
             }
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
@@ -398,6 +508,10 @@ where
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
             }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                rty::PointerType::mut_to(elem_ty).into()
+            }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
                 let elems = ts
@@ -417,6 +531,23 @@ where
             mir_ty::TyKind::Adt(def, params) => {
                 if let Some(model_ty) = self.model_adt(def, params) {
                     return model_ty;
+                }
+                // Treat Box and Vec as opaque types to avoid traversing internal structure
+                if Some(def.did()) == self.inner.def_ids.box_() {
+                    let elem_ty = self.build(params.type_at(0));
+                    return rty::PointerType::own(elem_ty).into();
+                }
+                if Some(def.did()) == self.inner.def_ids.vec() {
+                    let elem_ty = self.build(params.type_at(0));
+                    // Vec is represented as a tuple of (Array<Int, T>, Int) in the model
+                    let idx_ty = rty::Type::int();
+                    let array_ty = rty::ArrayType::new(idx_ty, elem_ty.clone());
+                    let len_ty = rty::Type::int();
+                    return rty::TupleType::new(vec![
+                        rty::PointerType::own(rty::Type::Array(array_ty)).into(),
+                        rty::PointerType::own(len_ty).into(),
+                    ])
+                    .into();
                 }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.inner.tcx, def.did());

@@ -43,6 +43,7 @@ fn unbox_pred(pred: Pred) -> Pred {
         Pred::Var(pred) => Pred::Var(pred),
         Pred::Matcher(pred) => unbox_matcher_pred(pred),
         Pred::UserDefined(pred) => Pred::UserDefined(pred),
+        Pred::ForallPred(pred) => Pred::ForallPred(pred),
     }
 }
 
@@ -72,6 +73,7 @@ fn unbox_sort(sort: Sort) -> Sort {
         Sort::Tuple(sorts) => Sort::Tuple(sorts.into_iter().map(unbox_sort).collect()),
         Sort::Array(s1, s2) => Sort::Array(Box::new(unbox_sort(*s1)), Box::new(unbox_sort(*s2))),
         Sort::Datatype(sort) => Sort::Datatype(unbox_datatype_sort(sort)),
+        Sort::Forall(i) => Sort::Forall(i),
     }
 }
 
@@ -162,6 +164,14 @@ fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> Use
     UserDefinedPredDef { symbol, sig, body }
 }
 
+fn unbox_forall_pred_var_def(pred: ForallPred) -> ForallPred {
+    let args = pred.type_parameters.into_iter().map(unbox_sort).collect();
+    ForallPred {
+        type_parameters: args,
+        ..pred
+    }
+}
+
 /// Remove all `Box` sorts and `Box`/`BoxCurrent` terms from the system.
 ///
 /// The box values in Thrust represent an owned pointer, but are logically equivalent to the inner type.
@@ -174,6 +184,9 @@ pub fn unbox(system: System) -> System {
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        forall_sorts,
+        num_forall_sort_idx,
+        forall_pred_vars,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
@@ -182,11 +195,18 @@ pub fn unbox(system: System) -> System {
         .into_iter()
         .map(unbox_user_defined_pred_def)
         .collect();
+    let forall_pred_vars = forall_pred_vars
+        .into_iter()
+        .map(unbox_forall_pred_var_def)
+        .collect();
     System {
         raw_commands,
         datatypes,
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        forall_sorts,
+        num_forall_sort_idx,
+        forall_pred_vars,
     }
 }

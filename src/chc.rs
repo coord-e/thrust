@@ -1,5 +1,8 @@
 //! A multi-sorted CHC system with tuples.
 
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
+
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
@@ -84,6 +87,45 @@ impl DatatypeSort {
     }
 }
 
+rustc_index::newtype_index! {
+    /// An index representing sort-level variable.
+    ///
+    /// We manage sort-level variables using indices that are unique in the whole CHC system.
+    /// [`System`] contains `Vec<ForallSortIdx>` that manages the indices of the variables.
+    #[orderable]
+    #[debug_format = "a{}"]
+    pub struct ForallSortIdx { }
+}
+
+impl Default for ForallSortIdx {
+    fn default() -> Self {
+        0_usize.into()
+    }
+}
+
+impl std::fmt::Display for ForallSortIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "a{}", self.index())
+    }
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ForallSortIdx
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator
+            .as_string(self)
+            .annotate(ForallSortIdx::color_spec())
+    }
+}
+
+impl ForallSortIdx {
+    fn color_spec() -> termcolor::ColorSpec {
+        termcolor::ColorSpec::new()
+    }
+}
+
 /// A sort is the type of a logical term.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
@@ -97,6 +139,7 @@ pub enum Sort {
     Tuple(Vec<Sort>),
     Array(Box<Sort>, Box<Sort>),
     Datatype(DatatypeSort),
+    Forall(ForallSortIdx),
 }
 
 impl From<DatatypeSort> for Sort {
@@ -154,6 +197,7 @@ where
                 }
             }
             Sort::Datatype(sort) => sort.pretty(allocator),
+            Sort::Forall(idx) => idx.pretty(allocator),
         }
     }
 }
@@ -180,7 +224,12 @@ impl Sort {
     fn walk_impl<'a, 'b>(&'a self, mut f: Box<dyn FnMut(&'a Sort) + 'b>) {
         f(self);
         match self {
-            Sort::Null | Sort::Int | Sort::Bool | Sort::String | Sort::Param(_) => {}
+            Sort::Null
+            | Sort::Int
+            | Sort::Bool
+            | Sort::String
+            | Sort::Param(_)
+            | Sort::Forall(_) => {}
             Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
             Sort::Tuple(ss) => {
                 for s in ss {
@@ -259,6 +308,10 @@ impl Sort {
 
     pub fn datatype(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
         Sort::Datatype(DatatypeSort { symbol, args })
+    }
+
+    pub fn forall(index: ForallSortIdx) -> Self {
+        Sort::Forall(index)
     }
 
     pub fn into_datatype(self) -> Option<DatatypeSort> {
@@ -994,6 +1047,49 @@ impl UserDefinedPred {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForallPred {
+    inner: String,
+    type_parameters: Vec<Sort>,
+}
+
+impl std::fmt::Display for ForallPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ForallPred
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let args = allocator.intersperse(
+            self.type_parameters.iter().map(|a| a.pretty(allocator)),
+            allocator.text(", "),
+        );
+        allocator
+            .text("forall_pred")
+            .append(
+                allocator
+                    .as_string(&self.inner)
+                    .append(args.angles())
+                    .angles(),
+            )
+            .group()
+    }
+}
+
+impl ForallPred {
+    pub fn new(inner: String, args: Vec<Sort>) -> Self {
+        Self {
+            inner,
+            type_parameters: args,
+        }
+    }
+}
+
 /// A predicate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pred {
@@ -1001,6 +1097,7 @@ pub enum Pred {
     Var(PredVarId),
     Matcher(MatcherPred),
     UserDefined(UserDefinedPred),
+    ForallPred(ForallPred),
 }
 
 impl std::fmt::Display for Pred {
@@ -1010,6 +1107,7 @@ impl std::fmt::Display for Pred {
             Pred::Var(p) => p.fmt(f),
             Pred::Matcher(p) => p.fmt(f),
             Pred::UserDefined(p) => p.fmt(f),
+            Pred::ForallPred(p) => p.fmt(f),
         }
     }
 }
@@ -1025,6 +1123,7 @@ where
             Pred::Var(p) => p.pretty(allocator),
             Pred::Matcher(p) => p.pretty(allocator),
             Pred::UserDefined(p) => p.pretty(allocator),
+            Pred::ForallPred(p) => p.pretty(allocator),
         }
     }
 }
@@ -1053,6 +1152,12 @@ impl From<UserDefinedPred> for Pred {
     }
 }
 
+impl From<ForallPred> for Pred {
+    fn from(p: ForallPred) -> Self {
+        Pred::ForallPred(p)
+    }
+}
+
 impl Pred {
     pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
@@ -1060,6 +1165,7 @@ impl Pred {
             Pred::Var(p) => p.to_string().into(),
             Pred::Matcher(p) => p.name().into(),
             Pred::UserDefined(p) => p.to_string().into(),
+            Pred::ForallPred(p) => p.to_string().into(),
         }
     }
 
@@ -1069,6 +1175,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1078,6 +1185,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1087,6 +1195,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1096,6 +1205,20 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
+        }
+    }
+}
+
+impl TryFrom<Pred> for ForallPred {
+    type Error = String;
+    fn try_from(value: Pred) -> Result<Self, Self::Error> {
+        if let Pred::ForallPred(forall_pred) = value {
+            Ok(forall_pred)
+        } else {
+            Err(format!(
+                "expected the variant `Pred::ForallPred`, got {value:#?}."
+            ))
         }
     }
 }
@@ -1775,6 +1898,33 @@ pub struct UserDefinedPredDef {
     body: String,
 }
 
+pub fn compute_transitive_closure<T>(direct_deps: &HashMap<T, HashSet<T>>) -> HashMap<T, HashSet<T>>
+where
+    T: Clone + Eq + Hash,
+{
+    let mut closure = HashMap::new();
+
+    for start_id in direct_deps.keys() {
+        let mut visited = HashSet::new();
+        let mut stack = vec![start_id.clone()];
+
+        // Search by DFS
+        while let Some(current_id) = stack.pop() {
+            if let Some(deps) = direct_deps.get(&current_id) {
+                for next_id in deps {
+                    if visited.insert(next_id.clone()) {
+                        stack.push(next_id.clone());
+                    }
+                }
+            }
+        }
+
+        closure.insert(start_id.clone(), visited);
+    }
+
+    closure
+}
+
 /// A CHC system.
 #[derive(Debug, Clone, Default)]
 pub struct System {
@@ -1783,11 +1933,25 @@ pub struct System {
     pub user_defined_pred_defs: Vec<UserDefinedPredDef>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
+    pub forall_sorts: Vec<ForallSortIdx>,
+    pub num_forall_sort_idx: ForallSortIdx,
+    forall_pred_vars: HashSet<ForallPred>,
 }
 
 impl System {
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
+    }
+
+    pub fn register_forall_pred(&mut self, pred: ForallPred) {
+        self.forall_pred_vars.insert(pred);
+    }
+
+    pub fn new_forall_sort(&mut self) -> ForallSortIdx {
+        let new_idx = self.num_forall_sort_idx;
+        self.num_forall_sort_idx += 1;
+        self.forall_sorts.push(new_idx);
+        new_idx
     }
 
     pub fn push_raw_command(&mut self, raw_command: RawCommand) {
@@ -1810,6 +1974,70 @@ impl System {
         }
         tracing::debug!(clause = %clause.display(), id = ?self.clauses.next_index(), "push_clause");
         Some(self.clauses.push(clause))
+    }
+
+    fn compute_forall_dependency(clause: &Clause) -> HashSet<ForallPred> {
+        clause
+            .body
+            .iter_atoms()
+            .filter_map(|atom| atom.pred.clone().try_into().ok())
+            .collect()
+    }
+
+    fn compute_exists_dependency(clause: &Clause) -> HashSet<PredVarId> {
+        clause
+            .body
+            .iter_atoms()
+            .filter_map(|atom| match atom.pred {
+                Pred::Var(id) => Some(id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn compute_dependency(&self) -> HashMap<PredVarId, HashSet<ForallPred>> {
+        let mut exists_deps: HashMap<PredVarId, HashSet<PredVarId>> = HashMap::new();
+        let mut forall_deps: HashMap<PredVarId, HashSet<ForallPred>> = HashMap::new();
+
+        for (clause_idx, clause) in self.clauses.iter_enumerated() {
+            let Pred::Var(head_id) = clause.head.pred else {
+                continue;
+            };
+
+            let exists = Self::compute_exists_dependency(clause);
+            let forall = Self::compute_forall_dependency(clause);
+
+            tracing::debug!(
+                "exists deps for {:?} at {:?}: {:?}",
+                head_id,
+                clause_idx,
+                exists
+            );
+
+            exists_deps.entry(head_id).or_default().extend(exists);
+            forall_deps.entry(head_id).or_default().extend(forall);
+        }
+        tracing::debug!("direct forall dependencies: {:#?}", forall_deps);
+        tracing::debug!("direct exists dependencies: {:#?}", exists_deps);
+
+        let transitive_exists_deps = compute_transitive_closure(&exists_deps);
+        tracing::debug!("transitive exists dependencies: {:#?}", exists_deps);
+
+        let mut propagated_forall_deps = HashMap::new();
+
+        for (pred, reachable_preds) in transitive_exists_deps {
+            let mut deps = forall_deps.get(&pred).cloned().unwrap_or_default();
+
+            for reachable in reachable_preds {
+                if let Some(foralls) = forall_deps.get(&reachable) {
+                    deps.extend(foralls.iter().cloned());
+                }
+            }
+
+            propagated_forall_deps.insert(pred, deps);
+        }
+
+        propagated_forall_deps
     }
 
     pub fn smtlib2(&self) -> smtlib2::System<'_> {

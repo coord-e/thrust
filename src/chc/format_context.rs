@@ -87,6 +87,7 @@ impl<'a> std::fmt::Display for SortSymbol<'a> {
                 write!(f, "Array{}", SortSymbols::new(&[*s1.clone(), *s2.clone()]))
             }
             chc::Sort::Datatype(s) => write!(f, "{}{}", s.symbol, SortSymbols::new(&s.args)),
+            chc::Sort::Forall(i) => write!(f, "{}", i),
         }
     }
 }
@@ -345,6 +346,11 @@ impl FormatContext {
 
     pub fn matcher_pred_def(&self, sym: &chc::DatatypeSymbol) -> impl std::fmt::Display {
         format!("matcher_pred<{}>", self.fmt_datatype_symbol(sym))
+    }
+
+    pub fn forall_pred(&self, p: &chc::ForallPred) -> impl std::fmt::Display {
+        let ss = SortSymbols::new(&p.type_parameters);
+        format!("{}{}", p.inner, ss)
     }
 
     fn fmt_sort_impl(&self, sort: &chc::Sort) -> Box<dyn std::fmt::Display> {

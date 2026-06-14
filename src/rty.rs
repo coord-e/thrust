@@ -43,7 +43,7 @@ use pretty::{termcolor, Pretty};
 use rustc_abi::VariantIdx;
 use rustc_index::IndexVec;
 
-use crate::chc;
+use crate::chc::{self, ForallSortIdx};
 
 mod template;
 pub use template::{Template, TemplateBuilder};
@@ -803,7 +803,8 @@ impl<T> EnumType<T> {
 /// A type parameter.
 #[derive(Debug, Clone)]
 pub struct ParamType {
-    pub idx: TypeParamIdx,
+    type_param_idx: TypeParamIdx,
+    forall_sort_idx: ForallSortIdx,
 }
 
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ParamType
@@ -811,21 +812,80 @@ where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        self.idx.pretty(allocator)
+        self.type_param_idx.pretty(allocator)
     }
 }
 
 impl ParamType {
-    pub fn new(idx: TypeParamIdx) -> Self {
-        ParamType { idx }
+    pub fn new(type_param_idx: TypeParamIdx, forall_sort_idx: ForallSortIdx) -> Self {
+        ParamType {
+            type_param_idx,
+            forall_sort_idx,
+        }
     }
 
-    pub fn index(&self) -> TypeParamIdx {
-        self.idx
+    pub fn type_param_index(&self) -> TypeParamIdx {
+        self.type_param_idx
+    }
+
+    pub fn forall_sort_index(&self) -> ForallSortIdx {
+        self.forall_sort_idx
     }
 
     pub fn into_closed_ty(self) -> Type<Closed> {
         Type::Param(self)
+    }
+}
+
+/// A projection type representing an unresolved associated type.
+///
+/// This preserves the structural identity of projections like `<T as Iterator>::Item`
+/// or `<Map<I, F> as Iterator>::Item`, keeping them distinct even before normalization.
+///
+/// The `args` field stores the generic arguments (Self type + other args), which can
+/// recursively contain other types including params, ADTs, and other projections.
+/// For example, `<Map<I, F> as Iterator>::Item` would have `args = [Map<I, F>]`.
+#[derive(Debug, Clone)]
+pub struct AliasType {
+    forall_sort_idx: ForallSortIdx,
+    args: Vec<Type<Closed>>,
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &AliasType
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let sort = self.forall_sort_idx.pretty(allocator);
+        if self.args.is_empty() {
+            sort
+        } else {
+            let args = allocator.intersperse(
+                self.args.iter().map(|ty| ty.pretty(allocator)),
+                allocator.text(",").append(allocator.line()),
+            );
+            sort.append(allocator.line())
+                .append(args.nest(2).angles())
+                .group()
+        }
+    }
+}
+
+impl AliasType {
+    pub fn new(forall_sort_idx: ForallSortIdx, args: Vec<Type<Closed>>) -> Self {
+        AliasType {
+            forall_sort_idx,
+            args,
+        }
+    }
+
+    pub fn forall_sort_index(&self) -> ForallSortIdx {
+        self.forall_sort_idx
+    }
+
+    pub fn args(&self) -> &[Type<Closed>] {
+        &self.args
     }
 }
 
@@ -920,6 +980,7 @@ pub enum Type<T> {
     String,
     Never,
     Param(ParamType),
+    Alias(AliasType),
     Pointer(PointerType<T>),
     Function(FunctionType),
     Tuple(TupleType<T>),
@@ -930,6 +991,12 @@ pub enum Type<T> {
 impl<T> From<ParamType> for Type<T> {
     fn from(t: ParamType) -> Type<T> {
         Type::Param(t)
+    }
+}
+
+impl<T> From<AliasType> for Type<T> {
+    fn from(t: AliasType) -> Type<T> {
+        Type::Alias(t)
     }
 }
 
@@ -976,6 +1043,7 @@ where
             Type::String => allocator.text("string"),
             Type::Never => allocator.text("!"),
             Type::Param(ty) => ty.pretty(allocator),
+            Type::Alias(ty) => ty.pretty(allocator),
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
             Type::Tuple(ty) => ty.pretty(allocator),
@@ -1108,7 +1176,8 @@ impl<T> Type<T> {
             //       currently String sort seems not available in HORN logic of Z3
             Type::String => chc::Sort::null(),
             Type::Never => chc::Sort::null(),
-            Type::Param(ty) => chc::Sort::param(ty.index().into()),
+            Type::Param(ty) => chc::Sort::forall(ty.forall_sort_index()),
+            Type::Alias(ty) => chc::Sort::Forall(ty.forall_sort_index()),
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.ty.to_sort();
 
@@ -1146,6 +1215,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.subst_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.subst_var(f)),
@@ -1164,6 +1234,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.map_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.map_var(f)),
@@ -1183,6 +1254,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.strip_refinement()),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
@@ -1194,7 +1266,12 @@ impl<T> Type<T> {
     pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
         match self {
             Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
-            Type::Param(ty) => std::iter::once(ty.index()).collect(),
+            Type::Param(ty) => std::iter::once(ty.type_param_index()).collect(),
+            Type::Alias(ty) => ty
+                .args()
+                .iter()
+                .flat_map(|ty| ty.free_ty_params())
+                .collect(),
             Type::Pointer(ty) => ty.free_ty_params(),
             Type::Function(ty) => ty.free_ty_params(),
             Type::Tuple(ty) => ty.free_ty_params(),
@@ -1805,7 +1882,7 @@ impl<FV> RefinedType<FV> {
         match &mut self.ty {
             Type::Int | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
-                if let Some(rty) = subst.get(ty.index()) {
+                if let Some(rty) = subst.get(ty.type_param_index()) {
                     let RefinedType {
                         ty: replacement_ty,
                         refinement,
@@ -1813,6 +1890,19 @@ impl<FV> RefinedType<FV> {
                     self.refinement.push_conj(refinement);
                     self.ty = replacement_ty;
                 }
+            }
+            Type::Alias(alias) => {
+                let subst_closed = subst.clone().strip_refinement();
+                let new_args: Vec<Type<Closed>> = alias
+                    .args()
+                    .iter()
+                    .map(|arg| {
+                        let mut arg_rty = RefinedType::unrefined(arg.clone());
+                        arg_rty.subst_ty_params(&subst_closed);
+                        arg_rty.ty
+                    })
+                    .collect();
+                self.ty = Type::Alias(AliasType::new(alias.forall_sort_index(), new_args));
             }
             Type::Pointer(ty) => ty.subst_ty_params(subst),
             Type::Function(ty) => {
@@ -1841,15 +1931,15 @@ impl<FV> RefinedType<FV> {
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Never, Type::Never) => Default::default(),
-            (Type::Param(pty), ty) if !ty.free_ty_params().contains(&pty.index()) => {
+            (Type::Param(pty), ty) if !ty.free_ty_params().contains(&pty.type_param_index()) => {
                 TypeParamSubst::singleton(
-                    pty.index(),
+                    pty.type_param_index(),
                     RefinedType::new(ty.clone(), other.refinement.clone()),
                 )
             }
-            (ty, Type::Param(pty)) if !ty.free_ty_params().contains(&pty.index()) => {
+            (ty, Type::Param(pty)) if !ty.free_ty_params().contains(&pty.type_param_index()) => {
                 TypeParamSubst::singleton(
-                    pty.index(),
+                    pty.type_param_index(),
                     RefinedType::new(ty.clone(), self.refinement.clone()),
                 )
             }
@@ -1861,6 +1951,24 @@ impl<FV> RefinedType<FV> {
             (Type::Tuple(ty1), Type::Tuple(ty2)) => ty1.unify_ty_params(ty2),
             (Type::Array(ty1), Type::Array(ty2)) => ty1.unify_ty_params(ty2),
             (Type::Enum(ty1), Type::Enum(ty2)) => ty1.unify_ty_params(ty2),
+            (Type::Alias(a1), Type::Alias(a2))
+                if a1.forall_sort_index() == a2.forall_sort_index() =>
+            {
+                assert_eq!(a1.args().len(), a2.args().len());
+                let args1: Vec<RefinedType<FV>> = a1
+                    .args()
+                    .iter()
+                    .cloned()
+                    .map(|ty| RefinedType::unrefined(ty).vacuous())
+                    .collect();
+                let args2: Vec<RefinedType<FV>> = a2
+                    .args()
+                    .iter()
+                    .cloned()
+                    .map(|ty| RefinedType::unrefined(ty).vacuous())
+                    .collect();
+                unify_tys_params(args1, args2)
+            }
             (t1, t2) => panic!("unify_ty_params: mismatched types t1={:?}, t2={:?}", t1, t2),
         }
     }
@@ -1875,7 +1983,11 @@ impl RefinedType<Closed> {
 /// Substitutes type parameters in a sort.
 fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
     match sort {
-        chc::Sort::Null | chc::Sort::Int | chc::Sort::Bool | chc::Sort::String => {}
+        chc::Sort::Null
+        | chc::Sort::Int
+        | chc::Sort::Bool
+        | chc::Sort::String
+        | chc::Sort::Forall(_) => {}
         chc::Sort::Param(idx) => {
             let type_param_idx = TypeParamIdx::from_usize(*idx);
             if let Some(rty) = subst.get(type_param_idx) {
