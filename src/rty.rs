@@ -1093,8 +1093,15 @@ impl<T> Type<T> {
         }
     }
 
-    /// Returns `true` if this type is, or transitively contains through
-    /// aggregate (tuple/struct) and pointer projections, a mutable reference.
+    /// Returns `true` if a `&mut` can be reached from a place of this type by
+    /// following tuple/struct field and pointer projections, so that a sub-place
+    /// may be mut-borrowed even when the enclosing local is not marked mutable.
+    /// Such a local must be given flow-decomposed bindings.
+    ///
+    /// This intentionally does not descend into enums: reaching an enum's `&mut`
+    /// field requires a pattern match that moves the reference out, which already
+    /// marks the enum local mutable (see `mut_locals`' `Move` rule), routing it
+    /// through the flow-decomposing bind path regardless of this check.
     pub fn contains_mut(&self) -> bool {
         match self {
             Type::Pointer(ty) => ty.is_mut() || ty.elem.ty.contains_mut(),
