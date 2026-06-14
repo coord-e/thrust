@@ -512,6 +512,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         assert!(require_annot.is_none() || param_annots.is_empty());
         assert!(ensure_annot.is_none() || ret_annot.is_none());
 
+        let refinement_annots = self.ctx.extract_refinement_annots(
+            self.local_def_id,
+            self.generic_args,
+            self.owner_fn_id,
+        );
+
         let trait_item_ty = self.trait_item_ty();
         let is_fully_annotated = self.is_fully_annotated();
 
@@ -536,6 +542,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         if let Some(ret_rty) = ret_annot {
             builder.ret_rty(ret_rty);
+        }
+        for (position, refinement) in refinement_annots {
+            builder.refinement_at(&position, refinement);
         }
 
         if is_fully_annotated {
@@ -675,6 +684,37 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     }
                 }
                 self.super_operand(operand, location);
+            }
+
+            fn visit_terminator(
+                &mut self,
+                terminator: &mir::Terminator<'tcx>,
+                location: mir::Location,
+            ) {
+                // calling an FnMut closure via FnOnce::call_once resolves to the closure
+                // function taking &mut {closure}, so RustCallVisitor mutably borrows the
+                // closure argument; see analyze::basic_block::visitor
+                if let mir::TerminatorKind::Call { func, args, .. } = &terminator.kind {
+                    if let Some((def_id, generic_args)) = func.const_fn_def() {
+                        let trait_did = self
+                            .tcx
+                            .opt_associated_item(def_id)
+                            .and_then(|item| item.trait_container(self.tcx));
+                        if trait_did.is_some() && trait_did == self.tcx.lang_items().fn_once_trait()
+                        {
+                            if let mir_ty::TyKind::Closure(_, closure_args) =
+                                generic_args.type_at(0).kind()
+                            {
+                                if closure_args.as_closure().kind() == mir_ty::ClosureKind::FnMut {
+                                    if let Some(place) = args[0].node.place() {
+                                        self.locals.insert(place.local);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.super_terminator(terminator, location);
             }
 
             fn visit_assign(

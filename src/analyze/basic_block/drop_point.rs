@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
@@ -10,6 +10,10 @@ pub struct DropPoints {
     pub before_statements: Vec<Local>,
     after_statements: Vec<DenseBitSet<Local>>,
     after_terminator: HashMap<BasicBlock, DenseBitSet<Local>>,
+    /// Locals dropped after the terminator regardless of the target, in
+    /// addition to the liveness-derived sets above. A set, since the same local
+    /// must not be dropped twice; ordered by index to keep drops deterministic.
+    after_terminator_extra: BTreeSet<Local>,
 }
 
 impl DropPoints {
@@ -25,11 +29,14 @@ impl DropPoints {
             .iter()
             .position(|s| s.contains(local))
             .or_else(|| {
-                self.after_terminator
-                    .values()
-                    .any(|s| s.contains(local))
+                self.is_after_terminator(local)
                     .then_some(self.after_statements.len())
             })
+    }
+
+    fn is_after_terminator(&self, local: Local) -> bool {
+        self.after_terminator.values().any(|s| s.contains(local))
+            || self.after_terminator_extra.contains(&local)
     }
 
     pub fn remove_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
@@ -44,10 +51,16 @@ impl DropPoints {
         self.after_statements[statement_index].clone()
     }
 
-    pub fn after_terminator(&self, target: &BasicBlock) -> DenseBitSet<Local> {
+    pub fn insert_after_terminator(&mut self, local: Local) {
+        self.after_terminator_extra.insert(local);
+    }
+
+    pub fn after_terminator(&self, target: &BasicBlock) -> Vec<Local> {
         let mut t = self.after_terminator[target].clone();
         t.union(self.after_statements.last().unwrap());
-        t
+        t.iter()
+            .chain(self.after_terminator_extra.iter().copied())
+            .collect()
     }
 }
 
@@ -197,6 +210,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
             before_statements: Default::default(),
             after_statements,
             after_terminator,
+            after_terminator_extra: Default::default(),
         }
     }
 }

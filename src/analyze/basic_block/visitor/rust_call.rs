@@ -8,6 +8,17 @@ pub struct RustCallVisitor<'a, 'tcx, 'ctx> {
 
 // TODO: consolidate logic with ReborrowVisitor
 impl<'tcx> RustCallVisitor<'_, 'tcx, '_> {
+    fn insert_mut_borrow(&mut self, place: mir::Place<'tcx>, inner_ty: mir_ty::Ty<'tcx>) -> Local {
+        let r = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
+        let ty = mir_ty::Ty::new_mut_ref(self.tcx, r, inner_ty);
+        let decl = mir::LocalDecl::new(ty, Default::default()).immutable();
+        let new_local = self.analyzer.local_decls.push(decl);
+        let new_local_ty = self.analyzer.borrow_place_(place, inner_ty);
+        self.analyzer.bind_local(new_local, new_local_ty);
+        tracing::info!(old_place = ?place, ?new_local, "implicitly (mut-)borrowed");
+        new_local
+    }
+
     fn insert_immut_borrow(
         &mut self,
         place: mir::Place<'tcx>,
@@ -105,7 +116,24 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for RustCallVisitor<'a, 'tcx, 
                     if arg_closure_ty.ref_mutability().is_none()
                 ) {
                     // case 3: {closure} -> &mut {closure}
-                    unimplemented!();
+                    let borrowed_closure_local =
+                        self.insert_mut_borrow(arg_closure_place, arg_closure_ty);
+                    args[0].node = mir::Operand::Move(borrowed_closure_local.into());
+                    // FnOnce::call_once consumes the closure, but the resolved function
+                    // only borrows it: drop the borrow and the environment after the
+                    // call to resolve the prophecies of the captured mutable borrows.
+                    self.analyzer.drop_after_terminator(borrowed_closure_local);
+                    // The original MIR moves the closure into the call, so `moved_locals`
+                    // dropped its drop obligation, expecting the callee to consume it; we
+                    // must restore it. `moved_locals` only steals whole-local moves, so we
+                    // only restore those: with a projection the obligation was never stolen
+                    // and the normal drop machinery still handles it (re-adding it would
+                    // double-drop). In practice a non-`Copy` closure (the only kind reaching
+                    // this case) is always moved through a projection-less temporary.
+                    if arg_closure_place.projection.is_empty() {
+                        self.analyzer.drop_after_terminator(arg_closure_place.local);
+                    }
+                    tracing::debug!("applied mut-borrow for closure argument");
                 }
             }
         }

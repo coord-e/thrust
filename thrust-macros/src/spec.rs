@@ -116,7 +116,7 @@ pub fn expand_requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStr
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone)]
-enum FnItemWithSignature {
+pub enum FnItemWithSignature {
     ItemFn(syn::ItemFn),
     ImplItemFn(syn::ImplItemFn),
     TraitItemFn(syn::TraitItemFn),
@@ -159,7 +159,7 @@ impl quote::ToTokens for FnItemWithSignature {
 }
 
 impl FnItemWithSignature {
-    fn block(&self) -> Option<&syn::Block> {
+    pub fn block(&self) -> Option<&syn::Block> {
         match self {
             FnItemWithSignature::ItemFn(item_fn) => Some(&item_fn.block),
             FnItemWithSignature::ImplItemFn(impl_item_fn) => Some(&impl_item_fn.block),
@@ -167,7 +167,7 @@ impl FnItemWithSignature {
         }
     }
 
-    fn block_mut(&mut self) -> Option<&mut syn::Block> {
+    pub fn block_mut(&mut self) -> Option<&mut syn::Block> {
         match self {
             FnItemWithSignature::ItemFn(item_fn) => Some(&mut item_fn.block),
             FnItemWithSignature::ImplItemFn(impl_item_fn) => Some(&mut impl_item_fn.block),
@@ -175,7 +175,7 @@ impl FnItemWithSignature {
         }
     }
 
-    fn attrs(&self) -> &[syn::Attribute] {
+    pub fn attrs(&self) -> &[syn::Attribute] {
         match self {
             FnItemWithSignature::ItemFn(item_fn) => &item_fn.attrs,
             FnItemWithSignature::ImplItemFn(impl_item_fn) => &impl_item_fn.attrs,
@@ -183,7 +183,7 @@ impl FnItemWithSignature {
         }
     }
 
-    fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
+    pub fn attrs_mut(&mut self) -> &mut Vec<syn::Attribute> {
         match self {
             FnItemWithSignature::ItemFn(item_fn) => &mut item_fn.attrs,
             FnItemWithSignature::ImplItemFn(impl_item_fn) => &mut impl_item_fn.attrs,
@@ -191,7 +191,7 @@ impl FnItemWithSignature {
         }
     }
 
-    fn sig(&self) -> &syn::Signature {
+    pub fn sig(&self) -> &syn::Signature {
         match self {
             FnItemWithSignature::ItemFn(item_fn) => &item_fn.sig,
             FnItemWithSignature::ImplItemFn(impl_item_fn) => &impl_item_fn.sig,
@@ -497,7 +497,7 @@ fn rewrite_self_in_expr(expr: &mut syn::Expr) {
 
 /// Returns `<T: Bound, U, 'a>` — the generic param list for function definitions,
 /// without a where clause.
-fn generic_params_tokens(generics: &Generics) -> TokenStream2 {
+pub fn generic_params_tokens(generics: &Generics) -> TokenStream2 {
     if generics.params.is_empty() {
         return quote!();
     }
@@ -506,7 +506,7 @@ fn generic_params_tokens(generics: &Generics) -> TokenStream2 {
 }
 
 /// Returns `::<T, U>` for turbofish use, or nothing if no generic params.
-fn generic_turbofish(generics: &Generics) -> TokenStream2 {
+pub fn generic_turbofish(generics: &Generics) -> TokenStream2 {
     let args: Vec<TokenStream2> = generics
         .params
         .iter()
@@ -550,7 +550,7 @@ fn rewrite_inputs_for_call(
 
 /// Builds `where <original predicates>, <model predicates>`.
 /// Returns an empty token stream when both sets are empty.
-fn extended_where_clause(
+pub fn extended_where_clause(
     func: &FnItemWithSignature,
     model_preds: &Vec<syn::WherePredicate>,
 ) -> TokenStream2 {

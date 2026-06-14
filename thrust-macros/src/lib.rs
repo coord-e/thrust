@@ -7,6 +7,7 @@ mod formula_fn_type_lowering;
 mod invariant;
 mod invariant_context;
 mod pre_post;
+mod rty;
 mod spec;
 
 use fn_outer_item::FnOuterItem;
@@ -108,6 +109,21 @@ fn extract_outer_context(attrs: &[syn::Attribute]) -> syn::Result<Option<FnOuter
         outer_context = Some(attr.parse_args()?);
     }
     Ok(outer_context)
+}
+
+#[proc_macro_attribute]
+pub fn param(attr: TokenStream, item: TokenStream) -> TokenStream {
+    rty::expand_param(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn ret(attr: TokenStream, item: TokenStream) -> TokenStream {
+    rty::expand_ret(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn sig(attr: TokenStream, item: TokenStream) -> TokenStream {
+    rty::expand_sig(attr, item)
 }
 
 fn tokens_contain_ident<T>(tokens: &TokenStream2, target: T) -> bool
