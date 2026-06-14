@@ -1093,6 +1093,20 @@ impl<T> Type<T> {
         }
     }
 
+    /// Returns `true` if this type is, or transitively contains through
+    /// aggregate (tuple/struct) and pointer projections, a mutable reference.
+    ///
+    /// Such types need flow-decomposed bindings (see `Env::bind_*`) so that
+    /// projections reaching the `&mut` can be located and reborrowed, even when
+    /// the enclosing local is itself immutable.
+    pub fn contains_mut(&self) -> bool {
+        match self {
+            Type::Pointer(ty) => ty.is_mut() || ty.elem.ty.contains_mut(),
+            Type::Tuple(ty) => ty.elems.iter().any(|elem| elem.ty.contains_mut()),
+            _ => false,
+        }
+    }
+
     pub fn is_own(&self) -> bool {
         match self {
             Type::Pointer(ty) => ty.is_own(),
