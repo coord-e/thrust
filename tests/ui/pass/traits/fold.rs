@@ -2,13 +2,15 @@
 //@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper THRUST_SOLVER_TIMEOUT_SECS=60
 
+use thrust_models::exists;
+
 #[thrust_macros::context]
 trait Iterator {
     type Item;
 
     #[thrust_macros::ensures(
         Self::completed(*self)
-        || thrust_models::exists(|i| (result == Some(i)) && Self::step(*self, i, !self))
+        || exists(|i| (result == Some(i)) && Self::step(*self, i, !self))
     )]
     #[thrust_macros::ensures(!Self::completed(*self) || (result == None && *self == !self))]
     fn next(&mut self) -> Option<Self::Item>;
@@ -18,26 +20,25 @@ trait Iterator {
     #[thrust_macros::predicate]
     fn step(self, item: Self::Item, dist: Self) -> bool;
 
+    #[thrust_macros::invariant_context]
     #[thrust_macros::requires(true)]
     #[thrust_macros::ensures(
-        // ∃ it: Vec<Self>.   (it.0 : Array<Int, Self>, it.1 : Int)
-        thrust_models::exists(|it: thrust_models::model::Vec<Self>|
-        // ∃ acc: Vec<B>.     (acc.0 : Array<Int, B>,   acc.1 : Int)
-        thrust_models::exists(|acc|
-            it.0[0] == *self &&
+        exists(|it: thrust_models::model::Vec<Self>|
+        exists(|fn_: thrust_models::model::Vec<F>|
+        exists(|acc|
+        exists(|l: thrust_models::model::Int|
+            it.0[0] == self &&
             acc.0[0] == init &&
-            Self::completed(it.0[it.1 - 1]) &&
-            result == acc.0[it.1 - 1] &&
-            // ∀ i. (0 ≤ i ∧ i < it.1 - 1) ⟹
-            //   ∃ item. Self::step(it[i], item, it[i+1])
-            //     ∧ post!(f(acc[i], item), acc[i+1])
-            //        !(∃ i. (0 ≤ i ∧ i < it.1 - 1) ∧ !(∃ item. step ∧ post))
+            Self::completed(it.0[l - 1]) &&
+            result == acc.0[l - 1] &&
             !(
-                thrust_models::exists(|i|
-                    (0 <= i && i < it.1 - 1) &&
+                exists(|i|
+                    (0 <= i && i < l - 1) &&
                     !(
-                        thrust_models::exists(|item|
+                        exists(|item|
+                            !Self::completed(it.0[i]) &&
                             Self::step(it.0[i], item, it.0[i + 1]) &&
+                            thrust_macros::pre!(f(acc.0[i], item)) &&
                             thrust_macros::post!(
                                 f(acc.0[i], item),
                                 acc.0[i + 1]
@@ -46,7 +47,7 @@ trait Iterator {
                     )
                 )
             )
-        ))
+        ))))
     )]
     fn fold<B, F>(mut self, init: B, mut f: F) -> B
     where
@@ -55,6 +56,34 @@ trait Iterator {
     {
         let mut accum = init;
         while let Some(x) = self.next() {
+            thrust_macros::invariant!(
+                |accum: B|
+                exists(|it: thrust_models::model::Vec<Self>|
+                exists(|fn_: thrust_models::model::Vec<F>|
+                exists(|acc|
+                exists(|l: thrust_models::model::Int|
+                    it.0[0] == self &&
+                    fn_.0[0] == f &&
+                    acc.0[0] == init &&
+                    accum == acc.0[l - 1] &&
+                    !(
+                        exists(|i: thrust_models::model::Int|
+                            (0 <= i && i < l - 1) &&
+                            !(
+                                exists(|item: Self::Item|
+                                    !Self::completed(it.0[i]) &&
+                                    Self::step(it.0[i], item, it.0[i + 1]) &&
+                                    thrust_macros::pre!(f(acc.0[i], item)) &&
+                                    thrust_macros::post!(
+                                        f(acc.0[i], item),
+                                        acc.0[i + 1]
+                                    )
+                                )
+                            )
+                        )
+                    )
+                ))))
+            );
             accum = f(accum, x);
         }
         accum
