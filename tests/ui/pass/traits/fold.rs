@@ -31,6 +31,7 @@ trait Iterator {
             acc.0[0] == init &&
             Self::completed(it.0[l - 1]) &&
             result == acc.0[l - 1] &&
+            l > 0 &&
             !(
                 exists(|i|
                     (0 <= i && i < l - 1) &&
@@ -66,6 +67,7 @@ trait Iterator {
                     fn_.0[0] == f &&
                     acc.0[0] == init &&
                     accum == acc.0[l - 1] &&
+                    l > 0 &&
                     !(
                         exists(|i: thrust_models::model::Int|
                             (0 <= i && i < l - 1) &&
