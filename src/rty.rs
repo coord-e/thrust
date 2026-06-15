@@ -1930,6 +1930,10 @@ fn subst_ty_params_in_formula<T, V>(formula: &mut chc::Formula<V>, subst: &TypeP
                 subst_ty_params_in_formula(f, subst);
             }
         }
+        chc::Formula::Implies(lhs, rhs) => {
+            subst_ty_params_in_formula(lhs, subst);
+            subst_ty_params_in_formula(rhs, subst);
+        }
         chc::Formula::Exists(vars, f) => {
             for (_, sort) in vars {
                 subst_ty_params_in_sort(sort, subst);

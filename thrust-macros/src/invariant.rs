@@ -34,7 +34,6 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input,
     visit_mut::VisitMut,
     FnArg, GenericParam, Signature, WherePredicate,
 };
@@ -46,7 +45,11 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Expands `invariant!(CLOSURE)`: a bare predicate closure with no threaded
 /// context.
 pub fn expand(input: TokenStream) -> TokenStream {
-    let closure = parse_macro_input!(input as syn::ExprClosure);
+    let input = crate::formula::wrap_closure_body(input.into());
+    let closure = match syn::parse2::<syn::ExprClosure>(input) {
+        Ok(closure) => closure,
+        Err(e) => return e.to_compile_error().into(),
+    };
     match expand_invariant(&closure, None) {
         Ok(expr) => expr.into_token_stream().into(),
         Err(e) => e.to_compile_error().into(),
@@ -75,7 +78,11 @@ pub fn expand_with_context(input: TokenStream) -> TokenStream {
         }
     }
 
-    let WithContext { closure, context } = parse_macro_input!(input as WithContext);
+    let input = crate::formula::wrap_closure_body(input.into());
+    let WithContext { closure, context } = match syn::parse2::<WithContext>(input) {
+        Ok(parsed) => parsed,
+        Err(e) => return e.to_compile_error().into(),
+    };
     match expand_invariant(&closure, Some(&context)) {
         Ok(expr) => expr.into_token_stream().into(),
         Err(e) => e.to_compile_error().into(),

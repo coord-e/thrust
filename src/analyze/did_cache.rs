@@ -25,6 +25,7 @@ struct DefIds {
     array_model_store: OnceCell<Option<DefId>>,
 
     exists: OnceCell<Option<DefId>>,
+    implies: OnceCell<Option<DefId>>,
     invariant_marker: OnceCell<Option<DefId>>,
 
     closure_precondition: OnceCell<Option<DefId>>,
@@ -179,6 +180,13 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .exists
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::exists_path()))
+    }
+
+    pub fn implies(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .implies
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::implies_path()))
     }
 
     pub fn invariant_marker(&self) -> Option<DefId> {

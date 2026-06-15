@@ -325,6 +325,13 @@ mod thrust_models {
         unimplemented!()
     }
 
+    #[allow(dead_code)]
+    #[thrust::def::implies]
+    #[thrust::ignored]
+    pub fn implies(_lhs: bool, _rhs: bool) -> bool {
+        unimplemented!()
+    }
+
     #[thrust::def::invariant_marker]
     #[thrust::ignored]
     #[inline(never)]
