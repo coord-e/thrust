@@ -177,7 +177,11 @@ fn expand_invariant(
     }
     rewriter.visit_expr_mut(&mut body);
 
-    if crate::tokens_contain_ident(&closure.to_token_stream(), "Self") {
+    let self_used = crate::tokens_contain_ident(&closure.to_token_stream(), "Self")
+        || def_wheres
+            .iter()
+            .any(|pred| crate::tokens_contain_ident(&pred.to_token_stream(), "Self"));
+    if self_used {
         let Some(outer) = context.and_then(|context| context.outer.as_ref()) else {
             return Err(syn::Error::new_spanned(
                 closure,
