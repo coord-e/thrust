@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use pretty::{termcolor, Pretty};
 use rustc_abi::{FieldIdx, VariantIdx};
@@ -1010,6 +1010,52 @@ where
                 inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
             }
             _ => panic!("invalid borrow"),
+        }
+    }
+
+    /// Returns `true` if a `&mut` can be reached from a place of this type by
+    /// following tuple/struct field, pointer, and enum-variant projections, so
+    /// that a sub-place may be mut-borrowed even when the enclosing local is not
+    /// reassignable. Such a local must be given flow-decomposed bindings.
+    ///
+    /// This is the "needs decomposition" notion, decided purely from the type
+    /// (resolving enum variants through the enum definitions). It is independent
+    /// of whether the local is reassignable/mut-borrowed: that is the separate
+    /// concern handled by box-elaboration before binding. A bare `Box`/`own` is
+    /// not itself reborrowable, so it only matters here when it wraps a `&mut`.
+    pub fn type_contains_mut(&self, ty: &rty::Type<Var>) -> bool {
+        self.type_contains_mut_rec(ty, &mut HashSet::new())
+    }
+
+    fn type_contains_mut_rec(
+        &self,
+        ty: &rty::Type<Var>,
+        visiting: &mut HashSet<chc::DatatypeSymbol>,
+    ) -> bool {
+        match ty {
+            rty::Type::Pointer(ty) => {
+                ty.is_mut() || self.type_contains_mut_rec(&ty.elem.ty, visiting)
+            }
+            rty::Type::Tuple(ty) => ty
+                .elems
+                .iter()
+                .any(|elem| self.type_contains_mut_rec(&elem.ty, visiting)),
+            rty::Type::Enum(ty) => {
+                // Guard against recursive enum types; a back edge reaches no new
+                // `&mut` (any reachable one is found along a finite path).
+                if !visiting.insert(ty.symbol.clone()) {
+                    return false;
+                }
+                let def = self.enum_defs.enum_def(&ty.symbol);
+                let found = def.field_tys().any(|field_ty| {
+                    let mut field_ty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
+                    field_ty.instantiate_ty_params(ty.args.clone());
+                    self.type_contains_mut_rec(&field_ty.ty, visiting)
+                });
+                visiting.remove(&ty.symbol);
+                found
+            }
+            _ => false,
         }
     }
 

@@ -184,7 +184,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         } else {
             rty
         };
-        if self.is_mut_local(local) || rty.ty.contains_mut() {
+        if self.is_mut_local(local) || self.env.type_contains_mut(&rty.ty) {
             self.env.mut_bind(local, rty);
         } else {
             self.env.immut_bind(local, rty);
@@ -1278,7 +1278,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             match bb_ty.param_kind(param_idx) {
                 BasicBlockTypeParamKind::Local(local, _) => {
                     if bb_ty.mutbl_of_param(param_idx).unwrap().is_mut()
-                        || param_unrefined_rty.ty.contains_mut()
+                        || self.env.type_contains_mut(&param_unrefined_rty.ty)
                     {
                         self.env.mut_bind(local, param_unrefined_rty);
                     } else {
