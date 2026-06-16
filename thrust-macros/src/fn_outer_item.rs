@@ -36,13 +36,20 @@ impl quote::ToTokens for FnOuterItem {
 }
 
 impl FnOuterItem {
+    /// Strips method (and other) items but keeps associated `type` declarations,
+    /// so a method can recover not just the enclosing generics but also the
+    /// associated types in scope (e.g. `Self::Item`) from `#[thrust::_outer_context(..)]`.
     pub fn into_header_only(mut self) -> Self {
         match &mut self {
             FnOuterItem::ItemImpl(item_impl) => {
-                item_impl.items.clear();
+                item_impl
+                    .items
+                    .retain(|item| matches!(item, syn::ImplItem::Type(_)));
             }
             FnOuterItem::ItemTrait(item_trait) => {
-                item_trait.items.clear();
+                item_trait
+                    .items
+                    .retain(|item| matches!(item, syn::TraitItem::Type(_)));
             }
         }
         self
@@ -52,6 +59,29 @@ impl FnOuterItem {
         match self {
             FnOuterItem::ItemImpl(item_impl) => &item_impl.generics,
             FnOuterItem::ItemTrait(item_trait) => &item_trait.generics,
+        }
+    }
+
+    /// The names of the associated types declared in this `impl`/`trait` header.
+    /// Used to attach `Model` predicates to every `Self::Assoc` projection in scope.
+    pub fn associated_type_idents(&self) -> Vec<syn::Ident> {
+        match self {
+            FnOuterItem::ItemImpl(item_impl) => item_impl
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    syn::ImplItem::Type(ty) => Some(ty.ident.clone()),
+                    _ => None,
+                })
+                .collect(),
+            FnOuterItem::ItemTrait(item_trait) => item_trait
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    syn::TraitItem::Type(ty) => Some(ty.ident.clone()),
+                    _ => None,
+                })
+                .collect(),
         }
     }
 }

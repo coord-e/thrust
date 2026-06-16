@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use proc_macro2::TokenStream as TokenStream2;
-use quote::quote;
+use quote::{quote, ToTokens as _};
 use syn::visit::Visit as _;
 
 use crate::fn_outer_item::FnOuterItem;
@@ -89,7 +89,12 @@ impl<'a> FormulaFnTypeLowering<'a> {
     /// `T: Model` / `<T as Model>::Ty: PartialEq` predicates for every type param
     /// in scope for `sig` (its own, plus the outer `impl`/`trait`'s and, for a
     /// trait, `Self`) that does not carry an `Fn`/`FnOnce`/`FnMut` bound, plus the
-    /// same for any generic associated-type projection appearing in `sig`.
+    /// same for any generic associated-type projection appearing in `sig` and for
+    /// every associated type (`Self::Item`) declared by the outer `impl`/`trait`.
+    ///
+    /// Associated types are included whether or not they appear in the signature,
+    /// because a projection such as `Self::Item` may surface only inside the
+    /// spec/invariant body (which is not part of `sig`).
     pub fn model_where_predicates(&self) -> Vec<syn::WherePredicate> {
         let mut generic_type_params: Vec<syn::Ident> = Vec::new();
         for param in &self.sig.generics.params {
@@ -154,6 +159,21 @@ impl<'a> FormulaFnTypeLowering<'a> {
         for tp in visitor.generic_paths {
             predicates.extend(model_predicates(&tp));
         }
+
+        // Associated types declared by the outer `impl`/`trait` (`Self::Item`).
+        // A projection like `<Self::Item as Model>::Ty` can appear only in the
+        // spec/invariant body, so we cannot rely on scanning `sig` alone.
+        if let Some(outer_context) = &self.outer_context {
+            for assoc in outer_context.associated_type_idents() {
+                let projection = quote!(Self::#assoc);
+                predicates.extend(model_predicates(&projection));
+            }
+        }
+
+        // Distinct predicates only: signature scanning and the associated-type
+        // enumeration above can both yield the same `Self::Item` bound.
+        let mut seen = HashSet::new();
+        predicates.retain(|pred| seen.insert(pred.to_token_stream().to_string()));
 
         predicates
     }
