@@ -151,10 +151,85 @@ impl<'a> FormulaFnTypeLowering<'a> {
             visitor.visit_fn_arg(arg);
         }
         visitor.visit_return_type(&self.sig.output);
+        // Also scan the *bounds* of where predicates: a projection such as `Self::Item` may appear
+        // only in a bound like `F: FnMut(B, Self::Item) -> B`, yet calling a predicate over it
+        // still needs its `Model` bound. We scan bounds only (not bounded types) to avoid matching
+        // the `<T as Model>::Ty` of an existing `<T as Model>::Ty: PartialEq` predicate.
+        if let Some(where_clause) = &self.sig.generics.where_clause {
+            for pred in &where_clause.predicates {
+                if let syn::WherePredicate::Type(pt) = pred {
+                    for bound in &pt.bounds {
+                        visitor.visit_type_param_bound(bound);
+                    }
+                }
+            }
+        }
         for tp in visitor.generic_paths {
             predicates.extend(model_predicates(&tp));
         }
 
+        let mut seen = std::collections::HashSet::new();
+        predicates.retain(|pred| seen.insert(quote!(#pred).to_string()));
+        predicates
+    }
+
+    /// The in-scope type parameters that denote model-able types: the signature's own and the
+    /// outer impl/trait's type params, excluding closure (`Fn`-bounded) params. Does not include
+    /// `Self`; callers decide whether `Self` is model-able in their context.
+    fn model_type_param_idents(&self) -> Vec<syn::Ident> {
+        let mut params: Vec<syn::Ident> = Vec::new();
+        for param in &self.sig.generics.params {
+            if let syn::GenericParam::Type(tp) = param {
+                params.push(tp.ident.clone());
+            }
+        }
+        if let Some(outer_context) = &self.outer_context {
+            for param in &outer_context.generics().params {
+                if let syn::GenericParam::Type(tp) = param {
+                    params.push(tp.ident.clone());
+                }
+            }
+        }
+        params.retain(|p| !self.closure_type_params.contains(p));
+        params
+    }
+
+    /// `Model`/`PartialEq` predicates for the associated-type projections (e.g. `Self::Item`) that
+    /// appear only inside a formula *body* — [`Self::model_where_predicates`] sees the signature
+    /// alone, so projections used solely in the spec/invariant expression need their bounds here.
+    pub fn model_where_predicates_in_expr(&self, expr: &syn::Expr) -> Vec<syn::WherePredicate> {
+        let mut params = self.model_type_param_idents();
+        if self.outer_context.is_some() {
+            params.push(quote::format_ident!("Self"));
+        }
+
+        struct Visitor {
+            params: Vec<syn::Ident>,
+            projections: Vec<syn::TypePath>,
+        }
+
+        impl syn::visit::Visit<'_> for Visitor {
+            fn visit_type_path(&mut self, tp: &syn::TypePath) {
+                if tp.qself.is_none() && tp.path.segments.len() > 1 {
+                    let head = &tp.path.segments.first().unwrap().ident;
+                    if self.params.contains(head) {
+                        self.projections.push(tp.clone());
+                    }
+                }
+                syn::visit::visit_type_path(self, tp);
+            }
+        }
+
+        let mut visitor = Visitor {
+            params,
+            projections: Vec::new(),
+        };
+        visitor.visit_expr(expr);
+
+        let mut predicates: Vec<syn::WherePredicate> = Vec::new();
+        for tp in visitor.projections {
+            predicates.extend(model_predicates(&tp));
+        }
         predicates
     }
 

@@ -177,6 +177,10 @@ fn expand_invariant(
     };
 
     def_wheres.extend(type_lowering.model_where_predicates());
+    // Associated-type projections (e.g. `Self::Item`) used only inside the invariant body need
+    // their own `Model`/`PartialEq` bounds. Collected before the `Self` rewrite below so they are
+    // rewritten alongside the rest of the where clause.
+    def_wheres.extend(type_lowering.model_where_predicates_in_expr(&closure.body));
 
     let mut body = closure.body.clone();
 

@@ -314,7 +314,14 @@ impl ExpandedTokens {
     }
 
     fn extended_where_clause(&self) -> TokenStream2 {
-        let model_preds = self.type_lowering().model_where_predicates();
+        let type_lowering = self.type_lowering();
+        let mut model_preds = type_lowering.model_where_predicates();
+        // Associated-type projections (e.g. `Self::Item`) used only inside the requires/ensures
+        // expression need their own `Model`/`PartialEq` bounds.
+        model_preds.extend(type_lowering.model_where_predicates_in_expr(&self.req_expr));
+        model_preds.extend(type_lowering.model_where_predicates_in_expr(&self.ens_expr));
+        let mut seen = std::collections::HashSet::new();
+        model_preds.retain(|pred| seen.insert(pred.to_token_stream().to_string()));
         extended_where_clause(&self.func, &model_preds)
     }
 
