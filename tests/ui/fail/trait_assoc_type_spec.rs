@@ -1,4 +1,4 @@
-//@check-pass
+//@error-in-other-file: Unsat
 //@compile-flags: -Adead_code -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
@@ -8,8 +8,8 @@
 // which are derived from the trait's associated types rather than the method
 // signature.
 //
-// Here `produces` is satisfiable (`x == self.v` is witnessed by `x = self.v`),
-// so `exists(|x| produces(*self, x))` holds and verification succeeds.
+// Here `produces` is never satisfiable, so `exists(|x| produces(*self, x))`
+// cannot be proven and verification fails.
 
 use thrust_models::Model;
 
@@ -39,9 +39,8 @@ impl Source for S {
 
     #[thrust_macros::predicate]
     fn produces(self, x: Self::Item) -> bool {
-        // x == self.v
-        "(= x (tuple_proj<Int>.0 self_))";
-        true
+        "false";
+        false
     }
 }
 
