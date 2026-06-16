@@ -2,11 +2,6 @@
 //@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper THRUST_SOLVER_TIMEOUT_SECS=60
 
-// Same shape as the `pass` counterpart, but the invariant asserts the predicate
-// `Self::step(c, it, c)` outright. `step` relates a state to its *successor*
-// (`dist.start == self.start + 1`), so it can never hold with `dist == c`: the
-// invariant is not inductive and verification fails with `Unsat`.
-
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
 #[thrust::trusted]
@@ -15,53 +10,50 @@ fn rand() -> i64 {
 }
 
 #[thrust_macros::context]
-trait Foo {
-    type Item;
-
+trait Gauge {
     #[thrust_macros::predicate]
-    fn step(self, item: Self::Item, dist: Self) -> bool;
+    fn invariant(x: i32) -> bool;
+
+    fn update(&mut self) -> i32;
 
     #[thrust_macros::invariant_context]
-    fn run(self, item: Self::Item)
-    where
-        Self: Sized,
-    {
-        let c = self;
-        let it = item;
+    fn run(&mut self) -> i32 {
+        let mut state = 0;
         while rand() == 0 {
-            thrust_macros::invariant!(|c: Self, it: Self::Item| Self::step(c, it, c));
+            state = self.update();
+            thrust_macros::invariant!(|state: i32| Self::invariant(state));
         }
-        let _last = c;
-        let _last_item = it;
+        state
     }
 }
 
 #[derive(PartialEq)]
-struct Range {
-    start: i64,
-    end: i64,
+struct Counter {
+    value: i32,
 }
 
-impl thrust_models::Model for Range {
-    type Ty = Range;
+impl thrust_models::Model for Counter {
+    type Ty = Counter;
 }
 
 #[thrust_macros::context]
-impl Foo for Range {
-    type Item = i64;
-
+impl Gauge for Counter {
     #[thrust_macros::predicate]
-    fn step(self, item: Self::Item, dist: Self) -> bool {
-        // self.end == dist.end && self.start == item && self.start + 1 == dist.start
-        "(and
-            (= (tuple_proj<Int-Int>.1 self_) (tuple_proj<Int-Int>.1 dist))
-            (= (tuple_proj<Int-Int>.0 self_) item)
-            (= (+ (tuple_proj<Int-Int>.0 self_) 1) (tuple_proj<Int-Int>.0 dist))
-        )";
-        true
+    fn invariant(x: i32) -> bool {
+        "(>= x 0)"; true
+    }
+
+    fn update(&mut self) -> i32 {
+        if self.value < 0 {
+            self.value *= -1;
+        } else {
+            self.value -= 1;
+        }
+        self.value
     }
 }
 
 fn main() {
-    Range { start: 0, end: 5 }.run(0);
+    let mut c = Counter { value: 0 };
+    assert!(c.run() >= 0);
 }

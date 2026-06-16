@@ -117,19 +117,6 @@ impl Context {
             FormulaFnTypeLowering::new(&self.sig)
         }
     }
-
-    /// When the host is a trait, the bound `synth: Trait<..>` mirroring the
-    /// implicit `Self: Trait` bound of a trait method, so the synthetic
-    /// stand-in for `Self` can still name the trait's associated types and call
-    /// its predicates.
-    fn self_trait_bound(&self, synth: &syn::Ident) -> Option<WherePredicate> {
-        let FnOuterItem::ItemTrait(item_trait) = self.outer.as_ref()? else {
-            return None;
-        };
-        let trait_ident = &item_trait.ident;
-        let (_, ty_generics, _) = item_trait.generics.split_for_impl();
-        Some(syn::parse_quote!(#synth: #trait_ident #ty_generics))
-    }
 }
 
 /// Expands a predicate closure into a `#[thrust::formula_fn]` plus a marker
@@ -186,6 +173,8 @@ fn expand_invariant(
     // in expression position).
     if crate::tokens_contain_ident(&closure.to_token_stream(), "Self") {
         let synth: syn::Ident = format_ident!("__ThrustSelf");
+        def_wheres.push(syn::parse_quote!(#synth: ?Sized));
+
         let mut rewriter = SelfRewriter { synth: &synth };
         for param in &mut fn_params {
             rewriter.visit_fn_arg_mut(param);
@@ -199,8 +188,12 @@ fn expand_invariant(
         // Mirror the host's implicit `Self: Trait` bound onto the synthetic
         // generic so trait associated types (`Self::Item`) and predicates
         // (`Self::step`) remain resolvable on it.
-        if let Some(bound) = context.and_then(|context| context.self_trait_bound(&synth)) {
-            def_wheres.push(bound);
+        if let Some(FnOuterItem::ItemTrait(item_trait)) =
+            context.and_then(|context| context.outer.as_ref())
+        {
+            let trait_ident = &item_trait.ident;
+            let (_, ty_generics, _) = item_trait.generics.split_for_impl();
+            def_wheres.push(syn::parse_quote!(#synth: #trait_ident #ty_generics));
         }
         turbofish_args.push(quote!(Self));
 
