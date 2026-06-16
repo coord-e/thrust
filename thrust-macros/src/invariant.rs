@@ -140,6 +140,10 @@ fn expand_invariant(
     context: Option<&Context>,
 ) -> syn::Result<syn::Expr> {
     let mut fn_params: Vec<FnArg> = Vec::new();
+    // An invariant refers to the receiver by listing it explicitly as a `self` parameter (e.g.
+    // `|self: Self| ...`); it is renamed to `self_` since the lifted formula function is free, and
+    // the analyzer binds it to the receiver's entry value.
+    let mut uses_self_value = false;
     for param in &closure.inputs {
         let syn::Pat::Type(pt) = param else {
             return Err(syn::Error::new_spanned(
@@ -149,7 +153,12 @@ fn expand_invariant(
         };
         let pat = &pt.pat;
         let ty = &pt.ty;
-        fn_params.push(syn::parse_quote!(#pat: #ty));
+        if pat.to_token_stream().to_string() == "self" {
+            uses_self_value = true;
+            fn_params.push(syn::parse_quote!(self_: #ty));
+        } else {
+            fn_params.push(syn::parse_quote!(#pat: #ty));
+        }
     }
 
     let mut def_params: Vec<TokenStream2> = Vec::new();
@@ -184,11 +193,16 @@ fn expand_invariant(
 
     let mut body = closure.body.clone();
 
+    // Rename uses of the receiver `self` to the `self_` parameter introduced above.
+    if uses_self_value {
+        SelfValueRewriter.visit_expr_mut(&mut body);
+    }
+
     // `Self` in a method context: rewrite it to a synthetic generic everywhere
     // it reaches the formula function — parameters, body, and the propagated
     // where-clause predicates — then pass the real `Self` via turbofish (legal
     // in expression position).
-    if crate::tokens_contain_ident(&closure.to_token_stream(), "Self") {
+    if crate::tokens_contain_ident(&closure.to_token_stream(), "Self") || uses_self_value {
         let synth: syn::Ident = format_ident!("__ThrustSelf");
         let mut rewriter = SelfRewriter { synth: &synth };
         for param in &mut fn_params {
@@ -246,6 +260,18 @@ fn expand_invariant(
 
         thrust_models::__invariant_marker(#name #turbofish)
     }))
+}
+
+/// Renames the value `self` to `self_` in an invariant body, so it can become a parameter of the
+/// lifted (free) formula function. Mirrors the requires/ensures rewrite in `spec.rs`.
+struct SelfValueRewriter;
+
+impl VisitMut for SelfValueRewriter {
+    fn visit_ident_mut(&mut self, ident: &mut syn::Ident) {
+        if ident == "self" {
+            *ident = format_ident!("self_");
+        }
+    }
 }
 
 struct SelfRewriter<'a> {
