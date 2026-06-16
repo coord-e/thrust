@@ -122,6 +122,21 @@ impl BasicBlockType {
             .find_map(|(idx, (l, _))| if *l == local { Some(idx) } else { None })
     }
 
+    /// The parameter carrying the *entry value* of the function argument backed by `local`, if
+    /// `local` is a function argument. Unlike [`Self::param_of_local`], this resolves even when the
+    /// argument is no longer a live local (e.g. it was moved before a loop): every basic block
+    /// keeps the original function parameters as trailing `OuterFnParam` parameters.
+    pub fn outer_fn_param_of_local(&self, local: Local) -> Option<rty::FunctionParamIdx> {
+        // Function arguments are locals `1..=arg_count`; outer fn param at offset `o` corresponds
+        // to local `o + 1` (see `crate::analyze::local_of_function_param`).
+        let offset = local.index().checked_sub(1)?;
+        if offset < self.outer_fn_param_count {
+            Some(rty::FunctionParamIdx::from(self.locals.len() + offset))
+        } else {
+            None
+        }
+    }
+
     pub fn to_function_ty(&self) -> rty::FunctionType {
         self.ty.clone()
     }

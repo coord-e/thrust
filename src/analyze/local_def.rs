@@ -964,6 +964,53 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         found
     }
 
+    /// Resolves the `bty` parameter a loop-invariant variable name refers to: a live local at the
+    /// loop header, or — failing that — the entry value of a function parameter of that name (which
+    /// every block keeps as a trailing `OuterFnParam`, even after the argument is moved/dead).
+    fn invariant_param_of_name(
+        &self,
+        name: rustc_span::Symbol,
+        bty: &BasicBlockType,
+    ) -> Option<rty::FunctionParamIdx> {
+        // The receiver `self` denotes its *entry* value (the receiver may be mutated across the
+        // loop, e.g. an iterator advancing), so resolve it to the function parameter rather than the
+        // current loop-carried local.
+        if name.as_str() != "self" {
+            if let Some(local) = self.local_of_name_in_bb(name, bty) {
+                return bty.param_of_local(local);
+            }
+        }
+        let local = self.function_arg_local_of_name(name)?;
+        bty.outer_fn_param_of_local(local)
+    }
+
+    /// The function-argument local of the given name (locals `1..=arg_count`), regardless of
+    /// liveness. Returns `None` if no argument matches or the name is ambiguous.
+    fn function_arg_local_of_name(&self, name: rustc_span::Symbol) -> Option<Local> {
+        let mut found: Option<Local> = None;
+        for vdi in &self.body.var_debug_info {
+            if vdi.name != name {
+                continue;
+            }
+            let mir::VarDebugInfoContents::Place(place) = vdi.value else {
+                continue;
+            };
+            if !place.projection.is_empty() {
+                continue;
+            }
+            let local = place.local;
+            if local.index() == 0 || local.index() > self.body.arg_count {
+                continue;
+            }
+            match found {
+                None => found = Some(local),
+                Some(prev) if prev == local => {}
+                Some(_) => return None,
+            }
+        }
+        found
+    }
+
     /// Translates a user-provided loop invariant (a formula function over named
     /// live variables) into a precondition refinement over `bty`'s parameters.
     /// Each formula parameter names a live variable at the loop header and is
@@ -983,12 +1030,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut mapping: Vec<rty::FunctionParamIdx> = Vec::with_capacity(idents.len());
         for ident in idents {
             let name = ident.expect("invariant parameters must be named").name;
-            let local = self.local_of_name_in_bb(name, bty).unwrap_or_else(|| {
+            // The synthetic `self_` parameter (emitted when an invariant refers to the receiver
+            // `self`) maps to the loop-carried receiver, which appears as `self` in debug info.
+            let name = if name.as_str() == "self_" {
+                rustc_span::Symbol::intern("self")
+            } else {
+                name
+            };
+            let param = self.invariant_param_of_name(name, bty).unwrap_or_else(|| {
                 self.tcx.dcx().fatal(format!(
-                    "loop invariant refers to `{name}`, which is not a live variable at the loop header"
+                    "loop invariant refers to `{name}`, which is neither a live variable nor a \
+                     function parameter at the loop header"
                 ))
             });
-            mapping.push(bty.param_of_local(local).unwrap());
+            mapping.push(param);
         }
 
         formula_fn
