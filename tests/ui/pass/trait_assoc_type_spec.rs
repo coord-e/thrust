@@ -2,8 +2,6 @@
 //@compile-flags: -Adead_code -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
-use thrust_models::Model;
-
 #[thrust_macros::context]
 trait Source {
     type Item;
