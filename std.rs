@@ -137,11 +137,11 @@ mod thrust_models {
             }
         }
 
-        impl<I, T> std::ops::Index<I> for Array<I, T> {
+        impl<I, T, U> std::ops::Index<U> for Array<I, T> where U: super::Model<Ty = I> {
             type Output = T;
 
             #[thrust::ignored]
-            fn index(&self, _index: I) -> &Self::Output {
+            fn index(&self, _index: U) -> &Self::Output {
                 unimplemented!()
             }
         }
@@ -150,7 +150,7 @@ mod thrust_models {
             #[allow(dead_code)]
             #[thrust::def::array_store]
             #[thrust::ignored]
-            pub fn store(&self, _index: I, _value: T) -> Self {
+            pub fn store<U>(&self, _index: U, _value: T) -> Self where U: super::Model<Ty = I> {
                 unimplemented!()
             }
         }
