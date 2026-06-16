@@ -983,6 +983,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut mapping: Vec<rty::FunctionParamIdx> = Vec::with_capacity(idents.len());
         for ident in idents {
             let name = ident.expect("invariant parameters must be named").name;
+            // The synthetic `__thrust_self` parameter (emitted when an invariant refers to the receiver
+            // `self`) maps to the loop-carried receiver, which appears as `self` in debug info.
+            let name = if name.as_str() == "__thrust_self" {
+                rustc_span::Symbol::intern("self")
+            } else {
+                name
+            };
             let local = self.local_of_name_in_bb(name, bty).unwrap_or_else(|| {
                 self.tcx.dcx().fatal(format!(
                     "loop invariant refers to `{name}`, which is not a live variable at the loop header"
