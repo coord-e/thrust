@@ -19,6 +19,7 @@ struct DefIds {
     box_model: OnceCell<Option<DefId>>,
     array_model: OnceCell<Option<DefId>>,
     closure_model: OnceCell<Option<DefId>>,
+    closure_env_ty: OnceCell<Option<DefId>>,
 
     mut_model_new: OnceCell<Option<DefId>>,
     box_model_new: OnceCell<Option<DefId>>,
@@ -29,6 +30,7 @@ struct DefIds {
 
     closure_precondition: OnceCell<Option<DefId>>,
     closure_postcondition: OnceCell<Option<DefId>>,
+    closure_env: OnceCell<Option<DefId>>,
 }
 
 /// Retrieves and caches well-known [`DefId`]s.
@@ -153,6 +155,13 @@ impl<'tcx> DefIdCache<'tcx> {
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_model_path()))
     }
 
+    pub fn closure_env_ty(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .closure_env_ty
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_env_ty_path()))
+    }
+
     pub fn mut_model_new(&self) -> Option<DefId> {
         *self
             .def_ids
@@ -199,5 +208,12 @@ impl<'tcx> DefIdCache<'tcx> {
         *self.def_ids.closure_postcondition.get_or_init(|| {
             self.annotated_def(&crate::analyze::annot::closure_postcondition_path())
         })
+    }
+
+    pub fn closure_env(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .closure_env
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_env_path()))
     }
 }

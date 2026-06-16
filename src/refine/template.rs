@@ -199,6 +199,12 @@ impl<'tcx> TypeBuilder<'tcx> {
             return Some(self.build(tupled_upvars_ty));
         }
 
+        if Some(adt.did()) == self.def_ids.closure_env_ty() {
+            // `replace_closure_model` has already turned the inner closure into
+            // `Closure<tupled_upvars_ty>`, so its element type is the closure's environment.
+            return Some(self.build(args.type_at(0)));
+        }
+
         None
     }
 
@@ -384,6 +390,12 @@ where
         if Some(adt.did()) == self.inner.def_ids.closure_model() {
             let tupled_upvars_ty = args.type_at(0);
             return Some(self.build(tupled_upvars_ty));
+        }
+
+        if Some(adt.did()) == self.inner.def_ids.closure_env_ty() {
+            // `replace_closure_model` has already turned the inner closure into
+            // `Closure<tupled_upvars_ty>`, so its element type is the closure's environment.
+            return Some(self.build(args.type_at(0)));
         }
 
         None
