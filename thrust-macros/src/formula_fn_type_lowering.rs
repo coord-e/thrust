@@ -91,10 +91,6 @@ impl<'a> FormulaFnTypeLowering<'a> {
     /// trait, `Self`) that does not carry an `Fn`/`FnOnce`/`FnMut` bound, plus the
     /// same for any generic associated-type projection appearing in `sig` and for
     /// every associated type (`Self::Item`) declared by the outer `impl`/`trait`.
-    ///
-    /// Associated types are included whether or not they appear in the signature,
-    /// because a projection such as `Self::Item` may surface only inside the
-    /// spec/invariant body (which is not part of `sig`).
     pub fn model_where_predicates(&self) -> Vec<syn::WherePredicate> {
         let mut generic_type_params: Vec<syn::Ident> = Vec::new();
         for param in &self.sig.generics.params {
@@ -160,9 +156,6 @@ impl<'a> FormulaFnTypeLowering<'a> {
             predicates.extend(model_predicates(&tp));
         }
 
-        // Associated types declared by the outer `impl`/`trait` (`Self::Item`).
-        // A projection like `<Self::Item as Model>::Ty` can appear only in the
-        // spec/invariant body, so we cannot rely on scanning `sig` alone.
         if let Some(outer_context) = &self.outer_context {
             for assoc in outer_context.associated_type_idents() {
                 let projection = quote!(Self::#assoc);

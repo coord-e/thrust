@@ -2,15 +2,6 @@
 //@compile-flags: -Adead_code -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
-// A trait whose spec mentions an associated-type projection (`Self::Item`)
-// only inside the formula body. The lowered predicate signatures must carry
-// the `Self::Item: Model` / `<Self::Item as Model>::Ty: PartialEq` bounds,
-// which are derived from the trait's associated types rather than the method
-// signature.
-//
-// Here `produces` is satisfiable (`x == self.v` is witnessed by `x = self.v`),
-// so `exists(|x| produces(*self, x))` holds and verification succeeds.
-
 use thrust_models::Model;
 
 #[thrust_macros::context]
@@ -20,7 +11,7 @@ trait Source {
     #[thrust_macros::predicate]
     fn produces(self, x: Self::Item) -> bool;
 
-    #[thrust_macros::ensures(thrust_models::exists(|x: <Self::Item as Model>::Ty| Self::produces(*self, x)))]
+    #[thrust_macros::ensures(thrust_models::exists(|x| Self::produces(*self, x)))]
     fn nonempty(&self) {}
 }
 
