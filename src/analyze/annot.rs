@@ -113,6 +113,22 @@ pub fn closure_model_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn closure_env_ty_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("closure_env_ty"),
+    ]
+}
+
+pub fn closure_env_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("closure_env"),
+    ]
+}
+
 pub fn mut_model_new_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

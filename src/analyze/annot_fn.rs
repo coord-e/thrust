@@ -11,6 +11,17 @@ use crate::chc;
 use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
+/// The canonical value of a singleton sort (one with a single inhabitant, e.g. the empty tuple of
+/// an upvar-less closure's environment). Such sorts are erased from clause variables, so a term of
+/// this sort must be spelled out rather than referenced by variable.
+fn singleton_term<V>(sort: &chc::Sort) -> chc::Term<V> {
+    match sort {
+        chc::Sort::Tuple(sorts) => chc::Term::tuple(sorts.iter().map(singleton_term).collect()),
+        chc::Sort::Box(inner) => chc::Term::box_(singleton_term(inner)),
+        _ => panic!("no canonical value for non-aggregate singleton sort {sort:?}"),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FormulaFn<'tcx> {
     params: IndexVec<rty::FunctionParamIdx, mir_ty::Ty<'tcx>>,
@@ -584,6 +595,21 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 );
                             };
                             return self.translate_closure_postcondition(receiver, args, result);
+                        }
+                        if Some(def_id) == self.def_ids.closure_env() {
+                            let [receiver] = args else {
+                                panic!("closure_env takes exactly one closure argument");
+                            };
+                            // The closure value *is* its captured environment (upvars). When the
+                            // closure captures nothing, that environment has a singleton sort which
+                            // is erased from clause variables, so emit its canonical value instead
+                            // of a (skipped) variable reference.
+                            let env_sort =
+                                self.type_builder.build(self.expr_ty(receiver)).to_sort();
+                            if env_sort.is_singleton() {
+                                return FormulaOrTerm::Term(singleton_term(&env_sort));
+                            }
+                            return FormulaOrTerm::Term(self.closure_value_term(receiver));
                         }
                         if Some(def_id) == self.def_ids.exists() {
                             assert_eq!(args.len(), 1, "exists takes exactly 1 argument");

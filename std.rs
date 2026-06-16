@@ -158,6 +158,18 @@ mod thrust_models {
         #[thrust::def::closure_model]
         pub struct Closure<T: ?Sized>(PhantomData<T>);
 
+        /// A closure's captured environment, comparable regardless of `F`. Obtain one with
+        /// `thrust_models::closure_env(f)`.
+        #[thrust::def::closure_env_ty]
+        pub struct ClosureEnv<F: ?Sized>(PhantomData<F>);
+
+        impl<F: ?Sized> PartialEq for ClosureEnv<F> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &Self) -> bool {
+                unimplemented!()
+            }
+        }
+
         /// Refers to the precondition of a closure in a specification.
         ///
         /// Prefer the `thrust_macros::pre!(f(x))` surface syntax, which desugars to this; the
@@ -258,6 +270,10 @@ mod thrust_models {
         type Ty = model::Closure<T>;
     }
 
+    impl<F: ?Sized> Model for model::ClosureEnv<F> {
+        type Ty = model::ClosureEnv<F>;
+    }
+
     macro_rules! impl_tuple_model {
         ($($T:ident),*) => {
             impl<$($T),*> Model for ($($T,)*) where $($T: Model),* {
@@ -322,6 +338,14 @@ mod thrust_models {
     #[thrust::def::exists]
     #[thrust::ignored]
     pub fn exists<T>(_x: T) -> bool {
+        unimplemented!()
+    }
+
+    /// The captured environment of the closure `f`, for use in a specification.
+    #[allow(dead_code)]
+    #[thrust::def::closure_env]
+    #[thrust::ignored]
+    pub fn closure_env<F>(_f: F) -> model::ClosureEnv<F> {
         unimplemented!()
     }
 
