@@ -167,6 +167,16 @@ fn expand_invariant(
 
     let mut body = closure.body.clone();
 
+    // An invariant may refer to the receiver value `self`; the lifted formula function is free, so
+    // rewrite `self` to a `__thrust_self` parameter. The analyzer binds it back to the loop-carried receiver.
+    let mut rewriter = SelfValueRewriter {
+        to: format_ident!("__thrust_self"),
+    };
+    for param in &mut fn_params {
+        rewriter.visit_fn_arg_mut(param);
+    }
+    rewriter.visit_expr_mut(&mut body);
+
     // `Self` in a method context: rewrite it to a synthetic generic everywhere
     // it reaches the formula function — parameters, body, and the propagated
     // where-clause predicates — then pass the real `Self` via turbofish (legal
@@ -235,6 +245,51 @@ fn expand_invariant(
 
         thrust_models::__invariant_marker(#name #turbofish)
     }))
+}
+
+struct SelfValueRewriter {
+    to: syn::Ident,
+}
+
+impl VisitMut for SelfValueRewriter {
+    fn visit_pat_ident_mut(&mut self, pat: &mut syn::PatIdent) {
+        if pat.ident == "self" {
+            pat.ident = self.to.clone();
+        }
+        syn::visit_mut::visit_pat_ident_mut(self, pat);
+    }
+
+    fn visit_fn_arg_mut(&mut self, arg: &mut syn::FnArg) {
+        match arg {
+            syn::FnArg::Receiver(receiver) => {
+                let to = &self.to;
+                let ty = &receiver.ty;
+                *arg = syn::parse_quote!(#to: #ty);
+            }
+            syn::FnArg::Typed(_) => { /* handled by visit_pat_ident_mut */ }
+        }
+
+        syn::visit_mut::visit_fn_arg_mut(self, arg);
+    }
+
+    fn visit_expr_path_mut(&mut self, expr_path: &mut syn::ExprPath) {
+        if expr_path.qself.is_some() {
+            syn::visit_mut::visit_expr_path_mut(self, expr_path);
+            return;
+        }
+
+        if expr_path.path.leading_colon.is_some() || expr_path.path.segments.len() != 1 {
+            syn::visit_mut::visit_expr_path_mut(self, expr_path);
+            return;
+        }
+
+        if expr_path.path.segments[0].ident == "self" {
+            expr_path.path.segments[0].ident = self.to.clone();
+            return;
+        }
+
+        syn::visit_mut::visit_expr_path_mut(self, expr_path);
+    }
 }
 
 struct SelfRewriter<'a> {
