@@ -1051,6 +1051,7 @@ impl UserDefinedPred {
 pub struct ForallPred {
     inner: String,
     type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
 }
 
 impl std::fmt::Display for ForallPred {
@@ -1082,10 +1083,11 @@ where
 }
 
 impl ForallPred {
-    pub fn new(inner: String, args: Vec<Sort>) -> Self {
+    pub fn new(inner: String, type_parameters: Vec<Sort>, params: Vec<Sort>) -> Self {
         Self {
             inner,
-            type_parameters: args,
+            type_parameters,
+            params,
         }
     }
 }

@@ -41,6 +41,37 @@ pub fn user_defined_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> UserDefinedPred
     UserDefinedPred::new(stable_def_id_symbol(tcx, did, "p"))
 }
 
-pub fn forall_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId, args: Vec<Sort>) -> ForallPred {
-    ForallPred::new(stable_def_id_symbol(tcx, did, "q"), args)
+pub fn trait_forall_pred(
+    tcx: mir_ty::TyCtxt<'_>,
+    did: DefId,
+    type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
+) -> ForallPred {
+    ForallPred::new(stable_def_id_symbol(tcx, did, "q"), type_parameters, params)
+}
+
+pub fn closure_pre_forall_pred(
+    tcx: mir_ty::TyCtxt<'_>,
+    did: DefId,
+    type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
+) -> ForallPred {
+    ForallPred::new(
+        stable_def_id_symbol(tcx, did, "q_pre"),
+        type_parameters,
+        params,
+    )
+}
+
+pub fn closure_post_forall_pred(
+    tcx: mir_ty::TyCtxt<'_>,
+    did: DefId,
+    type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
+) -> ForallPred {
+    ForallPred::new(
+        stable_def_id_symbol(tcx, did, "q_post"),
+        type_parameters,
+        params,
+    )
 }

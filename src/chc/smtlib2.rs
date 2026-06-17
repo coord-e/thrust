@@ -600,11 +600,7 @@ pub struct ForallPredDef<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for ForallPredDef<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let params = self
-            .pred
-            .type_parameters
-            .iter()
-            .map(|sort| self.ctx.fmt_sort(sort));
+        let params = self.pred.params.iter().map(|sort| self.ctx.fmt_sort(sort));
         let params = List::closed(params);
         write!(
             f,

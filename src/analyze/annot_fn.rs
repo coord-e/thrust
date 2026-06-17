@@ -396,14 +396,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         Some(rty::RefinedType::unrefined(ret_ty))
     }
 
-    fn register_forall_pred(&self, type_params: Vec<chc::Sort>) -> chc::ForallPred {
-        let predicate =
-            refine::forall_pred(self.tcx, self.local_def_id.to_def_id(), type_params.clone());
+    fn register_forall_pred(&self, forall_pred: chc::ForallPred) {
         self.analyzer
             .system
             .borrow_mut()
-            .register_forall_pred(predicate.clone());
-        predicate
+            .register_forall_pred(forall_pred.clone());
     }
 
     fn type_param_as_callable_sig(&self, param_ty: mir_ty::ParamTy) -> Option<rty::FunctionType> {
@@ -434,9 +431,24 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let value = chc::Term::var(rty::RefinedTypeVar::Value);
 
         let type_params = vec![self.type_builder.build(param_ty.to_ty(self.tcx)).to_sort()];
+        let mut params_sort: Vec<chc::Sort> = params.iter().map(|rty| rty.ty.to_sort()).collect();
+        let ret_sort = ret.ty.to_sort();
 
-        let pre_pred = self.register_forall_pred(type_params.clone());
-        let post_pred = self.register_forall_pred(type_params);
+        let pre_pred = refine::closure_pre_forall_pred(
+            self.tcx,
+            self.type_builder.owner_fn_id,
+            type_params.clone(),
+            params_sort.clone(),
+        );
+        self.register_forall_pred(pre_pred.clone());
+        params_sort.push(ret_sort);
+        let post_pred = refine::closure_post_forall_pred(
+            self.tcx,
+            self.type_builder.owner_fn_id,
+            type_params,
+            params_sort,
+        );
+        self.register_forall_pred(post_pred.clone());
 
         params[receiver].extend_refinement(
             chc::Atom::new(pre_pred.into(), vec![value.clone(), free(arg)]).into(),
@@ -836,11 +848,23 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                     .types()
                                     .map(|ty| self.type_builder.build(ty).to_sort())
                                     .collect();
-                                let pred = refine::forall_pred(self.tcx, pred_def_id, type_params);
-                                self.analyzer
-                                    .system
-                                    .borrow_mut()
-                                    .register_forall_pred(pred.clone());
+
+                                let typeck_result = self.tcx.typeck(self.local_def_id);
+                                let params = args
+                                    .iter()
+                                    .map(|expr| {
+                                        let ty = typeck_result.expr_ty(expr);
+                                        self.type_builder.build(ty).to_sort()
+                                    })
+                                    .collect();
+
+                                let pred = refine::trait_forall_pred(
+                                    self.tcx,
+                                    pred_def_id,
+                                    type_params,
+                                    params,
+                                );
+                                self.register_forall_pred(pred.clone());
                                 pred.into()
                             } else {
                                 refine::user_defined_pred(self.tcx, pred_def_id).into()
