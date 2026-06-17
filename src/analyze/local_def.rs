@@ -964,6 +964,31 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         found
     }
 
+    fn function_param_local_of_name(&self, name: rustc_span::Symbol) -> Option<Local> {
+        let mut found: Option<Local> = None;
+        for vdi in &self.body.var_debug_info {
+            if vdi.name != name {
+                continue;
+            }
+            let mir::VarDebugInfoContents::Place(place) = vdi.value else {
+                continue;
+            };
+            if !place.projection.is_empty() {
+                continue;
+            }
+            let local = place.local;
+            if local.index() == 0 || local.index() > self.body.arg_count {
+                continue;
+            }
+            match found {
+                None => found = Some(local),
+                Some(prev) if prev == local => {}
+                Some(_) => panic!("multiple function arguments share the name `{name}`"),
+            }
+        }
+        found
+    }
+
     /// Translates a user-provided loop invariant (a formula function over named
     /// live variables) into a precondition refinement over `bty`'s parameters.
     /// Each formula parameter names a live variable at the loop header and is
@@ -979,10 +1004,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .formula_fn_with_args(formula_def_id, generic_args)
             .expect("invariant formula function is not registered");
         let idents = self.tcx.fn_arg_idents(formula_def_id.to_def_id());
+        let sig = self
+            .tcx
+            .fn_sig(formula_def_id.to_def_id())
+            .instantiate(self.tcx, generic_args);
 
         let mut mapping: Vec<rty::FunctionParamIdx> = Vec::with_capacity(idents.len());
-        for ident in idents {
-            let name = ident.expect("invariant parameters must be named").name;
+        for (ident_opt, input_ty) in idents.iter().zip(sig.skip_binder().inputs()) {
+            let name = ident_opt.expect("invariant parameters must be named").name;
+            let input_ty = {
+                let typing_env =
+                    mir_ty::TypingEnv::post_analysis(self.tcx, formula_def_id.to_def_id());
+                self.tcx
+                    .try_normalize_erasing_regions(typing_env, *input_ty)
+                    .unwrap_or(*input_ty)
+            };
+
             // The synthetic `__thrust_self` parameter (emitted when an invariant refers to the receiver
             // `self`) maps to the loop-carried receiver, which appears as `self` in debug info.
             let name = if name.as_str() == "__thrust_self" {
@@ -990,12 +1027,26 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             } else {
                 name
             };
-            let local = self.local_of_name_in_bb(name, bty).unwrap_or_else(|| {
-                self.tcx.dcx().fatal(format!(
-                    "loop invariant refers to `{name}`, which is not a live variable at the loop header"
-                ))
-            });
-            mapping.push(bty.param_of_local(local).unwrap());
+
+            if input_ty
+                .ty_adt_def()
+                .is_some_and(|def| Some(def.did()) == self.ctx.def_ids().fn_param_wrapper())
+            {
+                let local = self.function_param_local_of_name(name).unwrap_or_else(|| {
+                    self.tcx.dcx().fatal(format!(
+                        "loop invariant refers to `{name}` via FnParam, but it is not a function parameter"
+                    ))
+                });
+                let param_idx = crate::analyze::function_param_of_local(local);
+                mapping.push(bty.param_of_outer_fn_param(param_idx).unwrap());
+            } else {
+                let local = self.local_of_name_in_bb(name, bty).unwrap_or_else(|| {
+                    self.tcx.dcx().fatal(format!(
+                        "loop invariant refers to `{name}`, which is not a live variable at the loop header"
+                    ))
+                });
+                mapping.push(bty.param_of_local(local).unwrap());
+            }
         }
 
         formula_fn
