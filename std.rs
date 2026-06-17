@@ -331,6 +331,22 @@ mod thrust_models {
     pub fn __invariant_marker<F>(_f: F) {
         unimplemented!()
     }
+
+    #[thrust::def::fn_param_wrapper]
+    pub struct FnParam<T>(std::marker::PhantomData<T>);
+
+    impl<T> Model for FnParam<T> where T: Model {
+        type Ty = FnParam<<T as Model>::Ty>;
+    }
+
+    impl<T> FnParam<T> {
+        #[allow(dead_code)]
+        #[thrust::def::fn_param_at_entry]
+        #[thrust::ignored]
+        pub fn at_entry(self) -> T {
+            unimplemented!()
+        }
+    }
 }
 
 #[thrust::extern_spec_fn]

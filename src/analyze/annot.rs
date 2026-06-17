@@ -153,6 +153,22 @@ pub fn invariant_marker_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn fn_param_wrapper_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("fn_param_wrapper"),
+    ]
+}
+
+pub fn fn_param_at_entry_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("fn_param_at_entry"),
+    ]
+}
+
 pub fn closure_precondition_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
