@@ -327,6 +327,20 @@ impl VisitMut for SelfValueRewriter {
 
         syn::visit_mut::visit_expr_path_mut(self, expr_path);
     }
+
+    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+        if !is_formula_macro(&mac.path) {
+            syn::visit_mut::visit_macro_mut(self, mac);
+            return;
+        }
+
+        let expanded = crate::formula::expand(mac.tokens.clone());
+        let Ok(mut expr) = syn::parse2::<syn::Expr>(expanded) else {
+            return;
+        };
+        self.visit_expr_mut(&mut expr);
+        mac.tokens = expr.into_token_stream();
+    }
 }
 
 struct SelfTypeRewriter {
@@ -383,4 +397,25 @@ impl VisitMut for SelfTypeRewriter {
         let to = &self.to;
         *expr_path = syn::parse_quote!(<#to>::#tail);
     }
+
+    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+        if !is_formula_macro(&mac.path) {
+            syn::visit_mut::visit_macro_mut(self, mac);
+            return;
+        }
+
+        let expanded = crate::formula::expand(mac.tokens.clone());
+        let Ok(mut expr) = syn::parse2::<syn::Expr>(expanded) else {
+            return;
+        };
+        self.visit_expr_mut(&mut expr);
+        mac.tokens = expr.into_token_stream();
+    }
+}
+
+fn is_formula_macro(path: &syn::Path) -> bool {
+    // TODO: identify the macro precisely
+    path.segments
+        .last()
+        .is_some_and(|seg| seg.ident == "formula")
 }
