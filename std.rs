@@ -332,6 +332,7 @@ mod thrust_models {
         unimplemented!()
     }
 
+    #[allow(dead_code)]
     #[thrust::def::fn_param_wrapper]
     pub struct FnParam<T>(std::marker::PhantomData<T>);
 
