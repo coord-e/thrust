@@ -158,6 +158,13 @@ mod thrust_models {
         #[thrust::def::closure_model]
         pub struct Closure<T: ?Sized>(PhantomData<T>);
 
+        impl<T> PartialEq for Closure<T> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &Self) -> bool {
+                unimplemented!()
+            }
+        }
+
         /// Refers to the precondition of a closure in a specification.
         ///
         /// Prefer the `thrust_macros::pre!(f(x))` surface syntax, which desugars to this; the
