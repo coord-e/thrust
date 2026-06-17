@@ -122,6 +122,17 @@ impl BasicBlockType {
             .find_map(|(idx, (l, _))| if *l == local { Some(idx) } else { None })
     }
 
+    pub fn param_of_outer_fn_param(
+        &self,
+        idx: rty::FunctionParamIdx,
+    ) -> Option<rty::FunctionParamIdx> {
+        if idx.index() < self.outer_fn_param_count {
+            Some(rty::FunctionParamIdx::from(self.locals.len() + idx.index()))
+        } else {
+            None
+        }
+    }
+
     pub fn to_function_ty(&self) -> rty::FunctionType {
         self.ty.clone()
     }

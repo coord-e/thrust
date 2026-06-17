@@ -165,20 +165,86 @@ fn expand_invariant(
 
     def_wheres.extend(type_lowering.model_where_predicates());
 
-    // `Self` in a method context: rewrite it to a synthetic generic, then pass
-    // the real `Self` via turbofish (legal in expression position).
-    if crate::tokens_contain_ident(&closure.to_token_stream(), "Self") {
-        let synth: syn::Ident = format_ident!("__ThrustSelf");
-        for param in &mut fn_params {
-            SelfRewriter { synth: &synth }.visit_fn_arg_mut(param);
+    let mut body = closure.body.clone();
+
+    // An invariant may refer to the receiver value `self`; the lifted formula function is free, so
+    // rewrite `self` to a `__thrust_self` parameter. The analyzer binds it back to the loop-carried receiver.
+    let mut rewriter = SelfValueRewriter {
+        to: format_ident!("__thrust_self"),
+    };
+    for param in &mut fn_params {
+        rewriter.visit_fn_arg_mut(param);
+    }
+    rewriter.visit_expr_mut(&mut body);
+
+    let self_used = crate::tokens_contain_ident(&closure.to_token_stream(), "Self")
+        || def_wheres
+            .iter()
+            .any(|pred| crate::tokens_contain_ident(&pred.to_token_stream(), "Self"));
+    if self_used {
+        let Some(outer) = context.and_then(|context| context.outer.as_ref()) else {
+            return Err(syn::Error::new_spanned(
+                closure,
+                "invariant closure cannot refer to `Self` without an enclosing impl/trait context",
+            ));
+        };
+
+        match outer {
+            FnOuterItem::ItemImpl(item_impl) => {
+                // `Self` in an impl method context: rewrite it to the concrete self type everywhere
+                // TODO: Support generic/trait impl
+                let self_ty = &item_impl.self_ty;
+                let mut rewriter = SelfTypeRewriter {
+                    to: *self_ty.clone(),
+                };
+                for param in &mut fn_params {
+                    rewriter.visit_fn_arg_mut(param);
+                }
+                rewriter.visit_expr_mut(&mut body);
+                for pred in &mut def_wheres {
+                    rewriter.visit_where_predicate_mut(pred);
+                }
+            }
+            FnOuterItem::ItemTrait(item_trait) => {
+                // `Self` in a trait method context: rewrite it to a synthetic generic everywhere
+                // it reaches the formula function — parameters, body, and the propagated
+                // where-clause predicates — then pass the real `Self` via turbofish (legal
+                // in expression position).
+                let synth: syn::Ident = format_ident!("__ThrustSelf");
+                def_wheres.push(syn::parse_quote!(#synth: ?Sized));
+
+                let mut rewriter = SelfTypeRewriter {
+                    to: syn::parse_quote!(#synth),
+                };
+                for param in &mut fn_params {
+                    rewriter.visit_fn_arg_mut(param);
+                }
+                rewriter.visit_expr_mut(&mut body);
+                for pred in &mut def_wheres {
+                    rewriter.visit_where_predicate_mut(pred);
+                }
+                def_params.push(quote!(#synth));
+                def_wheres.extend(type_lowering.model_where_predicates_for(&synth));
+
+                // Mirror the host's implicit `Self: Trait` bound onto the synthetic
+                // generic so trait associated types (`Self::Item`) and predicates
+                // (`Self::step`) remain resolvable on it.
+                let trait_ident = &item_trait.ident;
+                let (_, ty_generics, _) = item_trait.generics.split_for_impl();
+                def_wheres.push(syn::parse_quote!(#synth: #trait_ident #ty_generics));
+
+                turbofish_args.push(quote!(Self));
+
+                // Rewriting `Self` to the synthetic generic can yield predicates that
+                // duplicate the synthetic generic's own `Model` bounds; drop the dups.
+                let mut seen = std::collections::HashSet::new();
+                def_wheres.retain(|pred| seen.insert(pred.to_token_stream().to_string()));
+            }
         }
-        def_params.push(quote!(#synth));
-        def_wheres.extend(type_lowering.model_where_predicates_for(&synth));
-        turbofish_args.push(quote!(Self));
     }
 
     let model_ty_params = type_lowering.lower_params(&fn_params);
-    let body = &closure.body;
+    let body = &body;
 
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let name = format_ident!("_thrust_invariant_{}", id);
@@ -211,18 +277,103 @@ fn expand_invariant(
     }))
 }
 
-struct SelfRewriter<'a> {
-    synth: &'a syn::Ident,
+struct SelfValueRewriter {
+    to: syn::Ident,
 }
 
-impl VisitMut for SelfRewriter<'_> {
-    fn visit_path_mut(&mut self, path: &mut syn::Path) {
-        syn::visit_mut::visit_path_mut(self, path);
-        if path.leading_colon.is_none()
-            && path.segments.len() == 1
-            && path.segments[0].ident == "Self"
-        {
-            path.segments[0].ident = self.synth.clone();
+impl VisitMut for SelfValueRewriter {
+    fn visit_pat_ident_mut(&mut self, pat: &mut syn::PatIdent) {
+        if pat.ident == "self" {
+            pat.ident = self.to.clone();
         }
+        syn::visit_mut::visit_pat_ident_mut(self, pat);
+    }
+
+    fn visit_fn_arg_mut(&mut self, arg: &mut syn::FnArg) {
+        match arg {
+            syn::FnArg::Receiver(receiver) => {
+                let to = &self.to;
+                let ty = &receiver.ty;
+                *arg = syn::parse_quote!(#to: #ty);
+            }
+            syn::FnArg::Typed(_) => { /* handled by visit_pat_ident_mut */ }
+        }
+
+        syn::visit_mut::visit_fn_arg_mut(self, arg);
+    }
+
+    fn visit_expr_path_mut(&mut self, expr_path: &mut syn::ExprPath) {
+        if expr_path.qself.is_some() {
+            syn::visit_mut::visit_expr_path_mut(self, expr_path);
+            return;
+        }
+
+        if expr_path.path.leading_colon.is_some() || expr_path.path.segments.len() != 1 {
+            syn::visit_mut::visit_expr_path_mut(self, expr_path);
+            return;
+        }
+
+        if expr_path.path.segments[0].ident == "self" {
+            expr_path.path.segments[0].ident = self.to.clone();
+            return;
+        }
+
+        syn::visit_mut::visit_expr_path_mut(self, expr_path);
+    }
+}
+
+struct SelfTypeRewriter {
+    to: syn::Type,
+}
+
+impl VisitMut for SelfTypeRewriter {
+    fn visit_type_mut(&mut self, ty: &mut syn::Type) {
+        syn::visit_mut::visit_type_mut(self, ty);
+
+        let syn::Type::Path(type_path) = ty else {
+            return;
+        };
+
+        if type_path.qself.is_some() || type_path.path.leading_colon.is_some() {
+            return;
+        }
+
+        let mut segments = type_path.path.segments.iter();
+
+        if segments.next().is_none_or(|first| first.ident != "Self") {
+            return;
+        }
+
+        let tail: syn::punctuated::Punctuated<_, syn::Token![::]> = segments.cloned().collect();
+
+        if tail.is_empty() {
+            *ty = self.to.clone();
+        } else {
+            let to = &self.to;
+            *ty = syn::parse_quote!(<#to>::#tail)
+        };
+    }
+
+    fn visit_expr_path_mut(&mut self, expr_path: &mut syn::ExprPath) {
+        syn::visit_mut::visit_expr_path_mut(self, expr_path);
+
+        if expr_path.qself.is_some() || expr_path.path.leading_colon.is_some() {
+            return;
+        }
+
+        let mut segments = expr_path.path.segments.iter();
+
+        if segments.next().is_none_or(|first| first.ident != "Self") {
+            return;
+        }
+
+        let tail: syn::punctuated::Punctuated<_, syn::Token![::]> = segments.cloned().collect();
+
+        if tail.is_empty() {
+            return;
+        }
+
+        let to = &self.to;
+        *expr_path = syn::parse_quote!(<#to>::#tail);
     }
 }

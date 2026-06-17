@@ -66,6 +66,10 @@ pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
 }
 
+pub fn function_param_of_local(local: Local) -> rty::FunctionParamIdx {
+    rty::FunctionParamIdx::from(local.as_usize() - 1)
+}
+
 pub fn resolve_discr(tcx: TyCtxt<'_>, discr: mir_ty::VariantDiscr) -> u32 {
     match discr {
         mir_ty::VariantDiscr::Relative(i) => i,

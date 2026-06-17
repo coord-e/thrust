@@ -725,6 +725,14 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let value_term = self.to_term(&args[1]);
                         return FormulaOrTerm::Term(array_term.store(index_term, value_term));
                     }
+                    if Some(def_id) == self.def_ids.fn_param_at_entry() {
+                        assert!(
+                            args.is_empty(),
+                            "FnParam::at_entry does not take any arguments"
+                        );
+                        let t = self.to_term(receiver);
+                        return FormulaOrTerm::Term(t);
+                    }
                 }
                 unimplemented!("unsupported method call in formula: {:?}", method)
             }
@@ -780,6 +788,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 vars,
                                 body_formula,
                             ));
+                        }
+                        if Some(def_id) == self.def_ids.fn_param_at_entry() {
+                            assert_eq!(args.len(), 1, "FnParam::at_entry takes exactly 1 argument");
+                            let t = self.to_term(&args[0]);
+                            return FormulaOrTerm::Term(t);
                         }
                         if Some(def_id) == self.def_ids.mut_model_new() {
                             assert_eq!(args.len(), 2, "Mut::new takes exactly 2 arguments");
