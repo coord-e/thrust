@@ -189,12 +189,13 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             type_builder,
             env: HashMap::default(),
         };
-        translator.build_env_from_params();
+        translator.build_env_from_params(false);
         translator
     }
 
     pub fn with_generic_args(mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> Self {
         self.generic_args = generic_args;
+        self.build_env_from_params(true);
         self
     }
 
@@ -205,14 +206,62 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             self.def_ids.clone(),
             self.local_def_id.to_def_id(),
         );
+        self.build_env_from_params(true);
         self
     }
 
-    fn build_env_from_params(&mut self) {
+    fn build_env_from_params(&mut self, use_singleton_terms: bool) {
+        self.env.clear();
         for (idx, param) in self.body.params.iter().enumerate() {
             let param_idx = rty::FunctionParamIdx::from(idx);
-            let term = chc::Term::var(param_idx);
+            let term = if use_singleton_terms {
+                self.singleton_term_for_pat(param.pat)
+                    .unwrap_or_else(|| chc::Term::var(param_idx))
+            } else {
+                chc::Term::var(param_idx)
+            };
             self.build_env_from_pat(term, param.pat);
+        }
+    }
+
+    fn singleton_term_for_pat(
+        &self,
+        pat: &'tcx rustc_hir::Pat<'tcx>,
+    ) -> Option<chc::Term<rty::FunctionParamIdx>> {
+        let mir_ty = self.pat_ty(pat);
+        self.receiver_closure_ty(mir_ty)?;
+        let ty = self.type_builder.build(mir_ty);
+        ty.to_sort()
+            .is_singleton()
+            .then(|| Self::singleton_term_for_ty(&ty))
+            .flatten()
+    }
+
+    fn singleton_term_for_ty(
+        ty: &rty::Type<rty::Closed>,
+    ) -> Option<chc::Term<rty::FunctionParamIdx>> {
+        match ty {
+            rty::Type::String | rty::Type::Never | rty::Type::Function(_) => {
+                Some(chc::Term::null())
+            }
+            rty::Type::Tuple(ty) => ty
+                .elems
+                .iter()
+                .map(|elem| Self::singleton_term_for_ty(&elem.ty))
+                .collect::<Option<Vec<_>>>()
+                .map(chc::Term::tuple),
+            rty::Type::Pointer(ty) => {
+                let elem = Self::singleton_term_for_ty(&ty.elem.ty)?;
+                match ty.kind {
+                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut) => {
+                        Some(chc::Term::box_(elem))
+                    }
+                    rty::PointerKind::Ref(rty::RefKind::Mut) => {
+                        Some(chc::Term::mut_(elem.clone(), elem))
+                    }
+                }
+            }
+            _ => None,
         }
     }
 
@@ -278,20 +327,44 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .expect("expected a term")
     }
 
-    /// Resolves the [`rty::FunctionType`] of the closure parameter referred to by `receiver` (the
-    /// closure argument of a `closure_precondition(..)` / `closure_postcondition(..)` call).
-    ///
-    /// The receiver is instantiated to the actual closure type in the formula function; its `DefId`
-    /// is used to look up the contract collected by the analyzer.
-    fn receiver_closure_fn_type(
-        &self,
-        receiver: &'tcx rustc_hir::Expr<'tcx>,
-    ) -> Option<rty::FunctionType> {
-        let mut recv_ty = self.expr_ty(receiver);
-        if let mir_ty::TyKind::Ref(_, inner, _) = recv_ty.kind() {
-            recv_ty = *inner;
+    /// Removes the Rust-level borrow inserted by `pre!`/`post!` for the marker function call.
+    fn strip_marker_borrow_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> mir_ty::Ty<'tcx> {
+        let ty = self.expr_ty(expr);
+        if let mir_ty::TyKind::Ref(_, inner, _) = ty.kind() {
+            *inner
+        } else {
+            ty
         }
-        let mir_ty::TyKind::Closure(def_id, args) = recv_ty.kind() else {
+    }
+
+    /// Peels closure-carrying model types until it reaches the actual closure type.
+    fn receiver_closure_ty(&self, mut ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
+        loop {
+            if matches!(ty.kind(), mir_ty::TyKind::Closure(_, _)) {
+                return Some(ty);
+            }
+
+            let mir_ty::TyKind::Adt(adt, args) = ty.kind() else {
+                return None;
+            };
+
+            if Some(adt.did()) == self.def_ids.closure_model()
+                || Some(adt.did()) == self.def_ids.mut_model()
+            {
+                ty = args.type_at(0);
+            } else {
+                return None;
+            }
+        }
+    }
+
+    /// Resolves the [`rty::FunctionType`] of the closure contract referred to by the receiver.
+    ///
+    /// The receiver type is instantiated to the actual closure type in the formula function; its
+    /// `DefId` is used to look up the contract collected by the analyzer.
+    fn receiver_closure_fn_type(&self, receiver_ty: mir_ty::Ty<'tcx>) -> Option<rty::FunctionType> {
+        let closure_ty = self.receiver_closure_ty(receiver_ty)?;
+        let mir_ty::TyKind::Closure(def_id, args) = closure_ty.kind() else {
             return None;
         };
         self.analyzer
@@ -326,6 +399,40 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
+    fn closure_receiver_arg(
+        &self,
+        fn_ty: &rty::FunctionType,
+        receiver_ty: mir_ty::Ty<'tcx>,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> (
+        chc::Term<rty::FunctionParamIdx>,
+        Option<chc::Formula<rty::FunctionParamIdx>>,
+    ) {
+        let term = self.closure_value_term(receiver);
+        let Some(env_param) = fn_ty.params.get(rty::FunctionParamIdx::from(0usize)) else {
+            return (term, None);
+        };
+        let Some(env_ptr) = env_param.ty.as_pointer() else {
+            return (term, None);
+        };
+
+        let receiver_rty = self.type_builder.build(receiver_ty);
+        let receiver_ptr = receiver_rty.as_pointer();
+        match (receiver_ptr.map(|p| p.kind), env_ptr.kind) {
+            (
+                Some(rty::PointerKind::Ref(rty::RefKind::Mut)),
+                rty::PointerKind::Ref(rty::RefKind::Immut) | rty::PointerKind::Own,
+            ) => {
+                let frame = term
+                    .clone()
+                    .mut_final()
+                    .equal_to(term.clone().mut_current());
+                (term.mut_current().boxed(), Some(frame.into()))
+            }
+            _ => (term, None),
+        }
+    }
+
     /// The values of a closure's parameters: the closure's first (RustCall) parameter is its
     /// environment, which is the closure value itself, followed by the logical arguments.
     fn translate_closure_precondition(
@@ -333,12 +440,15 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         receiver: &'tcx rustc_hir::Expr<'tcx>,
         args: &'tcx rustc_hir::Expr<'tcx>,
     ) -> FormulaOrTerm<rty::FunctionParamIdx> {
-        let fn_ty = self.receiver_closure_fn_type(receiver).unwrap_or_else(|| {
-            panic!(
-                "precondition used on a non-closure parameter: {:?}",
-                receiver
-            )
-        });
+        let receiver_ty = self.strip_marker_borrow_ty(receiver);
+        let fn_ty = self
+            .receiver_closure_fn_type(receiver_ty)
+            .unwrap_or_else(|| {
+                panic!(
+                    "precondition used on a non-closure parameter: {:?}",
+                    receiver
+                )
+            });
         let logical_args = self.closure_spec_args(args);
         // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
         // environment is the closure value itself.
@@ -348,9 +458,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure precondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.closure_value_term(receiver))
-            .chain(logical_args)
-            .collect();
+        let (receiver_arg, _) = self.closure_receiver_arg(&fn_ty, receiver_ty, receiver);
+        let param_args: Vec<_> = std::iter::once(receiver_arg).chain(logical_args).collect();
         FormulaOrTerm::Formula(fn_ty.precondition_formula(&param_args))
     }
 
@@ -360,12 +469,15 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         args: &'tcx rustc_hir::Expr<'tcx>,
         result: &'tcx rustc_hir::Expr<'tcx>,
     ) -> FormulaOrTerm<rty::FunctionParamIdx> {
-        let fn_ty = self.receiver_closure_fn_type(receiver).unwrap_or_else(|| {
-            panic!(
-                "postcondition used on a non-closure parameter: {:?}",
-                receiver
-            )
-        });
+        let receiver_ty = self.strip_marker_borrow_ty(receiver);
+        let fn_ty = self
+            .receiver_closure_fn_type(receiver_ty)
+            .unwrap_or_else(|| {
+                panic!(
+                    "postcondition used on a non-closure parameter: {:?}",
+                    receiver
+                )
+            });
         let logical_args = self.closure_spec_args(args);
         // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
         // environment is the closure value itself.
@@ -375,11 +487,14 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure postcondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.closure_value_term(receiver))
-            .chain(logical_args)
-            .collect();
+        let (receiver_arg, frame) = self.closure_receiver_arg(&fn_ty, receiver_ty, receiver);
+        let param_args: Vec<_> = std::iter::once(receiver_arg).chain(logical_args).collect();
         let result = self.to_term(result);
-        FormulaOrTerm::Formula(fn_ty.postcondition_formula(&param_args, result))
+        let post = fn_ty.postcondition_formula(&param_args, result);
+        FormulaOrTerm::Formula(match frame {
+            Some(frame) => frame.and(post),
+            None => post,
+        })
     }
 
     fn variant_ctor_term(
