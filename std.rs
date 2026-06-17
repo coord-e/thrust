@@ -172,7 +172,7 @@ mod thrust_models {
         #[allow(dead_code)]
         #[thrust::def::closure_precondition]
         #[thrust::ignored]
-        pub fn closure_precondition<F: ?Sized, Args>(_f: &F, _args: Args) -> bool {
+        pub fn closure_precondition<F, Args>(_f: F, _args: Args) -> bool {
             unimplemented!()
         }
 
@@ -183,7 +183,7 @@ mod thrust_models {
         #[allow(dead_code)]
         #[thrust::def::closure_postcondition]
         #[thrust::ignored]
-        pub fn closure_postcondition<F: ?Sized, Args, R>(_f: &F, _args: Args, _result: R) -> bool {
+        pub fn closure_postcondition<F, Args, R>(_f: F, _args: Args, _result: R) -> bool {
             unimplemented!()
         }
 

@@ -287,10 +287,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         &self,
         receiver: &'tcx rustc_hir::Expr<'tcx>,
     ) -> Option<rty::FunctionType> {
-        let mut recv_ty = self.expr_ty(receiver);
-        if let mir_ty::TyKind::Ref(_, inner, _) = recv_ty.kind() {
-            recv_ty = *inner;
-        }
+        let recv_ty = self.expr_ty(receiver);
         let (def_id, args) = match recv_ty.kind() {
             mir_ty::TyKind::Closure(def_id, args) => (def_id, args),
             mir_ty::TyKind::Adt(adt_def, args)
@@ -320,21 +317,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
-    /// The term of the closure value referred to by `receiver` (the `&f` argument of a marker call).
-    fn closure_value_term(
-        &self,
-        receiver: &'tcx rustc_hir::Expr<'tcx>,
-    ) -> chc::Term<rty::FunctionParamIdx> {
-        match receiver.kind {
-            rustc_hir::ExprKind::AddrOf(
-                rustc_hir::BorrowKind::Ref,
-                rustc_hir::Mutability::Not,
-                operand,
-            ) => self.to_term(operand),
-            _ => self.to_term(receiver),
-        }
-    }
-
     /// The values of a closure's parameters: the closure's first (RustCall) parameter is its
     /// environment, which is the closure value itself, followed by the logical arguments.
     fn translate_closure_precondition(
@@ -357,7 +339,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure precondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.closure_value_term(receiver))
+        let param_args: Vec<_> = std::iter::once(self.to_term(receiver))
             .chain(logical_args)
             .collect();
         FormulaOrTerm::Formula(fn_ty.precondition_formula(&param_args))
@@ -384,7 +366,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure postcondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.closure_value_term(receiver))
+        let param_args: Vec<_> = std::iter::once(self.to_term(receiver))
             .chain(logical_args)
             .collect();
         let result = self.to_term(result);
