@@ -171,10 +171,13 @@ pub struct AnnotFnTranslator<'a, 'tcx> {
 }
 
 impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
-    pub fn new(analyzer: &'a analyze::Analyzer<'tcx>, local_def_id: LocalDefId) -> Self {
+    pub fn new(
+        analyzer: &'a analyze::Analyzer<'tcx>,
+        local_def_id: LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Self {
         let tcx = analyzer.tcx();
         let body = tcx.hir_body_owned_by(local_def_id);
-        let generic_args = tcx.mk_args(&[]);
         let typeck = tcx.typeck(local_def_id);
         let def_ids = analyzer.def_ids();
         let type_builder = TypeBuilder::new(tcx, def_ids.clone(), local_def_id.to_def_id());
@@ -193,11 +196,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         translator
     }
 
-    pub fn with_generic_args(mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> Self {
-        self.generic_args = generic_args;
-        self
-    }
-
     pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>) -> Self {
         self.def_ids = def_ids;
         self.type_builder = TypeBuilder::new(
@@ -211,9 +209,56 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     fn build_env_from_params(&mut self) {
         for (idx, param) in self.body.params.iter().enumerate() {
             let param_idx = rty::FunctionParamIdx::from(idx);
-            let term = chc::Term::var(param_idx);
+            let mir_ty = self.pat_ty(param.pat);
+            let ty = self.type_builder.build(mir_ty);
+            let term = if !self.is_fn_param_wrapper_ty(mir_ty) && ty.to_sort().is_singleton() {
+                // the analyzer don't expect params with singleton sorts to be used in formula...
+                // FIXME: fix the analyzer side to uniformly accept all params
+                Self::singleton_term_for_ty(&ty).unwrap()
+            } else {
+                chc::Term::var(param_idx)
+            };
             self.build_env_from_pat(term, param.pat);
         }
+    }
+
+    fn singleton_term_for_ty(
+        ty: &rty::Type<rty::Closed>,
+    ) -> Option<chc::Term<rty::FunctionParamIdx>> {
+        match ty {
+            rty::Type::String | rty::Type::Never | rty::Type::Function(_) => {
+                Some(chc::Term::null())
+            }
+            rty::Type::Tuple(ty) => ty
+                .elems
+                .iter()
+                .map(|elem| Self::singleton_term_for_ty(&elem.ty))
+                .collect::<Option<Vec<_>>>()
+                .map(chc::Term::tuple),
+            rty::Type::Pointer(ty) => {
+                let elem = Self::singleton_term_for_ty(&ty.elem.ty)?;
+                match ty.kind {
+                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut) => {
+                        Some(chc::Term::box_(elem))
+                    }
+                    rty::PointerKind::Ref(rty::RefKind::Mut) => {
+                        Some(chc::Term::mut_(elem.clone(), elem))
+                    }
+                }
+            }
+            rty::Type::Array(ty) => {
+                if Self::singleton_term_for_ty(&ty.elem.ty).is_some() {
+                    panic!("singleton array type is not supported in formula: {:?}", ty);
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    fn is_fn_param_wrapper_ty(&self, ty: mir_ty::Ty<'tcx>) -> bool {
+        ty.ty_adt_def()
+            .is_some_and(|def| Some(def.did()) == self.def_ids.fn_param_wrapper())
     }
 
     fn build_env_from_pat(
