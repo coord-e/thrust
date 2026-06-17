@@ -37,8 +37,10 @@ impl<'a> FormulaFnTypeLowering<'a> {
 
     /// Maps each function parameter `x: T` to `x: <T as thrust_models::Model>::Ty`.
     ///
-    /// Parameters whose type is a closure/function type parameter `F` stay as `F`, so marker
-    /// functions can recover the instantiated closure definition from the argument type.
+    /// Closure/function type parameters are first rewritten to
+    /// `thrust_models::model::Closure<F>`, including when nested in references such as `&mut F`, so
+    /// specifications can refer to the modeled closure environment while marker functions can still
+    /// recover the instantiated closure definition from `F`.
     pub fn lower_params<'ast, I>(&self, args: I) -> TokenStream2
     where
         I: IntoIterator<Item = &'ast syn::FnArg>,
@@ -53,12 +55,9 @@ impl<'a> FormulaFnTypeLowering<'a> {
                 syn::FnArg::Typed(pt) => {
                     let pat = &pt.pat;
                     let ty = &pt.ty;
-                    if self.is_closure_type_param(ty) {
-                        model_inputs.push(syn::parse_quote!(#pat: #ty));
-                    } else {
-                        model_inputs
-                            .push(syn::parse_quote!(#pat: <#ty as thrust_models::Model>::Ty));
-                    }
+                    let lowered_ty = self.lower_closure_type_params_in_ty(ty);
+                    model_inputs
+                        .push(syn::parse_quote!(#pat: <#lowered_ty as thrust_models::Model>::Ty));
                 }
             }
         }
@@ -69,11 +68,8 @@ impl<'a> FormulaFnTypeLowering<'a> {
         match ret {
             syn::ReturnType::Default => syn::parse_quote!(<() as thrust_models::Model>::Ty),
             syn::ReturnType::Type(_, ty) => {
-                if self.is_closure_type_param(ty) {
-                    *ty.clone()
-                } else {
-                    syn::parse_quote!(<#ty as thrust_models::Model>::Ty)
-                }
+                let lowered_ty = self.lower_closure_type_params_in_ty(ty);
+                syn::parse_quote!(<#lowered_ty as thrust_models::Model>::Ty)
             }
         }
     }
@@ -171,17 +167,34 @@ impl<'a> FormulaFnTypeLowering<'a> {
         predicates
     }
 
-    fn is_closure_type_param(&self, ty: &syn::Type) -> bool {
-        let syn::Type::Path(tp) = ty else {
-            return false;
-        };
-        if tp.qself.is_some() {
-            return false;
+    fn lower_closure_type_params_in_ty(&self, ty: &syn::Type) -> syn::Type {
+        match ty {
+            syn::Type::Path(tp)
+                if tp.qself.is_none()
+                    && tp
+                        .path
+                        .get_ident()
+                        .is_some_and(|ident| self.closure_type_params.contains(ident)) =>
+            {
+                syn::parse_quote!(thrust_models::model::Closure<#ty>)
+            }
+            syn::Type::Reference(tr) => {
+                let mut tr = tr.clone();
+                tr.elem = Box::new(self.lower_closure_type_params_in_ty(&tr.elem));
+                syn::Type::Reference(tr)
+            }
+            syn::Type::Tuple(tt) => {
+                let mut tt = tt.clone();
+                tt.elems = tt
+                    .elems
+                    .iter()
+                    .map(|elem| self.lower_closure_type_params_in_ty(elem))
+                    .collect();
+                syn::Type::Tuple(tt)
+            }
+            // TODO: support more types including ADT
+            _ => ty.clone(),
         }
-        let Some(ident) = tp.path.get_ident() else {
-            return false;
-        };
-        self.closure_type_params.contains(ident)
     }
 }
 

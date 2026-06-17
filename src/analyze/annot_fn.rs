@@ -291,8 +291,17 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         if let mir_ty::TyKind::Ref(_, inner, _) = recv_ty.kind() {
             recv_ty = *inner;
         }
-        let mir_ty::TyKind::Closure(def_id, args) = recv_ty.kind() else {
-            return None;
+        let (def_id, args) = match recv_ty.kind() {
+            mir_ty::TyKind::Closure(def_id, args) => (def_id, args),
+            mir_ty::TyKind::Adt(adt_def, args)
+                if Some(adt_def.did()) == self.def_ids.closure_model() =>
+            {
+                let mir_ty::TyKind::Closure(def_id, args) = args.type_at(0).kind() else {
+                    return None;
+                };
+                (def_id, args)
+            }
+            _ => return None,
         };
         self.analyzer
             .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
