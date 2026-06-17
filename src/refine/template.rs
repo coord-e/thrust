@@ -543,26 +543,12 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         self
     }
 
-    pub fn param_rty(
-        &mut self,
-        idx: rty::FunctionParamIdx,
-        ty: rty::RefinedType<rty::FunctionParamIdx>,
-    ) -> &mut Self {
-        self.param_rtys.insert(idx, ty);
-        self
-    }
-
     pub fn ret_refinement(
         &mut self,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
     ) -> &mut Self {
         let ty = self.inner.build(self.ret_ty);
         self.ret_rty = Some(rty::RefinedType::new(ty.vacuous(), refinement));
-        self
-    }
-
-    pub fn ret_rty(&mut self, rty: rty::RefinedType<rty::FunctionParamIdx>) -> &mut Self {
-        self.ret_rty = Some(rty);
         self
     }
 
