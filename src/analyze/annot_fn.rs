@@ -323,27 +323,30 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .expect("expected a term")
     }
 
-    /// Resolves the [`rty::FunctionType`] of the closure parameter referred to by `receiver` (the
-    /// closure argument of a `closure_precondition(..)` / `closure_postcondition(..)` call).
-    ///
-    /// The receiver is instantiated to the actual closure type in the formula function; its `DefId`
-    /// is used to look up the contract collected by the analyzer.
-    fn receiver_closure_fn_type(
-        &self,
-        receiver: &'tcx rustc_hir::Expr<'tcx>,
-    ) -> Option<rty::FunctionType> {
-        let recv_ty = self.expr_ty(receiver);
-        let (def_id, args) = match recv_ty.kind() {
-            mir_ty::TyKind::Closure(def_id, args) => (def_id, args),
-            mir_ty::TyKind::Adt(adt_def, args)
-                if Some(adt_def.did()) == self.def_ids.closure_model() =>
-            {
-                let mir_ty::TyKind::Closure(def_id, args) = args.type_at(0).kind() else {
-                    return None;
-                };
-                (def_id, args)
+    fn receiver_closure_ty(&self, ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
+        let inner = match ty.kind() {
+            mir_ty::TyKind::Adt(adt, args) if Some(adt.did()) == self.def_ids.mut_model() => {
+                args.type_at(0)
             }
-            _ => return None,
+            mir_ty::TyKind::Ref(_, inner_ty, mir_ty::Mutability::Not) => *inner_ty,
+            _ => ty,
+        };
+        match inner.kind() {
+            mir_ty::TyKind::Adt(adt, args) if Some(adt.did()) == self.def_ids.closure_model() => {
+                Some(args.type_at(0))
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolves the [`rty::FunctionType`] of the closure contract referred to by the receiver.
+    ///
+    /// The receiver type is instantiated to the actual closure type in the formula function; its
+    /// `DefId` is used to look up the contract collected by the analyzer.
+    fn receiver_closure_fn_type(&self, receiver_ty: mir_ty::Ty<'tcx>) -> Option<rty::FunctionType> {
+        let closure_ty = self.receiver_closure_ty(receiver_ty)?;
+        let mir_ty::TyKind::Closure(def_id, args) = closure_ty.kind() else {
+            return None;
         };
         self.analyzer
             .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
@@ -369,12 +372,15 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         receiver: &'tcx rustc_hir::Expr<'tcx>,
         args: &'tcx rustc_hir::Expr<'tcx>,
     ) -> FormulaOrTerm<rty::FunctionParamIdx> {
-        let fn_ty = self.receiver_closure_fn_type(receiver).unwrap_or_else(|| {
-            panic!(
-                "precondition used on a non-closure parameter: {:?}",
-                receiver
-            )
-        });
+        let receiver_ty = self.expr_ty(receiver);
+        let fn_ty = self
+            .receiver_closure_fn_type(receiver_ty)
+            .unwrap_or_else(|| {
+                panic!(
+                    "precondition used on a non-closure parameter: {:?}",
+                    receiver
+                )
+            });
         let logical_args = self.closure_spec_args(args);
         // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
         // environment is the closure value itself.
@@ -396,12 +402,15 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         args: &'tcx rustc_hir::Expr<'tcx>,
         result: &'tcx rustc_hir::Expr<'tcx>,
     ) -> FormulaOrTerm<rty::FunctionParamIdx> {
-        let fn_ty = self.receiver_closure_fn_type(receiver).unwrap_or_else(|| {
-            panic!(
-                "postcondition used on a non-closure parameter: {:?}",
-                receiver
-            )
-        });
+        let receiver_ty = self.expr_ty(receiver);
+        let fn_ty = self
+            .receiver_closure_fn_type(receiver_ty)
+            .unwrap_or_else(|| {
+                panic!(
+                    "postcondition used on a non-closure parameter: {:?}",
+                    receiver
+                )
+            });
         let logical_args = self.closure_spec_args(args);
         // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
         // environment is the closure value itself.
