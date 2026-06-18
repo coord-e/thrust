@@ -145,6 +145,14 @@ pub fn exists_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn forall_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("forall"),
+    ]
+}
+
 pub fn implies_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

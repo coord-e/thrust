@@ -333,6 +333,13 @@ mod thrust_models {
     }
 
     #[allow(dead_code)]
+    #[thrust::def::forall]
+    #[thrust::ignored]
+    pub fn forall<T>(_x: T) -> bool {
+        unimplemented!()
+    }
+
+    #[allow(dead_code)]
     #[thrust::def::implies]
     #[thrust::ignored]
     pub fn implies(_lhs: bool, _rhs: bool) -> bool {
