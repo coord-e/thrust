@@ -7,7 +7,7 @@
 //! references them.
 
 use proc_macro::TokenStream;
-use proc_macro2::TokenStream as TokenStream2;
+use proc_macro2::{Group, Ident, TokenStream as TokenStream2, TokenTree};
 use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse_macro_input, punctuated::Punctuated, FnArg, GenericParam, Generics, WherePredicate,
@@ -16,6 +16,9 @@ use syn::{
 use crate::{fn_outer_item::FnOuterItem, FormulaFnTypeLowering};
 
 pub fn expand_predicate(item: TokenStream) -> TokenStream {
+    // Predicate bodies are consumed by the plugin as a raw SMT-LIB string literal
+    // (see `analyze::local_def::define_as_predicate`), not as formula expressions,
+    // so they are not routed through `formula!`.
     let func = parse_macro_input!(item as FnItemWithSignature);
     let outer_context = match extract_outer_context(&func) {
         Ok(ctx) => ctx,
@@ -51,7 +54,7 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
 }
 
 pub fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let expr = TokenStream2::from(attr);
+    let expr = crate::formula::expand(attr.into());
     let mut func = parse_macro_input!(item as FnItemWithSignature);
 
     let (req_expr, ens_expr) = match extract_requires_ensures(&mut func) {
@@ -66,7 +69,7 @@ pub fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 pub fn expand_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let expr = TokenStream2::from(attr);
+    let expr = crate::formula::expand(attr.into());
     let mut func = parse_macro_input!(item as FnItemWithSignature);
 
     let (req_expr, ens_expr) = match extract_requires_ensures(&mut func) {
@@ -489,10 +492,39 @@ fn rewrite_self_in_expr(expr: &mut syn::Expr) {
                 *ident = format_ident!("self_");
             }
         }
+
+        // syn skips macro token streams, so rewrite `self` inside the
+        // `formula!(..)` wrapper by hand.
+        fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+            let self_ = format_ident!("self_");
+            mac.tokens = std::mem::take(&mut mac.tokens)
+                .into_iter()
+                .map(|tt| rewrite_self_in_tokens(tt, &self_))
+                .collect();
+        }
     }
 
     use syn::visit_mut::VisitMut as _;
     Visitor.visit_expr_mut(expr);
+}
+
+/// Replaces a `self` identifier with `self_`, recursing into groups. Operates on
+/// a single token tree so callers can `map` it over a stream.
+pub fn rewrite_self_in_tokens(token: impl Into<TokenTree>, self_: &Ident) -> TokenTree {
+    match token.into() {
+        TokenTree::Ident(id) if id == "self" => TokenTree::Ident(self_.clone()),
+        TokenTree::Group(g) => {
+            let inner = g
+                .stream()
+                .into_iter()
+                .map(|tt| rewrite_self_in_tokens(tt, self_))
+                .collect();
+            let mut new_group = Group::new(g.delimiter(), inner);
+            new_group.set_span(g.span());
+            TokenTree::Group(new_group)
+        }
+        other => other,
+    }
 }
 
 /// Returns `<T: Bound, U, 'a>` — the generic param list for function definitions,

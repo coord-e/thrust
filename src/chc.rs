@@ -1251,6 +1251,7 @@ pub enum Formula<V = TermVarIdx> {
     Not(Box<Formula<V>>),
     And(Vec<Formula<V>>),
     Or(Vec<Formula<V>>),
+    Implies(Box<Formula<V>>, Box<Formula<V>>),
     Exists(Vec<(String, Sort)>, Box<Formula<V>>),
 }
 
@@ -1293,6 +1294,13 @@ where
                 );
                 inner.group()
             }
+            Formula::Implies(lhs, rhs) => lhs
+                .pretty_atom(allocator)
+                .append(allocator.space())
+                .append(allocator.text("==>"))
+                .append(allocator.line())
+                .append(rhs.pretty_atom(allocator))
+                .group(),
             Formula::Exists(vars, fo) => {
                 let vars = allocator.intersperse(
                     vars.iter().map(|(name, sort)| {
@@ -1327,7 +1335,7 @@ impl<V> Formula<V> {
         D::Doc: Clone,
     {
         match self {
-            Formula::And(_) | Formula::Or(_) | Formula::Exists { .. } => {
+            Formula::And(_) | Formula::Or(_) | Formula::Implies(_, _) | Formula::Exists { .. } => {
                 self.pretty(allocator).parens()
             }
             _ => self.pretty(allocator),
@@ -1348,6 +1356,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => fo.is_bottom(),
             Formula::And(fs) => fs.iter().all(Formula::is_top),
             Formula::Or(fs) => fs.iter().any(Formula::is_top),
+            Formula::Implies(lhs, rhs) => lhs.is_bottom() || rhs.is_top(),
             Formula::Exists(_, fo) => fo.is_top(),
         }
     }
@@ -1358,6 +1367,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => fo.is_top(),
             Formula::And(fs) => fs.iter().any(Formula::is_bottom),
             Formula::Or(fs) => fs.iter().all(Formula::is_bottom),
+            Formula::Implies(lhs, rhs) => lhs.is_top() && rhs.is_bottom(),
             Formula::Exists(_, fo) => fo.is_bottom(),
         }
     }
@@ -1389,6 +1399,10 @@ impl<V> Formula<V> {
         }
     }
 
+    pub fn implies(self, other: Self) -> Self {
+        Formula::Implies(Box::new(self), Box::new(other))
+    }
+
     pub fn exists(vars: Vec<(String, Sort)>, body: Self) -> Self {
         Formula::Exists(vars, Box::new(body))
     }
@@ -1406,6 +1420,9 @@ impl<V> Formula<V> {
                 Formula::And(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect())
             }
             Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.subst_var(&mut f)).collect()),
+            Formula::Implies(lhs, rhs) => {
+                Formula::Implies(Box::new(lhs.subst_var(&mut f)), Box::new(rhs.subst_var(f)))
+            }
             Formula::Exists(vars, fo) => Formula::Exists(vars, Box::new(fo.subst_var(f))),
         }
     }
@@ -1421,6 +1438,9 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Formula::Not(Box::new(fo.map_var(&mut f))),
             Formula::And(fs) => Formula::And(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
             Formula::Or(fs) => Formula::Or(fs.into_iter().map(|fo| fo.map_var(&mut f)).collect()),
+            Formula::Implies(lhs, rhs) => {
+                Formula::Implies(Box::new(lhs.map_var(&mut f)), Box::new(rhs.map_var(f)))
+            }
             Formula::Exists(vars, fo) => Formula::Exists(vars, Box::new(fo.map_var(f))),
         }
     }
@@ -1435,6 +1455,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Box::new(fo.fv()),
             Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::fv)),
+            Formula::Implies(lhs, rhs) => Box::new(lhs.fv().chain(rhs.fv())),
             Formula::Exists(_, fo) => Box::new(fo.fv()),
         }
     }
@@ -1449,6 +1470,7 @@ impl<V> Formula<V> {
             Formula::Not(fo) => Box::new(fo.iter_atoms()),
             Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
             Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::iter_atoms)),
+            Formula::Implies(lhs, rhs) => Box::new(lhs.iter_atoms().chain(rhs.iter_atoms())),
             Formula::Exists(_, fo) => Box::new(fo.iter_atoms()),
         }
     }
@@ -1469,6 +1491,17 @@ impl<V> Formula<V> {
         match self {
             Formula::Atom(_atom) => {}
             Formula::Not(fo) => fo.simplify(),
+            Formula::Implies(lhs, rhs) => {
+                lhs.simplify();
+                rhs.simplify();
+                if lhs.is_bottom() || rhs.is_top() {
+                    *self = Formula::top();
+                } else if lhs.is_top() {
+                    *self = std::mem::take(&mut **rhs);
+                } else if rhs.is_bottom() {
+                    *self = std::mem::take(&mut **lhs).not();
+                }
+            }
             Formula::And(fs) => {
                 for fo in &mut *fs {
                     fo.simplify();
@@ -1624,7 +1657,7 @@ where
                 .into_iter()
                 .map(|a| a.guarded(guard.clone()))
                 .collect(),
-            formula: guard.not().or(formula),
+            formula: guard.implies(formula),
         }
     }
 }

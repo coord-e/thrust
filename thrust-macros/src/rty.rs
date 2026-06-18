@@ -171,8 +171,11 @@ fn expand_with_annotations(
     let mut path_stmts = Vec::new();
     for mut annotation in annotations {
         if has_receiver {
-            annotation.refined_type.formula =
-                rewrite_self_in_tokens(annotation.refined_type.formula);
+            let self_ = format_ident!("self_");
+            annotation.refined_type.formula = std::mem::take(&mut annotation.refined_type.formula)
+                .into_iter()
+                .map(|tt| crate::spec::rewrite_self_in_tokens(tt, &self_))
+                .collect();
         }
         formula_fns.push(build_formula_fn(&func, outer_context.as_ref(), &annotation));
         path_stmts.push(build_refinement_path_stmt(&func, &annotation));
@@ -404,20 +407,6 @@ fn param_index(func: &FnItemWithSignature, name: &syn::Ident) -> syn::Result<usi
     })
 }
 
-fn rewrite_self_in_tokens(tokens: TokenStream2) -> TokenStream2 {
-    tokens
-        .into_iter()
-        .map(|tt| match tt {
-            TokenTree2::Ident(id) if id == "self" => TokenTree2::Ident(format_ident!("self_")),
-            TokenTree2::Group(g) => {
-                let inner = rewrite_self_in_tokens(g.stream());
-                TokenTree2::Group(proc_macro2::Group::new(g.delimiter(), inner))
-            }
-            other => other,
-        })
-        .collect()
-}
-
 fn formula_fn_name(func: &FnItemWithSignature, ann: &RefinedTypeAnnotation) -> syn::Ident {
     let pos = ann
         .position
@@ -452,7 +441,7 @@ fn build_formula_fn(
     let extended_where = extended_where_clause(func, &model_preds);
     let binder = &ann.refined_type.binder;
     let binder_ty = &ann.refined_type.binder_ty;
-    let formula = &ann.refined_type.formula;
+    let formula = crate::formula::wrap_expr(ann.refined_type.formula.clone());
 
     quote! {
         #[allow(unused_variables)]

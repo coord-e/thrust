@@ -3,6 +3,7 @@ use proc_macro2::{TokenStream as TokenStream2, TokenTree as TokenTree2};
 
 mod context;
 mod fn_outer_item;
+mod formula;
 mod formula_fn_type_lowering;
 mod invariant;
 mod invariant_context;
@@ -30,6 +31,12 @@ pub fn post(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn context(_attr: TokenStream, item: TokenStream) -> TokenStream {
     context::expand(item)
+}
+
+/// Preprocesses a formula body (see [`mod@formula`]); not written by hand.
+#[proc_macro]
+pub fn formula(input: TokenStream) -> TokenStream {
+    formula::expand(input.into()).into()
 }
 
 /// Declares a loop invariant inside a loop body:

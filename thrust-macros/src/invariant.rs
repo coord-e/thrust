@@ -34,7 +34,6 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, ToTokens};
 use syn::{
     parse::{Parse, ParseStream},
-    parse_macro_input,
     visit_mut::VisitMut,
     FnArg, GenericParam, Signature, WherePredicate,
 };
@@ -46,7 +45,11 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// Expands `invariant!(CLOSURE)`: a bare predicate closure with no threaded
 /// context.
 pub fn expand(input: TokenStream) -> TokenStream {
-    let closure = parse_macro_input!(input as syn::ExprClosure);
+    let input = crate::formula::wrap_closure_body(input.into());
+    let closure = match syn::parse2::<syn::ExprClosure>(input) {
+        Ok(closure) => closure,
+        Err(e) => return e.to_compile_error().into(),
+    };
     match expand_invariant(&closure, None) {
         Ok(expr) => expr.into_token_stream().into(),
         Err(e) => e.to_compile_error().into(),
@@ -75,7 +78,11 @@ pub fn expand_with_context(input: TokenStream) -> TokenStream {
         }
     }
 
-    let WithContext { closure, context } = parse_macro_input!(input as WithContext);
+    let input = crate::formula::wrap_closure_body(input.into());
+    let WithContext { closure, context } = match syn::parse2::<WithContext>(input) {
+        Ok(parsed) => parsed,
+        Err(e) => return e.to_compile_error().into(),
+    };
     match expand_invariant(&closure, Some(&context)) {
         Ok(expr) => expr.into_token_stream().into(),
         Err(e) => e.to_compile_error().into(),
@@ -320,6 +327,20 @@ impl VisitMut for SelfValueRewriter {
 
         syn::visit_mut::visit_expr_path_mut(self, expr_path);
     }
+
+    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+        if !is_formula_macro(&mac.path) {
+            syn::visit_mut::visit_macro_mut(self, mac);
+            return;
+        }
+
+        let expanded = crate::formula::expand(mac.tokens.clone());
+        let Ok(mut expr) = syn::parse2::<syn::Expr>(expanded) else {
+            return;
+        };
+        self.visit_expr_mut(&mut expr);
+        mac.tokens = expr.into_token_stream();
+    }
 }
 
 struct SelfTypeRewriter {
@@ -376,4 +397,25 @@ impl VisitMut for SelfTypeRewriter {
         let to = &self.to;
         *expr_path = syn::parse_quote!(<#to>::#tail);
     }
+
+    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+        if !is_formula_macro(&mac.path) {
+            syn::visit_mut::visit_macro_mut(self, mac);
+            return;
+        }
+
+        let expanded = crate::formula::expand(mac.tokens.clone());
+        let Ok(mut expr) = syn::parse2::<syn::Expr>(expanded) else {
+            return;
+        };
+        self.visit_expr_mut(&mut expr);
+        mac.tokens = expr.into_token_stream();
+    }
+}
+
+fn is_formula_macro(path: &syn::Path) -> bool {
+    // TODO: identify the macro precisely
+    path.segments
+        .last()
+        .is_some_and(|seg| seg.ident == "formula")
 }
