@@ -33,7 +33,9 @@ tempfile = "3.27.0"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-process_control = "5.2.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 ui_test = "0.30.6"

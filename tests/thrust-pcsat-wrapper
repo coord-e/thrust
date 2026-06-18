@@ -1,14 +1,26 @@
 #!/bin/bash
 
 COAR_IMAGE=${COAR_IMAGE:-ghcr.io/hiroshi-unno/coar:main}
+CONTAINER_NAME="thrust-pcsat-$$"
+smt2=""
+output_file=""
+
+cleanup() {
+    trap - EXIT INT TERM HUP
+    docker stop "$CONTAINER_NAME" 2>/dev/null
+    [ -n "$smt2" ] && rm -f "$smt2"
+    [ -n "$output_file" ] && rm -f "$output_file"
+}
+trap cleanup EXIT INT TERM HUP
 
 smt2=$(mktemp -p . --suffix .smt2)
-trap "rm -f $smt2" EXIT
+output_file=$(mktemp)
 cp "$1" "$smt2"
-out=$(
-docker run --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
-    main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2"
-)
+docker run --rm --name "$CONTAINER_NAME" -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
+    main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2" > "$output_file" &
+docker_pid=$!
+wait $docker_pid
 exit_code=$?
+out=$(cat "$output_file")
 echo "${out%,*}"
 exit "$exit_code"

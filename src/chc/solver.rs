@@ -49,20 +49,46 @@ impl CommandConfig {
         &self,
         child: std::process::Child,
     ) -> Result<(std::process::Output, std::time::Duration), CheckSatError> {
-        use process_control::{ChildExt as _, Control as _};
-
         let start = std::time::Instant::now();
         tracing::info!(timeout = ?self.timeout, pid = child.id(), "waiting");
-        let mut child = child.controlled_with_output().terminate_for_timeout();
-        if let Some(timeout) = self.timeout {
-            child = child.time_limit(timeout);
-        }
-        let output = match child.wait()? {
-            None => return Err(CheckSatError::Timeout(self.timeout.unwrap())),
-            Some(output) => output,
+
+        let Some(timeout) = self.timeout else {
+            let output = child.wait_with_output()?;
+            return Ok((output, start.elapsed()));
         };
-        let elapsed = std::time::Instant::now() - start;
-        Ok((output.into_std_lossy(), elapsed))
+
+        let pid = child.id();
+        let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<std::process::Output>>();
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
+
+        if let Ok(result) = rx.recv_timeout(timeout) {
+            return Ok((result?, start.elapsed()));
+        }
+
+        // Timeout: send SIGTERM first so that wrapper scripts (e.g. thrust-pcsat-wrapper)
+        // can trap it and stop any child processes they manage (e.g. Docker containers)
+        // before we escalate to SIGKILL which cannot be trapped.
+        #[cfg(unix)]
+        // SAFETY: pid was obtained from a live Child held by the spawned thread,
+        // keeping the PID valid until wait_with_output() returns.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+
+        const GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(5);
+        if rx.recv_timeout(GRACE_PERIOD).is_err() {
+            // Process did not exit gracefully; force kill.
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
+            // Wait briefly for the waiter thread to finish.
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+        }
+
+        Err(CheckSatError::Timeout(timeout))
     }
 
     fn run(
