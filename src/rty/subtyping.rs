@@ -110,9 +110,18 @@ where
                         builder.add_mapped_var(param_idx, param_sort);
                     }
                 }
-                for (got_ty, expected_ty) in got.params.iter().zip(expected.params.iter()) {
+                for ((param_idx, got_ty), expected_ty) in
+                    got.params.iter_enumerated().zip(expected.params.iter())
+                {
                     let cs = builder.relate_sub_refined_type(expected_ty, got_ty);
                     clauses.extend(cs);
+                    // Assume the (caller-provided) parameter precondition before relating
+                    // the return, mirroring `relate_fn_sub_type` in `analyze::basic_block`.
+                    // Without this, a dependent return refinement that is only valid given
+                    // the parameter preconditions cannot be discharged (issue #128).
+                    builder
+                        .with_mapped_value_var(param_idx)
+                        .add_body(expected_ty.refinement.clone());
                 }
                 let cs = builder.relate_sub_refined_type(&got.ret, &expected.ret);
                 clauses.extend(cs);
@@ -188,9 +197,15 @@ pub fn relate_sub_param_types(
         }
     }
 
-    for (got_ty, expected_ty) in got.iter().zip(expected.iter()) {
+    for ((param_idx, got_ty), expected_ty) in got.iter_enumerated().zip(expected.iter()) {
         let cs = builder.relate_sub_refined_type(expected_ty, got_ty);
         clauses.extend(cs);
+        // Accumulate each (caller-provided) parameter precondition so that a later
+        // parameter whose refinement depends on an earlier one is related under that
+        // earlier parameter's assumption (issue #128).
+        builder
+            .with_mapped_value_var(param_idx)
+            .add_body(expected_ty.refinement.clone());
     }
 
     clauses
