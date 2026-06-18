@@ -1,5 +1,11 @@
 #![feature(rustc_private)]
 
+// Linking `rustc_driver` pulls in the rustc dylib closure (codegen, etc.) so the
+// lib unit-test harness can link. It is only needed for `cargo test`; production
+// builds get this from the `thrust-rustc` binary instead.
+#[cfg(test)]
+extern crate rustc_driver;
+
 extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_borrowck;

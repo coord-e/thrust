@@ -210,3 +210,140 @@ pub fn relate_sub_param_types(
 
     clauses
 }
+#[cfg(test)]
+mod tests {
+    use rustc_index::IndexVec;
+
+    use crate::chc;
+    use crate::rty::{
+        Closed, FunctionParamIdx, FunctionType, RefinedType, RefinedTypeVar, Refinement, Type,
+    };
+
+    use super::{relate_sub_param_types, Subtyping};
+
+    type Fv = RefinedTypeVar<FunctionParamIdx>;
+
+    fn value() -> chc::Term<Fv> {
+        chc::Term::var(RefinedTypeVar::Value)
+    }
+
+    fn param(i: usize) -> chc::Term<Fv> {
+        chc::Term::var(RefinedTypeVar::Free(FunctionParamIdx::from_usize(i)))
+    }
+
+    fn refinement(atom: chc::Atom<Fv>) -> Refinement<FunctionParamIdx> {
+        Refinement::new(IndexVec::new(), chc::Body::from(atom))
+    }
+
+    /// `ν > 0`
+    fn positive() -> Refinement<FunctionParamIdx> {
+        refinement(chc::Atom::new(
+            chc::KnownPred::GREATER_THAN.into(),
+            vec![value(), chc::Term::int(0)],
+        ))
+    }
+
+    /// `ν == <param i>`
+    fn equals_param(i: usize) -> Refinement<FunctionParamIdx> {
+        refinement(value().equal_to(param(i)))
+    }
+
+    fn int_param(refinement: Refinement<FunctionParamIdx>) -> RefinedType<FunctionParamIdx> {
+        RefinedType::new(Type::int(), refinement)
+    }
+
+    /// `fn(x: { ν: i32 | param_ref }) -> { ν: i32 | ret_ref }`
+    fn unary_fn(
+        param_ref: Refinement<FunctionParamIdx>,
+        ret_ref: Refinement<FunctionParamIdx>,
+    ) -> Type<Closed> {
+        let mut params = IndexVec::new();
+        params.push(int_param(param_ref));
+        Type::function(FunctionType::new(params, int_param(ret_ref)))
+    }
+
+    fn is_sat(clauses: Vec<chc::Clause>) -> bool {
+        let mut system = chc::System::default();
+        for clause in clauses {
+            system.push_clause(clause);
+        }
+        // Uses the configured solver (Z3 by default); the obligations here are
+        // pure first-order constraints with no predicate variables.
+        system.solve().is_ok()
+    }
+
+    /// Regression test for issue #128.
+    ///
+    /// Relating the function subtyping
+    ///
+    /// ```text
+    /// got      = fn(x: { ν: i32 | ν > 0 }) -> { ν: i32 | ν == x }
+    /// expected = fn(x: { ν: i32 | ν > 0 }) -> { ν: i32 | ν > 0 }
+    /// ```
+    ///
+    /// is valid: the covariant return obligation `ν == x ⟹ ν > 0` only holds
+    /// because the parameter precondition guarantees `x > 0`. The `Type::Function`
+    /// arm of `relate_sub_type` used to prove the return obligation without
+    /// assuming the parameters' preconditions, leaving `x` unconstrained, so it
+    /// wrongly rejected this subtyping as `Unsat`.
+    #[test]
+    fn function_subtyping_assumes_parameter_precondition() {
+        let got = unary_fn(positive(), equals_param(0));
+        let expected = unary_fn(positive(), positive());
+
+        let clauses = chc::ClauseBuilder::default().relate_sub_type(&got, &expected);
+        assert!(
+            is_sat(clauses),
+            "a valid dependent function subtyping was rejected (issue #128)"
+        );
+    }
+
+    /// Control case: when the return refinement genuinely does *not* follow from
+    /// the parameter precondition, the subtyping must still be rejected. Guards
+    /// against the fix degenerating into assuming too much.
+    #[test]
+    fn function_subtyping_rejects_underivable_return() {
+        // got returns `ν == x` for an unconstrained `x`; expected demands `ν > 0`,
+        // which does not follow without a parameter precondition.
+        let got = unary_fn(Refinement::top(), equals_param(0));
+        let expected = unary_fn(Refinement::top(), positive());
+
+        let clauses = chc::ClauseBuilder::default().relate_sub_type(&got, &expected);
+        assert!(
+            !is_sat(clauses),
+            "an invalid function subtyping was wrongly accepted"
+        );
+    }
+
+    /// Regression test for the related defect in `relate_sub_param_types`
+    /// (issue #128, "Related" section): a dependent parameter refinement
+    /// (parameter `j` mentioning parameter `i`) must be related under
+    /// parameter `i`'s precondition.
+    ///
+    /// `relate_sub_param_types` relates the parameters *contravariantly*
+    /// (`expected <: got`), so for each parameter it emits
+    /// `expected.refinement ⟹ got.refinement`. With
+    ///
+    /// ```text
+    /// got      = (x: { ν | ν > 0 }, y: { ν | ν > 0 })
+    /// expected = (x: { ν | ν > 0 }, y: { ν | ν == x })
+    /// ```
+    ///
+    /// the obligation on `y` is `ν == x ⟹ ν > 0`, which is only dischargeable
+    /// because `expected.x` guarantees `x > 0`.
+    #[test]
+    fn param_subtyping_assumes_earlier_parameter_precondition() {
+        let mut got = IndexVec::new();
+        got.push(int_param(positive()));
+        got.push(int_param(positive()));
+        let mut expected = IndexVec::new();
+        expected.push(int_param(positive()));
+        expected.push(int_param(equals_param(0)));
+
+        let clauses = relate_sub_param_types(&got, &expected);
+        assert!(
+            is_sat(clauses),
+            "a valid dependent parameter subtyping was rejected (issue #128)"
+        );
+    }
+}

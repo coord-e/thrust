@@ -14,8 +14,10 @@ path = "src/main.rs"
 test = false
 
 [lib]
-# TODO: why is this necessary?
-test = false
+# Unit tests for the pure-logic modules (rty/chc) need the rustc dylib closure
+# to link; this is provided by `#[cfg(test)] extern crate rustc_driver;` in
+# src/lib.rs. With that in place the lib test harness links, so we enable it.
+test = true
 
 [[test]]
 name = "ui"
