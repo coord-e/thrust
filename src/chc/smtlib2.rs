@@ -202,7 +202,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, t)
                 )
             }
-            chc::Term::FormulaExistentialVar(_, name) => write!(f, "{}", name),
+            chc::Term::FormulaQuantifiedVar(_, name) => write!(f, "{}", name),
         }
     }
 }
@@ -300,6 +300,14 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
                     }));
                 let fo = Formula::new(self.ctx, self.clause, fo);
                 write!(f, "(exists {vars} {fo})")
+            }
+            chc::Formula::Forall(vars, fo) => {
+                let vars =
+                    List::closed(vars.iter().map(|(v, s)| {
+                        List::closed([v.to_string(), self.ctx.fmt_sort(s).to_string()])
+                    }));
+                let fo = Formula::new(self.ctx, self.clause, fo);
+                write!(f, "(forall {vars} {fo})")
             }
         }
     }

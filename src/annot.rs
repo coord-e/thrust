@@ -510,7 +510,7 @@ where
                     ("false", _) => FormulaOrTerm::Literal(false),
                     (_, Some(sort)) => {
                         let var =
-                            chc::Term::FormulaExistentialVar(sort.clone(), ident.name.to_string());
+                            chc::Term::FormulaQuantifiedVar(sort.clone(), ident.name.to_string());
                         FormulaOrTerm::Term(var, sort.clone())
                     }
                     _ => {

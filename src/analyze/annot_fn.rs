@@ -452,6 +452,32 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         chc::Term::datatype_ctor(d_sym, sort_args, v_sym, field_terms)
     }
 
+    fn to_formula_with_quantified_vars(
+        &self,
+        closure: &rustc_hir::Body<'tcx>,
+    ) -> (
+        Vec<(String, chc::Sort)>,
+        chc::Formula<rty::FunctionParamIdx>,
+    ) {
+        let mut inner_translator = self.clone();
+        let mut vars = Vec::new();
+        for param in closure.params {
+            let rustc_hir::PatKind::Binding(_, hir_id, ident, None) = param.pat.kind else {
+                panic!(
+                    "exists/forall closure parameter must be a simple binding: {:?}",
+                    param.pat
+                );
+            };
+            let param_ty = self.pat_ty(param.pat);
+            let sort = self.type_builder.build(param_ty).to_sort();
+            let var_term = chc::Term::FormulaQuantifiedVar(sort.clone(), ident.name.to_string());
+            inner_translator.env.insert(hir_id, var_term);
+            vars.push((ident.name.to_string(), sort));
+        }
+        let body_formula = inner_translator.to_formula(closure.value);
+        (vars, body_formula)
+    }
+
     fn to_formula_or_term(
         &self,
         hir: &'tcx rustc_hir::Expr<'tcx>,
@@ -648,28 +674,23 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             };
                             let closure_body = self.tcx.hir_body(closure.body);
 
-                            let mut inner_translator = self.clone();
-                            let mut vars = Vec::new();
-                            for param in closure_body.params {
-                                let rustc_hir::PatKind::Binding(_, hir_id, ident, None) =
-                                    param.pat.kind
-                                else {
-                                    panic!(
-                                        "exists closure parameter must be a simple binding: {:?}",
-                                        param.pat
-                                    );
-                                };
-                                let param_ty = self.pat_ty(param.pat);
-                                let sort = self.type_builder.build(param_ty).to_sort();
-                                let var_term = chc::Term::FormulaExistentialVar(
-                                    sort.clone(),
-                                    ident.name.to_string(),
-                                );
-                                inner_translator.env.insert(hir_id, var_term);
-                                vars.push((ident.name.to_string(), sort));
-                            }
-                            let body_formula = inner_translator.to_formula(closure_body.value);
+                            let (vars, body_formula) =
+                                self.to_formula_with_quantified_vars(closure_body);
                             return FormulaOrTerm::Formula(chc::Formula::exists(
+                                vars,
+                                body_formula,
+                            ));
+                        }
+                        if Some(def_id) == self.def_ids.forall() {
+                            assert_eq!(args.len(), 1, "forall takes exactly 1 argument");
+                            let ExprKind::Closure(closure) = args[0].kind else {
+                                panic!("forall argument must be a closure");
+                            };
+                            let closure_body = self.tcx.hir_body(closure.body);
+
+                            let (vars, body_formula) =
+                                self.to_formula_with_quantified_vars(closure_body);
+                            return FormulaOrTerm::Formula(chc::Formula::forall(
                                 vars,
                                 body_formula,
                             ));
