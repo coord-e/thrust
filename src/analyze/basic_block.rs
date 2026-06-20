@@ -856,7 +856,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     ResolvedCallable::Closure(*closure_def_id, parent_args)
                 }
                 mir_ty::TyKind::Param(ty) => ResolvedCallable::Generic(TypeParam::GenericType(
-                    self.type_builder.owner_fn_id,
+                    self.type_builder.owner_fn_id(),
                     ty.index,
                 )),
                 kind => {
@@ -880,7 +880,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         def_id: DefId,
         args: mir_ty::GenericArgsRef<'tcx>,
     ) -> rty::Type<rty::Closed> {
-        let caller_def_id = self.type_builder.owner_fn_id;
+        let caller_def_id = self.type_builder.owner_fn_id();
         if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args, caller_def_id) {
             return def_ty.ty;
         }

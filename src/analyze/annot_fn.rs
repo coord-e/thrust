@@ -181,6 +181,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         analyzer: &'a analyze::Analyzer<'tcx>,
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Self {
         let tcx = analyzer.tcx();
         let body = tcx.hir_body_owned_by(local_def_id);
@@ -189,7 +190,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let type_builder = TypeBuilder::new(
             tcx,
             def_ids.clone(),
-            local_def_id.to_def_id(),
+            owner_fn_id,
             analyzer.type_params.clone(),
             analyzer.closure_type_params.clone(),
             analyzer.system.clone(),
@@ -209,16 +210,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         translator
     }
 
-    pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>, owner_fn_id: DefId) -> Self {
+    pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>) -> Self {
         self.def_ids = def_ids;
-        self.type_builder = TypeBuilder::new(
-            self.tcx,
-            self.def_ids.clone(),
-            owner_fn_id,
-            self.analyzer.type_params.clone(),
-            self.analyzer.closure_type_params.clone(),
-            self.analyzer.system.clone(),
-        );
         self
     }
 
@@ -393,7 +386,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 );
                 if let Some(closure_fun_ty) = closure_fun_ty.clone() {
                     self.type_builder.register_closure_type_param(
-                        analyze::TypeParam::GenericType(self.type_builder.owner_fn_id, ty.index),
+                        analyze::TypeParam::GenericType(self.type_builder.owner_fn_id(), ty.index),
                         closure_fun_ty,
                     );
                 };
@@ -493,7 +486,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
         let pre_pred = refine::closure_pre_forall_pred(
             self.tcx,
-            self.type_builder.owner_fn_id,
+            self.type_builder.owner_fn_id(),
             type_params.clone(),
             params_sort.clone(),
         );
@@ -501,7 +494,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         params_sort.push(ret_sort);
         let post_pred = refine::closure_post_forall_pred(
             self.tcx,
-            self.type_builder.owner_fn_id,
+            self.type_builder.owner_fn_id(),
             type_params,
             params_sort,
         );
@@ -933,7 +926,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             };
 
                             let pred = if is_unresolved_args {
-                                tracing::debug!(?self.local_def_id, ?generic_args, ?self.type_builder.owner_fn_id);
+                                tracing::debug!(?self.local_def_id, ?generic_args, "owner_fn_id={:?}", self.type_builder.owner_fn_id());
                                 let type_params = generic_args
                                     .types()
                                     .map(|ty| self.type_builder.build(ty).to_sort())

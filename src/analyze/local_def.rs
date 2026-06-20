@@ -1177,7 +1177,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .clone();
             let drop_points = self.drop_points[&bb].clone();
             self.ctx
-                .basic_block_analyzer(self.local_def_id, bb, self.body.source.def_id())
+                .basic_block_analyzer(self.local_def_id, bb, self.owner_fn_id)
                 .body(self.body.clone())
                 .drop_points(drop_points)
                 .run(&rty, expected_fn_ty);
@@ -1329,6 +1329,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn owner_fn_id(&mut self, owner_fn_id: DefId) -> &mut Self {
+        tracing::debug!(
+            "change owner_fn_id from {:?} to {:?}.",
+            self.owner_fn_id,
+            owner_fn_id
+        );
         self.owner_fn_id = owner_fn_id;
         self.type_builder = self.ctx.type_builder(self.ctx.def_ids(), owner_fn_id);
         self

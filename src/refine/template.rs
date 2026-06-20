@@ -73,7 +73,7 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
-    pub owner_fn_id: DefId,
+    owner_fn_id: DefId,
     typing_env: mir_ty::TypingEnv<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
     /// These indices may differ because we skip lifetime parameters and they always need to be
@@ -107,7 +107,7 @@ impl<'tcx> TypeBuilder<'tcx> {
             }
         }
 
-        tracing::debug!("TypeBuilder is created for {owner_fn_id:?}.");
+        tracing::debug!("TypeBuilder is created for {owner_fn_id:?} with param_idx_mapping {param_idx_mapping:#?}.");
         let typing_env = mir_ty::TypingEnv::post_analysis(tcx, owner_fn_id);
         Self {
             tcx,
@@ -119,6 +119,10 @@ impl<'tcx> TypeBuilder<'tcx> {
             closure_type_params,
             system,
         }
+    }
+
+    pub fn owner_fn_id(&self) -> DefId {
+        self.owner_fn_id
     }
 
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
