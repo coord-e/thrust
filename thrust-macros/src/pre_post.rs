@@ -18,7 +18,7 @@ pub fn expand_pre(input: TokenStream) -> TokenStream {
     let call = syn::parse_macro_input!(input as syn::ExprCall);
     let func = &*call.func;
     let args = call_args_tuple(&call.args);
-    quote::quote!(thrust_models::model::closure_precondition(&(#func), #args)).into()
+    quote::quote!(thrust_models::model::closure_precondition(#func, #args)).into()
 }
 
 pub fn expand_post(input: TokenStream) -> TokenStream {
@@ -43,5 +43,5 @@ pub fn expand_post(input: TokenStream) -> TokenStream {
     };
     let func = &*call.func;
     let args = call_args_tuple(&call.args);
-    quote::quote!(thrust_models::model::closure_postcondition(&(#func), #args, #result)).into()
+    quote::quote!(thrust_models::model::closure_postcondition(#func, #args, #result)).into()
 }

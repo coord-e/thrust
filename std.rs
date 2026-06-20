@@ -158,6 +158,13 @@ mod thrust_models {
         #[thrust::def::closure_model]
         pub struct Closure<T: ?Sized>(PhantomData<T>);
 
+        impl<T: ?Sized> PartialEq for Closure<T> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &Self) -> bool {
+                unimplemented!()
+            }
+        }
+
         /// Refers to the precondition of a closure in a specification.
         ///
         /// Prefer the `thrust_macros::pre!(f(x))` surface syntax, which desugars to this; the
@@ -165,7 +172,7 @@ mod thrust_models {
         #[allow(dead_code)]
         #[thrust::def::closure_precondition]
         #[thrust::ignored]
-        pub fn closure_precondition<F: ?Sized, Args>(_f: &F, _args: Args) -> bool {
+        pub fn closure_precondition<F, Args>(_f: F, _args: Args) -> bool {
             unimplemented!()
         }
 
@@ -176,7 +183,7 @@ mod thrust_models {
         #[allow(dead_code)]
         #[thrust::def::closure_postcondition]
         #[thrust::ignored]
-        pub fn closure_postcondition<F: ?Sized, Args, R>(_f: &F, _args: Args, _result: R) -> bool {
+        pub fn closure_postcondition<F, Args, R>(_f: F, _args: Args, _result: R) -> bool {
             unimplemented!()
         }
 
@@ -322,6 +329,20 @@ mod thrust_models {
     #[thrust::def::exists]
     #[thrust::ignored]
     pub fn exists<T>(_x: T) -> bool {
+        unimplemented!()
+    }
+
+    #[allow(dead_code)]
+    #[thrust::def::forall]
+    #[thrust::ignored]
+    pub fn forall<T>(_x: T) -> bool {
+        unimplemented!()
+    }
+
+    #[allow(dead_code)]
+    #[thrust::def::implies]
+    #[thrust::ignored]
+    pub fn implies(_lhs: bool, _rhs: bool) -> bool {
         unimplemented!()
     }
 

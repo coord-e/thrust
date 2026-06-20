@@ -2042,7 +2042,17 @@ fn subst_ty_params_in_formula<T, V>(formula: &mut chc::Formula<V>, subst: &TypeP
                 subst_ty_params_in_formula(f, subst);
             }
         }
+        chc::Formula::Implies(lhs, rhs) => {
+            subst_ty_params_in_formula(lhs, subst);
+            subst_ty_params_in_formula(rhs, subst);
+        }
         chc::Formula::Exists(vars, f) => {
+            for (_, sort) in vars {
+                subst_ty_params_in_sort(sort, subst);
+            }
+            subst_ty_params_in_formula(f, subst);
+        }
+        chc::Formula::Forall(vars, f) => {
             for (_, sort) in vars {
                 subst_ty_params_in_sort(sort, subst);
             }
@@ -2084,7 +2094,7 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
                 subst_ty_params_in_term(arg, subst);
             }
         }
-        chc::Term::FormulaExistentialVar(sort, _) => {
+        chc::Term::FormulaQuantifiedVar(sort, _) => {
             subst_ty_params_in_sort(sort, subst);
         }
     }

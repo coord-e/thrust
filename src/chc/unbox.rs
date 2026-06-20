@@ -19,8 +19,8 @@ fn unbox_term(term: Term) -> Term {
             args.into_iter().map(unbox_term).collect(),
         ),
         Term::DatatypeDiscr(sym, arg) => Term::DatatypeDiscr(sym, Box::new(unbox_term(*arg))),
-        Term::FormulaExistentialVar(sort, name) => {
-            Term::FormulaExistentialVar(unbox_sort(sort), name)
+        Term::FormulaQuantifiedVar(sort, name) => {
+            Term::FormulaQuantifiedVar(unbox_sort(sort), name)
         }
     }
 }
@@ -83,9 +83,16 @@ fn unbox_formula(formula: Formula) -> Formula {
         Formula::Not(fo) => Formula::Not(Box::new(unbox_formula(*fo))),
         Formula::And(fs) => Formula::And(fs.into_iter().map(unbox_formula).collect()),
         Formula::Or(fs) => Formula::Or(fs.into_iter().map(unbox_formula).collect()),
+        Formula::Implies(lhs, rhs) => {
+            Formula::Implies(Box::new(unbox_formula(*lhs)), Box::new(unbox_formula(*rhs)))
+        }
         Formula::Exists(vars, fo) => {
             let vars = vars.into_iter().map(|(v, s)| (v, unbox_sort(s))).collect();
             Formula::Exists(vars, Box::new(unbox_formula(*fo)))
+        }
+        Formula::Forall(vars, fo) => {
+            let vars = vars.into_iter().map(|(v, s)| (v, unbox_sort(s))).collect();
+            Formula::Forall(vars, Box::new(unbox_formula(*fo)))
         }
     }
 }
