@@ -148,6 +148,7 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     fn translate_alias_type(&self, ty: &mir_ty::AliasTy<'tcx>) -> rty::Type<rty::Closed> {
+        let args: Vec<rty::Type<rty::Closed>> = ty.args.types().map(|t| self.build(t)).collect();
         let mut type_params = self.type_params.borrow_mut();
         let index = type_params
             .entry(TypeParam::AssocType(ty.def_id, ty.args))
@@ -156,8 +157,6 @@ impl<'tcx> TypeBuilder<'tcx> {
                 tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?}.", idx, ty,);
                 idx
             });
-
-        let args: Vec<rty::Type<rty::Closed>> = ty.args.types().map(|t| self.build(t)).collect();
 
         rty::AliasType::new(*index, args).into()
     }
