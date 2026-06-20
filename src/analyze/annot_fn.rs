@@ -419,11 +419,18 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             FnOnce => receiver_type,
         };
 
-        let other_params = self.type_builder.build(trait_ref.args.type_at(1));
-        let params = [receiver_type, other_params]
-            .into_iter()
-            .map(|ty| rty::RefinedType::unrefined(ty.vacuous()))
+        let mir_ty::Tuple(other_params) = trait_ref.args.type_at(1).kind() else {
+            panic!()
+        };
+
+        let other_params = other_params
+            .iter()
+            .map(|ty| self.type_builder.build(ty).vacuous());
+        let params = std::iter::once(receiver_type.vacuous())
+            .chain(other_params)
+            .map(rty::RefinedType::unrefined)
             .collect();
+
         tracing::debug!("found the signature for closure trait: {params:#?}");
         Some(params)
     }
@@ -474,11 +481,16 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             self.closure_trait_ret(param_ty, clause.as_projection_clause()?.skip_binder())
         })?;
 
-        let receiver = rty::FunctionParamIdx::from_usize(0);
-        let arg = rty::FunctionParamIdx::from_usize(1);
-
         let free = |idx| chc::Term::var(rty::RefinedTypeVar::Free(idx));
         let value = chc::Term::var(rty::RefinedTypeVar::Value);
+
+        let receiver = rty::FunctionParamIdx::from_usize(0);
+        let args: Vec<_> = params
+            .iter()
+            .enumerate()
+            .skip(1)
+            .map(|(idx, _)| free(rty::FunctionParamIdx::from_usize(idx)))
+            .collect();
 
         let type_params = vec![self.type_builder.build(param_ty.to_ty(self.tcx)).to_sort()];
         let mut params_sort: Vec<chc::Sort> = params.iter().map(|rty| rty.ty.to_sort()).collect();
@@ -501,14 +513,27 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self.register_forall_pred(post_pred.clone());
 
         params[receiver].extend_refinement(
-            chc::Atom::new(pre_pred.into(), vec![value.clone(), free(arg)]).into(),
+            chc::Atom::new(
+                pre_pred.into(),
+                [vec![value.clone()], args.clone()].concat(),
+            )
+            .into(),
         );
 
         ret.extend_refinement(
-            chc::Atom::new(post_pred.into(), vec![free(receiver), free(arg), value]).into(),
+            chc::Atom::new(
+                post_pred.into(),
+                [vec![free(receiver)], args, vec![value.clone()]].concat(),
+            )
+            .into(),
         );
+        let ret = Box::new(ret);
 
-        Some(rty::FunctionType::new(params, ret))
+        Some(rty::FunctionType {
+            params,
+            ret,
+            abi: rty::FunctionAbi::RustCall,
+        })
     }
 
     /// Extracts the logical argument terms passed to `closure_precondition`/
