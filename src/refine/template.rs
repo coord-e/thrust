@@ -571,6 +571,19 @@ where
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
             }
+            mir_ty::TyKind::Alias(mir_ty::AliasTyKind::Projection, ty) => {
+                if let Some(model_ty_def_id) = self.inner.def_ids.model_ty() {
+                    let arg_ty = ty.args.type_at(0);
+
+                    if ty.def_id == model_ty_def_id
+                        && matches!(arg_ty.kind(), mir_ty::TyKind::Param(_))
+                    {
+                        return self.build(arg_ty);
+                    }
+                }
+
+                self.inner.translate_alias_type(ty).vacuous()
+            }
             kind => unimplemented!("ty: {:?}", kind),
         }
     }
