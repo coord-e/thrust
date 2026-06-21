@@ -2,7 +2,7 @@
 //@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper THRUST_SOLVER_TIMEOUT_SECS=60
 
-use thrust_models::exists;
+use thrust_models::{Model, exists, forall, model::Mut};
 
 #[thrust_macros::context]
 trait Iterator {
@@ -23,28 +23,24 @@ trait Iterator {
     #[thrust_macros::invariant_context]
     #[thrust_macros::requires(true)]
     #[thrust_macros::ensures(
-        exists(|it: thrust_models::model::Vec<Self>|
-        exists(|fn_: thrust_models::model::Vec<F>|
-        exists(|acc|
+        exists(|it: thrust_models::model::Array<thrust_models::model::Int, <Self as Model>::Ty>|
+        exists(|fn_: thrust_models::model::Array<thrust_models::model::Int, thrust_models::model::Closure<F>>|
+        exists(|acc: thrust_models::model::Array<thrust_models::model::Int, <B as Model>::Ty>|
         exists(|l: thrust_models::model::Int|
-            it.0[0] == self &&
-            acc.0[0] == init &&
-            Self::completed(it.0[l - 1]) &&
-            result == acc.0[l - 1] &&
-            l > 0 &&
-            !(
-                exists(|i|
-                    (0 <= i && i < l - 1) &&
-                    !(
-                        exists(|item|
-                            !Self::completed(it.0[i]) &&
-                            Self::step(it.0[i], item, it.0[i + 1]) &&
-                            thrust_macros::pre!(f(acc.0[i], item)) &&
-                            thrust_macros::post!(
-                                f(acc.0[i], item),
-                                acc.0[i + 1]
-                            )
-                        )
+            it[0] == self &&
+            fn_[0] == f &&
+            acc[0] == init &&
+            Self::completed(it[l - 1]) &&
+            result == acc[l - 1] &&
+            forall(|i: thrust_models::model::Int|
+                0 <= i && i < l - 1 ==>
+                exists(|item|
+                    !Self::completed(it[i]) &&
+                    Self::step(it[i], item, it[i + 1]) &&
+                    thrust_macros::pre!(Mut::new(fn_[i], fn_[i+1])(acc[i], item)) &&
+                    thrust_macros::post!(
+                        Mut::new(fn_[i], fn_[i+1])(acc[i], item),
+                        acc[i + 1]
                     )
                 )
             )
@@ -58,29 +54,24 @@ trait Iterator {
         let mut accum = init;
         while let Some(x) = self.next() {
             thrust_macros::invariant!(
-                |accum: B|
-                exists(|it: thrust_models::model::Vec<Self>|
-                exists(|fn_: thrust_models::model::Vec<F>|
-                exists(|acc|
+                |accum: B, init: thrust_models::FnParam<B>, f: F, self: Self|
+                exists(|it: thrust_models::model::Array<thrust_models::model::Int, <Self as Model>::Ty>|
+                exists(|fn_: thrust_models::model::Array<thrust_models::model::Int, thrust_models::model::Closure<F>>|
+                exists(|acc: thrust_models::model::Array<thrust_models::model::Int, <B as Model>::Ty>|
                 exists(|l: thrust_models::model::Int|
-                    it.0[0] == self &&
-                    fn_.0[0] == f &&
-                    acc.0[0] == init &&
-                    accum == acc.0[l - 1] &&
-                    l > 0 &&
-                    !(
-                        exists(|i: thrust_models::model::Int|
-                            (0 <= i && i < l - 1) &&
-                            !(
-                                exists(|item: Self::Item|
-                                    !Self::completed(it.0[i]) &&
-                                    Self::step(it.0[i], item, it.0[i + 1]) &&
-                                    thrust_macros::pre!(f(acc.0[i], item)) &&
-                                    thrust_macros::post!(
-                                        f(acc.0[i], item),
-                                        acc.0[i + 1]
-                                    )
-                                )
+                    it[0] == self &&
+                    fn_[0] == f &&
+                    acc[0] == init.at_entry() &&
+                    accum == acc[l - 1] &&
+                    forall(|i: thrust_models::model::Int|
+                        0 <= i && i < l - 1 ==>
+                        exists(|item: <Self::Item as Model>::Ty|
+                            !Self::completed(it[i]) &&
+                            Self::step(it[i], item, it[i + 1]) &&
+                            thrust_macros::pre!(Mut::new(fn_[i], fn_[i+1])(acc[i], item)) &&
+                            thrust_macros::post!(
+                                Mut::new(fn_[i], fn_[i+1])(acc[i], item),
+                                acc[i + 1]
                             )
                         )
                     )
@@ -92,6 +83,7 @@ trait Iterator {
     }
 }
 
+#[derive(PartialEq)]
 struct Range {
     start: i64,
     end: i64,
