@@ -963,18 +963,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn local_of_name_in_bb(&self, name: rustc_span::Symbol, bty: &BasicBlockType) -> Option<Local> {
         let mut found: Option<Local> = None;
         for vdi in &self.body.var_debug_info {
+            tracing::debug!("comparing {name:?} with {vdi:?}...");
             if vdi.name != name {
+                tracing::debug!("different name, skip.");
                 continue;
             }
             let mir::VarDebugInfoContents::Place(place) = vdi.value else {
+                tracing::debug!("place, skip.");
                 continue;
             };
             if !place.projection.is_empty() {
+                tracing::debug!("empty projection, skip.");
                 continue;
             }
             if bty.param_of_local(place.local).is_none() {
+                tracing::debug!("not param of local, skip.");
                 continue;
             }
+            tracing::debug!("found.");
             match found {
                 None => found = Some(place.local),
                 Some(prev) if prev == place.local => {}
@@ -991,19 +997,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn function_param_local_of_name(&self, name: rustc_span::Symbol) -> Option<Local> {
         let mut found: Option<Local> = None;
         for vdi in &self.body.var_debug_info {
+            tracing::debug!("comparing {name:?} with {vdi:?}...");
             if vdi.name != name {
+                tracing::debug!("different name, skip.");
                 continue;
             }
             let mir::VarDebugInfoContents::Place(place) = vdi.value else {
+                tracing::debug!("place, skip.");
                 continue;
             };
             if !place.projection.is_empty() {
+                tracing::debug!("empty projection, skip.");
                 continue;
             }
             let local = place.local;
             if local.index() == 0 || local.index() > self.body.arg_count {
+                tracing::debug!("not param of local, skip.");
                 continue;
             }
+            tracing::debug!("found.");
             match found {
                 None => found = Some(local),
                 Some(prev) if prev == local => {}
@@ -1011,6 +1023,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
         found
+    }
+
+    fn expand_model_projection(&self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        if let mir_ty::Alias(mir_ty::AliasTyKind::Projection, ty) = ty.kind() {
+            if let Some(model_ty_def_id) = self.ctx.def_ids.model_ty() {
+                let arg_ty = ty.args.type_at(0);
+
+                if ty.def_id == model_ty_def_id {
+                    return arg_ty;
+                }
+            }
+        }
+        ty
     }
 
     /// Translates a user-provided loop invariant (a formula function over named
@@ -1044,6 +1069,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .unwrap_or(*input_ty)
             };
 
+            let input_ty = self.expand_model_projection(input_ty);
+            tracing::debug!(?ident_opt, ?input_ty, "resolving");
+
             // The synthetic `__thrust_self` parameter (emitted when an invariant refers to the receiver
             // `self`) maps to the loop-carried receiver, which appears as `self` in debug info.
             let name = if name.as_str() == "__thrust_self" {
@@ -1051,11 +1079,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             } else {
                 name
             };
-
+            tracing::debug!("{:?}", input_ty.ty_adt_def());
             if input_ty
                 .ty_adt_def()
                 .is_some_and(|def| Some(def.did()) == self.ctx.def_ids().fn_param_wrapper())
             {
+                tracing::debug!("fn_param_local: {input_ty:?}");
                 let local = self.function_param_local_of_name(name).unwrap_or_else(|| {
                     self.tcx.dcx().fatal(format!(
                         "loop invariant refers to `{name}` via FnParam, but it is not a function parameter"
@@ -1064,6 +1093,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let param_idx = crate::analyze::function_param_of_local(local);
                 mapping.push(bty.param_of_outer_fn_param(param_idx).unwrap());
             } else {
+                tracing::debug!("local: {input_ty:?}");
                 let local = self.local_of_name_in_bb(name, bty).unwrap_or_else(|| {
                     self.tcx.dcx().fatal(format!(
                         "loop invariant refers to `{name}`, which is not a live variable at the loop header"
