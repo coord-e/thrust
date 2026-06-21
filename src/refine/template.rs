@@ -81,7 +81,7 @@ pub struct TypeBuilder<'tcx> {
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
     type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
-    closure_type_params: Rc<RefCell<HashMap<TypeParam<'tcx>, rty::FunctionType>>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
     system: Rc<RefCell<chc::System>>,
 }
 
@@ -91,7 +91,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         def_ids: DefIdCache<'tcx>,
         owner_fn_id: DefId,
         type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
-        closure_type_params: Rc<RefCell<HashMap<TypeParam<'tcx>, rty::FunctionType>>>,
+        closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
         system: Rc<RefCell<chc::System>>,
     ) -> Self {
         let generics = tcx.generics_of(owner_fn_id);
@@ -126,10 +126,33 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
+        // FIXME:
+        // `__ThrustSelf` is currently treated as a distinct `ParamTy` from `Self`,
+        // which can lead to cache/key mismatches (e.g. in `TypeParamMap`).
+        //
+        // We currently normalize it here as a workaround, but this should be done
+        // earlier during type translation/analysis so that all internal
+        // representations consistently use the canonical `Self` parameter.
+        if ty.name.as_str() == "__ThrustSelf" {
+            let parent_def_id = self.tcx.parent(self.owner_fn_id);
+            let self_ty_def = self
+                .tcx
+                .generics_of(parent_def_id)
+                .own_params
+                .iter()
+                .find(|ty| ty.name.as_str() == "Self")
+                .expect("Type parameter `Self` is not found.");
+
+            let self_ty = mir_ty::ParamTy::new(self_ty_def.index, self_ty_def.name);
+            tracing::debug!("replace {ty:?} with {self_ty:?}.");
+            return self.translate_param_type(&self_ty);
+        }
         let param_local_idx = *self
             .param_idx_mapping
             .get(&ty.index)
             .expect("unknown type param idx");
+
+        tracing::debug!("translating ParamTy {ty:?}...");
 
         let mut type_params = self.type_params.borrow_mut();
         let forall_sort_idx = type_params
@@ -150,22 +173,19 @@ impl<'tcx> TypeBuilder<'tcx> {
     fn translate_alias_type(&self, ty: &mir_ty::AliasTy<'tcx>) -> rty::Type<rty::Closed> {
         let args: Vec<rty::Type<rty::Closed>> = ty.args.types().map(|t| self.build(t)).collect();
         let mut type_params = self.type_params.borrow_mut();
+        tracing::debug!(?type_params);
         let index = type_params
-            .entry(TypeParam::AssocType(ty.def_id, ty.args))
+            .entry(TypeParam::AssocType(ty.def_id, args.clone()))
             .or_insert_with(|| {
                 let idx = self.system.borrow_mut().new_forall_sort();
-                tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?}.", idx, ty,);
+                tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?} with (def_id = {:?}, args = {:?}).", idx, ty, ty.def_id, args);
                 idx
             });
 
         rty::AliasType::new(*index, args).into()
     }
 
-    pub fn register_closure_type_param(
-        &self,
-        type_param: TypeParam<'tcx>,
-        fun_type: rty::FunctionType,
-    ) {
+    pub fn register_closure_type_param(&self, type_param: TypeParam, fun_type: rty::FunctionType) {
         tracing::info!(?type_param, ?fun_type, "register_closure_type_param");
         self.closure_type_params
             .borrow_mut()
