@@ -363,8 +363,14 @@ impl<'tcx> TypeBuilder<'tcx> {
                     let arg_ty = ty.args.type_at(0);
 
                     if ty.def_id == model_ty_def_id
-                        && matches!(arg_ty.kind(), mir_ty::TyKind::Param(_))
+                        && (matches!(
+                            arg_ty.kind(),
+                            mir_ty::TyKind::Param(_) | mir_ty::TyKind::Alias(..)
+                        ))
                     {
+                        tracing::debug!(
+                            "expanding projection to thrust_models::Model::Ty for {arg_ty:?}."
+                        );
                         return self.build(arg_ty);
                     }
                 }
@@ -576,8 +582,14 @@ where
                     let arg_ty = ty.args.type_at(0);
 
                     if ty.def_id == model_ty_def_id
-                        && matches!(arg_ty.kind(), mir_ty::TyKind::Param(_))
+                        && (matches!(
+                            arg_ty.kind(),
+                            mir_ty::TyKind::Param(_) | mir_ty::TyKind::Alias(..)
+                        ))
                     {
+                        tracing::debug!(
+                            "expanding projection to thrust_models::Model::Ty for {arg_ty:?}."
+                        );
                         return self.build(arg_ty);
                     }
                 }
