@@ -465,19 +465,19 @@ where
     Option::map(opt, f)
 }
 
-// #[thrust::extern_spec_fn]
-// #[thrust_macros::requires(opt != None || thrust_macros::pre!(f()))]
-// #[thrust_macros::ensures(
-//     (opt != None && Some(result) == opt)
-//     || (opt == None && thrust_macros::post!(f(), result))
-// )]
-// fn _extern_spec_option_unwrap_or_else<T, F>(opt: Option<T>, f: F) -> T
-// where
-//     T: thrust_models::Model, T::Ty: PartialEq,
-//     F: FnOnce() -> T,
-// {
-//     Option::unwrap_or_else(opt, f)
-// }
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(opt != None || thrust_macros::pre!(f()))]
+#[thrust_macros::ensures(
+    (opt != None && Some(result) == opt)
+    || (opt == None && thrust_macros::post!(f(), result))
+)]
+fn _extern_spec_option_unwrap_or_else<T, F>(opt: Option<T>, f: F) -> T
+where
+    T: thrust_models::Model, T::Ty: PartialEq,
+    F: FnOnce() -> T,
+{
+    Option::unwrap_or_else(opt, f)
+}
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
