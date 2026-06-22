@@ -449,6 +449,14 @@ pub enum Term<V = TermVarIdx> {
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
     EmptyArray(Sort),
+    /// Array half of `Seq::concat(_, _)`, parameterised by element sort. Args
+    /// are `(sa, sn, ta, tn)`. Emitted in SMT as a per-element-sort recursive
+    /// definition; see [`crate::chc::smtlib2`].
+    SeqConcatArr(Sort, Vec<Term<V>>),
+    /// Array half of `Seq::subsequence(_, l, r)`, parameterised by element
+    /// sort. Args are `(a, l, r)`. Emitted in SMT as a per-element-sort
+    /// recursive definition; see [`crate::chc::smtlib2`].
+    SeqSubseqArr(Sort, Vec<Term<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
@@ -501,6 +509,12 @@ where
                 }
             }
             Term::EmptyArray(_) => allocator.text("[]"),
+            Term::SeqConcatArr(_, args) | Term::SeqSubseqArr(_, args) => allocator
+                .intersperse(
+                    args.iter().map(|t| t.pretty_atom(allocator)),
+                    allocator.line(),
+                )
+                .parens(),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ts.len() == 1 {
@@ -565,6 +579,12 @@ impl<V> Term<V> {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
             Term::EmptyArray(s) => Term::EmptyArray(s),
+            Term::SeqConcatArr(s, args) => {
+                Term::SeqConcatArr(s, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
+            }
+            Term::SeqSubseqArr(s, args) => {
+                Term::SeqSubseqArr(s, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
+            }
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
             Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
@@ -611,7 +631,9 @@ impl<V> Term<V> {
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
-            Term::EmptyArray(elem) => Sort::array(Sort::int(), elem.clone()),
+            Term::EmptyArray(elem) | Term::SeqConcatArr(elem, _) | Term::SeqSubseqArr(elem, _) => {
+                Sort::array(Sort::int(), elem.clone())
+            }
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -638,7 +660,9 @@ impl<V> Term<V> {
             Term::BoxCurrent(t) => t.fv_impl(),
             Term::MutCurrent(t) => t.fv_impl(),
             Term::MutFinal(t) => t.fv_impl(),
-            Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::App(_, args) | Term::SeqConcatArr(_, args) | Term::SeqSubseqArr(_, args) => {
+                Box::new(args.iter().flat_map(|t| t.fv_impl()))
+            }
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
@@ -1911,6 +1935,11 @@ pub struct System {
     pub user_defined_pred_defs: Vec<UserDefinedPredDef>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
+    /// Element sorts for which a per-sort `define-fun-rec` should be
+    /// emitted in the SMT preamble. Unconditional emission noticeably slows
+    /// pcsat even on inputs that never reference these functions.
+    pub uses_seq_concat: std::collections::BTreeSet<Sort>,
+    pub uses_seq_subseq: std::collections::BTreeSet<Sort>,
 }
 
 impl System {

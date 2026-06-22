@@ -12,6 +12,12 @@ fn unbox_term(term: Term) -> Term {
         Term::MutFinal(t) => Term::MutFinal(Box::new(unbox_term(*t))),
         Term::App(fun, args) => Term::App(fun, args.into_iter().map(unbox_term).collect()),
         Term::EmptyArray(s) => Term::EmptyArray(unbox_sort(s)),
+        Term::SeqConcatArr(s, args) => {
+            Term::SeqConcatArr(unbox_sort(s), args.into_iter().map(unbox_term).collect())
+        }
+        Term::SeqSubseqArr(s, args) => {
+            Term::SeqSubseqArr(unbox_sort(s), args.into_iter().map(unbox_term).collect())
+        }
         Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(unbox_term).collect()),
         Term::TupleProj(t, i) => Term::TupleProj(Box::new(unbox_term(*t)), i),
         Term::DatatypeCtor(s1, s2, args) => Term::DatatypeCtor(
@@ -182,6 +188,8 @@ pub fn unbox(system: System) -> System {
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        uses_seq_concat,
+        uses_seq_subseq,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
@@ -190,11 +198,15 @@ pub fn unbox(system: System) -> System {
         .into_iter()
         .map(unbox_user_defined_pred_def)
         .collect();
+    let uses_seq_concat = uses_seq_concat.into_iter().map(unbox_sort).collect();
+    let uses_seq_subseq = uses_seq_subseq.into_iter().map(unbox_sort).collect();
     System {
         raw_commands,
         datatypes,
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        uses_seq_concat,
+        uses_seq_subseq,
     }
 }

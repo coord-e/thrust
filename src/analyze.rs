@@ -271,6 +271,14 @@ impl<'tcx> Analyzer<'tcx> {
         self.def_ids.clone()
     }
 
+    pub fn mark_uses_seq_concat(&self, elem_sort: chc::Sort) {
+        self.system.borrow_mut().uses_seq_concat.insert(elem_sort);
+    }
+
+    pub fn mark_uses_seq_subseq(&self, elem_sort: chc::Sort) {
+        self.system.borrow_mut().uses_seq_subseq.insert(elem_sort);
+    }
+
     pub fn add_clause(&mut self, clause: chc::Clause) {
         self.system.borrow_mut().push_clause(clause);
     }

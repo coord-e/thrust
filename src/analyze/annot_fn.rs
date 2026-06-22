@@ -437,6 +437,14 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self.type_builder.build(generic_args.type_at(idx)).to_sort()
     }
 
+    /// Sort of the element type `T` for a `Seq<T>`-typed expression.
+    fn seq_elem_sort_of(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> chc::Sort {
+        let mir_ty::TyKind::Adt(_, args) = self.expr_ty(expr).kind() else {
+            panic!("expected Seq-typed receiver");
+        };
+        self.type_builder.build(args.type_at(0)).to_sort()
+    }
+
     fn variant_ctor_term(
         &self,
         ctor_did: rustc_span::def_id::DefId,
@@ -673,6 +681,36 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let len = t.tuple_proj(1);
                         let new_arr = arr.store(len.clone(), v);
                         let new_len = len.add(chc::Term::int(1));
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                    }
+                    if Some(def_id) == self.def_ids.seq_concat() {
+                        assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
+                        let elem_sort = self.seq_elem_sort_of(receiver);
+                        self.analyzer.mark_uses_seq_concat(elem_sort.clone());
+                        let t = self.to_term(receiver);
+                        let other = self.to_term(&args[0]);
+                        let a_arr = t.clone().tuple_proj(0);
+                        let a_len = t.tuple_proj(1);
+                        let b_arr = other.clone().tuple_proj(0);
+                        let b_len = other.tuple_proj(1);
+                        let new_arr = chc::Term::SeqConcatArr(
+                            elem_sort,
+                            vec![a_arr, a_len.clone(), b_arr, b_len.clone()],
+                        );
+                        let new_len = a_len.add(b_len);
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                    }
+                    if Some(def_id) == self.def_ids.seq_subsequence() {
+                        assert_eq!(args.len(), 2, "Seq::subsequence takes exactly 2 arguments");
+                        let elem_sort = self.seq_elem_sort_of(receiver);
+                        self.analyzer.mark_uses_seq_subseq(elem_sort.clone());
+                        let t = self.to_term(receiver);
+                        let l = self.to_term(&args[0]);
+                        let r = self.to_term(&args[1]);
+                        let arr = t.tuple_proj(0);
+                        let new_arr =
+                            chc::Term::SeqSubseqArr(elem_sort, vec![arr, l.clone(), r.clone()]);
+                        let new_len = r.sub(l);
                         return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
                     }
                 }

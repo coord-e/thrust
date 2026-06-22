@@ -244,6 +244,23 @@ mod thrust_models {
                 unimplemented!()
             }
 
+            #[allow(dead_code)]
+            #[thrust::def::seq_concat]
+            #[thrust::ignored]
+            pub fn concat(self, _other: Self) -> Self {
+                unimplemented!()
+            }
+
+            #[allow(dead_code)]
+            #[thrust::def::seq_subsequence]
+            #[thrust::ignored]
+            pub fn subsequence<L, R>(&self, _l: L, _r: R) -> Self
+            where
+                L: super::Model<Ty = Int>,
+                R: super::Model<Ty = Int>,
+            {
+                unimplemented!()
+            }
         }
     }
 

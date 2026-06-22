@@ -6,7 +6,85 @@
 //! such as naming convention and solver-specific workarounds.
 //! The output of this module is what gets passed to the external CHC solver.
 
-use crate::chc::{self, format_context::FormatContext};
+use crate::chc::{
+    self,
+    format_context::{FormatContext, SortSymbol},
+};
+
+fn seq_concat_arr_name(elem: &chc::Sort) -> chc::DatatypeSymbol {
+    chc::DatatypeSymbol::new(format!("seq_concat_arr_{}", SortSymbol::new(elem)))
+}
+
+fn seq_subseq_arr_name(elem: &chc::Sort) -> chc::DatatypeSymbol {
+    chc::DatatypeSymbol::new(format!("seq_subseq_arr_{}", SortSymbol::new(elem)))
+}
+
+/// Display wrapper that emits [`fmt_default`] for the given sort.
+struct DefaultValue<'a> {
+    ctx: &'a FormatContext,
+    sort: &'a chc::Sort,
+}
+
+impl<'a> DefaultValue<'a> {
+    fn new(ctx: &'a FormatContext, sort: &'a chc::Sort) -> Self {
+        Self { ctx, sort }
+    }
+}
+
+impl<'a> std::fmt::Display for DefaultValue<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fmt_default(self.sort, self.ctx, f)
+    }
+}
+
+/// Emits a canonical SMT value of `sort`. The exact value is unspecified;
+/// only used where any well-typed value would do (e.g. the element of an
+/// [`chc::Term::EmptyArray`] or the base case of `seq_subseq_arr`).
+fn fmt_default(
+    sort: &chc::Sort,
+    ctx: &FormatContext,
+    f: &mut std::fmt::Formatter,
+) -> std::fmt::Result {
+    match sort {
+        chc::Sort::Null => write!(f, "null"),
+        chc::Sort::Int => write!(f, "0"),
+        chc::Sort::Bool => write!(f, "false"),
+        chc::Sort::String => write!(f, "\"\""),
+        chc::Sort::Box(s) => {
+            write!(f, "({} ", ctx.box_ctor(s))?;
+            fmt_default(s, ctx, f)?;
+            write!(f, ")")
+        }
+        chc::Sort::Mut(s) => {
+            write!(f, "({} ", ctx.mut_ctor(s))?;
+            fmt_default(s, ctx, f)?;
+            write!(f, " ")?;
+            fmt_default(s, ctx, f)?;
+            write!(f, ")")
+        }
+        chc::Sort::Tuple(ts) => {
+            if ts.is_empty() {
+                write!(f, "{}", ctx.tuple_ctor(ts))
+            } else {
+                write!(f, "({}", ctx.tuple_ctor(ts))?;
+                for s in ts {
+                    write!(f, " ")?;
+                    fmt_default(s, ctx, f)?;
+                }
+                write!(f, ")")
+            }
+        }
+        chc::Sort::Array(_, v) => {
+            write!(f, "((as const (Array Int {})) ", ctx.fmt_sort(v))?;
+            fmt_default(v, ctx, f)?;
+            write!(f, ")")
+        }
+        // TODO: defaults for Datatype and Param.
+        chc::Sort::Datatype(_) | chc::Sort::Param(_) => {
+            unimplemented!("no default value for sort {sort:?}")
+        }
+    }
+}
 
 /// A helper struct to display a list of items.
 #[derive(Debug, Clone)]
@@ -159,14 +237,27 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
                 )
             }
-            chc::Term::EmptyArray(elem) => {
-                let elem_sort = self.ctx.fmt_sort(elem);
-                let default: chc::Term = chc::Term::default_for(elem);
+            chc::Term::EmptyArray(elem) => fmt_default(
+                &chc::Sort::Array(Box::new(chc::Sort::Int), Box::new(elem.clone())),
+                self.ctx,
+                f,
+            ),
+            chc::Term::SeqConcatArr(elem, args) => {
+                let name = self.ctx.fmt_datatype_symbol(&seq_concat_arr_name(elem));
                 write!(
                     f,
-                    "((as const (Array Int {})) {})",
-                    elem_sort,
-                    Term::new(self.ctx, self.clause, &default)
+                    "({} {})",
+                    name,
+                    List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
+                )
+            }
+            chc::Term::SeqSubseqArr(elem, args) => {
+                let name = self.ctx.fmt_datatype_symbol(&seq_subseq_arr_name(elem));
+                write!(
+                    f,
+                    "({} {})",
+                    name,
+                    List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
                 )
             }
             chc::Term::Tuple(ts) => {
@@ -632,6 +723,36 @@ impl<'a> std::fmt::Display for System<'a> {
         // insert command from #![thrust::raw_command()] here
         for raw_command in &self.inner.raw_commands {
             writeln!(f, "{}\n", RawCommand::new(raw_command))?;
+        }
+
+        for elem in &self.inner.uses_seq_concat {
+            let name = self.ctx.fmt_datatype_symbol(&seq_concat_arr_name(elem));
+            let elem_ty = self.ctx.fmt_sort(elem);
+            writeln!(
+                f,
+                "(define-fun-rec {name} \
+                  ((sa (Array Int {elem_ty})) (sn Int) (ta (Array Int {elem_ty})) (tn Int)) \
+                  (Array Int {elem_ty}) \
+                  (ite (<= tn 0) sa \
+                       (store ({name} sa sn ta (- tn 1)) \
+                              (+ sn (- tn 1)) \
+                              (select ta (- tn 1)))))\n",
+            )?;
+        }
+        for elem in &self.inner.uses_seq_subseq {
+            let name = self.ctx.fmt_datatype_symbol(&seq_subseq_arr_name(elem));
+            let elem_ty = self.ctx.fmt_sort(elem);
+            let base_arr = chc::Sort::Array(Box::new(chc::Sort::Int), Box::new(elem.clone()));
+            let base = DefaultValue::new(&self.ctx, &base_arr);
+            writeln!(
+                f,
+                "(define-fun-rec {name} \
+                  ((a (Array Int {elem_ty})) (l Int) (r Int)) (Array Int {elem_ty}) \
+                  (ite (<= r l) {base} \
+                       (store ({name} a l (- r 1)) \
+                              (- (- r 1) l) \
+                              (select a (- r 1)))))\n",
+            )?;
         }
 
         for user_defined_pred_def in &self.inner.user_defined_pred_defs {
