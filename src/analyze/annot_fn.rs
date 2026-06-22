@@ -438,6 +438,17 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self.type_builder.build(elem_ty)
     }
 
+    fn adt_arg_type_at(
+        &self,
+        expr: &'tcx rustc_hir::Expr<'tcx>,
+        idx: usize,
+    ) -> rty::Type<rty::Closed> {
+        let mir_ty::TyKind::Adt(_, args) = self.expr_ty(expr).kind() else {
+            panic!("expected ADT");
+        };
+        self.type_builder.build(args.type_at(idx))
+    }
+
     fn variant_ctor_term(
         &self,
         ctor_did: rustc_span::def_id::DefId,
@@ -674,6 +685,25 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let len = t.tuple_proj(1);
                         let new_arr = arr.store(len.clone(), v);
                         let new_len = len.add(chc::Term::int(1));
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                    }
+                    if Some(def_id) == self.def_ids.seq_concat() {
+                        assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
+                        let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();
+                        let t = self.to_term(receiver);
+                        let other = self.to_term(&args[0]);
+                        let a_arr = t.clone().tuple_proj(0);
+                        let a_len = t.tuple_proj(1);
+                        let b_arr = other.clone().tuple_proj(0);
+                        let b_len = other.tuple_proj(1);
+                        let new_arr = chc::Term::array_concat(
+                            elem_sort,
+                            a_arr,
+                            a_len.clone(),
+                            b_arr,
+                            b_len.clone(),
+                        );
+                        let new_len = a_len.add(b_len);
                         return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
                     }
                 }

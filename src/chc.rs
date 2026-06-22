@@ -434,6 +434,66 @@ impl Function {
     pub const SELECT: Function = Function::new("select");
 }
 
+#[derive(Debug, Clone)]
+pub struct ArrayConcatTerm<V = TermVarIdx> {
+    pub array1: Term<V>,
+    pub len1: Term<V>,
+    pub array2: Term<V>,
+    pub len2: Term<V>,
+}
+
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &ArrayConcatTerm<V>
+where
+    V: Var,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator
+            .text("concat")
+            .append(allocator.line())
+            .append(self.array1.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
+            .append(self.len1.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
+            .append(self.array2.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
+            .append(self.len2.pretty_atom(allocator))
+            .parens()
+    }
+}
+
+impl<V> ArrayConcatTerm<V> {
+    pub fn iter_args(&self) -> impl Iterator<Item = &Term<V>> {
+        std::iter::once(&self.array1)
+            .chain(std::iter::once(&self.len1))
+            .chain(std::iter::once(&self.array2))
+            .chain(std::iter::once(&self.len2))
+    }
+
+    pub fn iter_args_mut(&mut self) -> impl Iterator<Item = &mut Term<V>> {
+        std::iter::once(&mut self.array1)
+            .chain(std::iter::once(&mut self.len1))
+            .chain(std::iter::once(&mut self.array2))
+            .chain(std::iter::once(&mut self.len2))
+    }
+
+    pub fn subst_var<F, W>(self, mut f: F) -> ArrayConcatTerm<W>
+    where
+        F: FnMut(V) -> Term<W>,
+    {
+        ArrayConcatTerm {
+            array1: self.array1.subst_var(&mut f),
+            len1: self.len1.subst_var(&mut f),
+            array2: self.array2.subst_var(&mut f),
+            len2: self.len2.subst_var(f),
+        }
+    }
+}
+
 /// A logical term.
 #[derive(Debug, Clone)]
 pub enum Term<V = TermVarIdx> {
@@ -449,6 +509,7 @@ pub enum Term<V = TermVarIdx> {
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
     ArrayEmpty(Sort, Sort),
+    ArrayConcat(Sort, Box<ArrayConcatTerm<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
@@ -501,6 +562,7 @@ where
                 }
             }
             Term::ArrayEmpty(_, _) => allocator.text("[]"),
+            Term::ArrayConcat(_, t) => t.pretty(allocator),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ts.len() == 1 {
@@ -565,6 +627,7 @@ impl<V> Term<V> {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
             Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(s1, s2),
+            Term::ArrayConcat(s, t) => Term::ArrayConcat(s, Box::new(t.subst_var(f))),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
             Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
@@ -612,6 +675,7 @@ impl<V> Term<V> {
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
             Term::ArrayEmpty(index, elem) => Sort::array(index.clone(), elem.clone()),
+            Term::ArrayConcat(elem, _) => Sort::array(Sort::int(), elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -639,6 +703,7 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.fv_impl(),
             Term::MutFinal(t) => t.fv_impl(),
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::ArrayConcat(_, t) => Box::new(t.iter_args().flat_map(|t| t.fv_impl())),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
@@ -703,6 +768,24 @@ impl<V> Term<V> {
 
     pub fn array_empty(index: Sort, elem: Sort) -> Self {
         Term::ArrayEmpty(index, elem)
+    }
+
+    pub fn array_concat(
+        elem_sort: Sort,
+        array1: Term<V>,
+        len1: Term<V>,
+        array2: Term<V>,
+        len2: Term<V>,
+    ) -> Self {
+        Term::ArrayConcat(
+            elem_sort,
+            Box::new(ArrayConcatTerm {
+                array1,
+                len1,
+                array2,
+                len2,
+            }),
+        )
     }
 
     pub fn boxed(self) -> Self {

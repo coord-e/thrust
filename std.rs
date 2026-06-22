@@ -244,6 +244,12 @@ mod thrust_models {
                 unimplemented!()
             }
 
+            #[allow(dead_code)]
+            #[thrust::def::seq_concat]
+            #[thrust::ignored]
+            pub fn concat(self, _other: Self) -> Self {
+                unimplemented!()
+            }
         }
     }
 
