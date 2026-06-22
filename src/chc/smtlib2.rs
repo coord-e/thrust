@@ -19,6 +19,73 @@ fn seq_subseq_arr_name(elem: &chc::Sort) -> chc::DatatypeSymbol {
     chc::DatatypeSymbol::new(format!("seq_subseq_arr_{}", SortSymbol::new(elem)))
 }
 
+fn empty_arr_name(elem: &chc::Sort) -> chc::DatatypeSymbol {
+    chc::DatatypeSymbol::new(format!("empty_arr_{}", SortSymbol::new(elem)))
+}
+
+fn collect_term_uses(term: &chc::Term, empty: &mut std::collections::BTreeSet<chc::Sort>) {
+    match term {
+        chc::Term::Null
+        | chc::Term::Var(_)
+        | chc::Term::Bool(_)
+        | chc::Term::Int(_)
+        | chc::Term::String(_)
+        | chc::Term::FormulaQuantifiedVar(_, _) => {}
+        chc::Term::EmptyArray(s) => {
+            empty.insert(s.clone());
+        }
+        chc::Term::Box(t)
+        | chc::Term::BoxCurrent(t)
+        | chc::Term::MutCurrent(t)
+        | chc::Term::MutFinal(t)
+        | chc::Term::TupleProj(t, _)
+        | chc::Term::DatatypeDiscr(_, t) => collect_term_uses(t, empty),
+        chc::Term::Mut(t1, t2) => {
+            collect_term_uses(t1, empty);
+            collect_term_uses(t2, empty);
+        }
+        chc::Term::App(_, args)
+        | chc::Term::Tuple(args)
+        | chc::Term::SeqConcatArr(_, args)
+        | chc::Term::SeqSubseqArr(_, args)
+        | chc::Term::DatatypeCtor(_, _, args) => {
+            for arg in args {
+                collect_term_uses(arg, empty);
+            }
+        }
+    }
+}
+
+/// Walks the system and collects element sorts of every [`chc::Term::EmptyArray`]
+/// reachable from any clause's atoms or guards. We also include the value sort of
+/// every `seq_subseq_arr`, since its `define-fun-rec` base case references an
+/// empty array of that sort.
+fn collect_empty_array_value_sorts(system: &chc::System) -> std::collections::BTreeSet<chc::Sort> {
+    let mut empty = std::collections::BTreeSet::new();
+    let mut visit = |atom: &chc::Atom| {
+        if let Some(guard) = &atom.guard {
+            for a in guard.iter_atoms() {
+                for arg in &a.args {
+                    collect_term_uses(arg, &mut empty);
+                }
+            }
+        }
+        for arg in &atom.args {
+            collect_term_uses(arg, &mut empty);
+        }
+    };
+    for clause in &system.clauses {
+        visit(&clause.head);
+        for atom in clause.body.iter_atoms() {
+            visit(atom);
+        }
+    }
+    for elem in &system.uses_seq_subseq {
+        empty.insert(elem.clone());
+    }
+    empty
+}
+
 /// Display wrapper that emits [`fmt_default`] for the given sort.
 struct DefaultValue<'a> {
     ctx: &'a FormatContext,
@@ -237,11 +304,10 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
                 )
             }
-            chc::Term::EmptyArray(elem) => fmt_default(
-                &chc::Sort::Array(Box::new(chc::Sort::Int), Box::new(elem.clone())),
-                self.ctx,
-                f,
-            ),
+            chc::Term::EmptyArray(elem) => {
+                let name = self.ctx.fmt_datatype_symbol(&empty_arr_name(elem));
+                write!(f, "{}", name)
+            }
             chc::Term::SeqConcatArr(elem, args) => {
                 let name = self.ctx.fmt_datatype_symbol(&seq_concat_arr_name(elem));
                 write!(
@@ -725,6 +791,16 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}\n", RawCommand::new(raw_command))?;
         }
 
+        for elem in &collect_empty_array_value_sorts(self.inner) {
+            let name = self.ctx.fmt_datatype_symbol(&empty_arr_name(elem));
+            let elem_ty = self.ctx.fmt_sort(elem);
+            let default = DefaultValue::new(&self.ctx, elem);
+            writeln!(
+                f,
+                "(define-fun {name} () (Array Int {elem_ty}) \
+                 ((as const (Array Int {elem_ty})) {default}))\n",
+            )?;
+        }
         for elem in &self.inner.uses_seq_concat {
             let name = self.ctx.fmt_datatype_symbol(&seq_concat_arr_name(elem));
             let elem_ty = self.ctx.fmt_sort(elem);
@@ -742,8 +818,7 @@ impl<'a> std::fmt::Display for System<'a> {
         for elem in &self.inner.uses_seq_subseq {
             let name = self.ctx.fmt_datatype_symbol(&seq_subseq_arr_name(elem));
             let elem_ty = self.ctx.fmt_sort(elem);
-            let base_arr = chc::Sort::Array(Box::new(chc::Sort::Int), Box::new(elem.clone()));
-            let base = DefaultValue::new(&self.ctx, &base_arr);
+            let base = self.ctx.fmt_datatype_symbol(&empty_arr_name(elem));
             writeln!(
                 f,
                 "(define-fun-rec {name} \

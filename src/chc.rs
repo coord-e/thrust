@@ -9,12 +9,14 @@ mod clause_builder;
 mod debug;
 mod format_context;
 mod hoice;
+mod seq_simplify;
 mod smtlib2;
 mod solver;
 mod unbox;
 
 pub use clause_builder::{ClauseBuilder, Var};
 pub use debug::DebugInfo;
+pub use seq_simplify::seq_simplify;
 pub use solver::{CheckSatError, Config};
 pub use unbox::unbox;
 
@@ -414,6 +416,7 @@ impl Function {
                 };
                 *elem
             }
+            Self::ITE => args.into_iter().nth(1).expect("ITE takes 3 args"),
             _ => unimplemented!(),
         }
     }
@@ -432,6 +435,7 @@ impl Function {
     pub const NEG: Function = Function::new("-");
     pub const STORE: Function = Function::new("store");
     pub const SELECT: Function = Function::new("select");
+    pub const ITE: Function = Function::new("ite");
 }
 
 /// A logical term.
@@ -824,6 +828,10 @@ impl<V> Term<V> {
             );
         }
         Term::App(Function::SELECT, vec![self, index])
+    }
+
+    pub fn ite(cond: Self, then_: Self, else_: Self) -> Self {
+        Term::App(Function::ITE, vec![cond, then_, else_])
     }
 
     pub fn store(self, index: Self, elem: Self) -> Self {
@@ -1981,7 +1989,7 @@ impl System {
     /// variables
     /// (see <https://github.com/coord-e/thrust?tab=readme-ov-file#configuration>).
     pub fn solve(&self) -> Result<(), CheckSatError> {
-        let system = unbox(self.clone());
+        let system = seq_simplify(unbox(self.clone()));
         if let Ok(file) = std::env::var("THRUST_PRETTY_OUTPUT") {
             let mut f = std::fs::File::create(file).unwrap();
             for (idx, c) in system.clauses.iter_enumerated() {
