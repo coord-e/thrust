@@ -45,6 +45,7 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
                 term_sorts(clause, arg, sorts);
             }
         }
+        chc::Term::ArrayEmpty(_, _) => {}
         chc::Term::Tuple(ts) => {
             for t in ts {
                 term_sorts(clause, t, sorts);

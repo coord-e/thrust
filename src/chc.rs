@@ -448,6 +448,7 @@ pub enum Term<V = TermVarIdx> {
     MutCurrent(Box<Term<V>>),
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
+    ArrayEmpty(Sort, Sort),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
@@ -499,6 +500,7 @@ where
                     f.append(allocator.line()).append(inner.nest(2)).group()
                 }
             }
+            Term::ArrayEmpty(_, _) => allocator.text("[]"),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ts.len() == 1 {
@@ -562,6 +564,7 @@ impl<V> Term<V> {
             Term::App(fun, args) => {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
+            Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(s1, s2),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
             Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
@@ -608,6 +611,7 @@ impl<V> Term<V> {
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
+            Term::ArrayEmpty(index, elem) => Sort::array(index.clone(), elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -627,6 +631,7 @@ impl<V> Term<V> {
             | Term::Bool(_)
             | Term::Int(_)
             | Term::String(_)
+            | Term::ArrayEmpty { .. }
             | Term::FormulaQuantifiedVar { .. } => Box::new(std::iter::empty()),
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
@@ -665,12 +670,39 @@ impl<V> Term<V> {
         Term::String(s)
     }
 
+    /// Some canonical value of the given sort. The exact value is unspecified;
+    /// callers must only use it where any well-typed value would do (e.g. the
+    /// element value of an [`Term::ArrayEmpty`]).
+    pub fn default_for(sort: &Sort) -> Self {
+        match sort {
+            Sort::Null => Term::Null,
+            Sort::Int => Term::Int(0),
+            Sort::Bool => Term::Bool(false),
+            Sort::String => Term::String(String::new()),
+            Sort::Box(s) => Term::Box(Box::new(Self::default_for(s))),
+            Sort::Mut(s) => Term::Mut(
+                Box::new(Self::default_for(s)),
+                Box::new(Self::default_for(s)),
+            ),
+            Sort::Tuple(ts) => Term::Tuple(ts.iter().map(Self::default_for).collect()),
+            Sort::Array(i, e) => Term::ArrayEmpty((**i).clone(), (**e).clone()),
+            // TODO: defaults for Datatype and Param.
+            Sort::Datatype(_) | Sort::Param(_) => {
+                unimplemented!("no default value for sort {sort:?}")
+            }
+        }
+    }
+
     pub fn box_(t: Term<V>) -> Self {
         Term::Box(Box::new(t))
     }
 
     pub fn mut_(t1: Term<V>, t2: Term<V>) -> Self {
         Term::Mut(Box::new(t1), Box::new(t2))
+    }
+
+    pub fn array_empty(index: Sort, elem: Sort) -> Self {
+        Term::ArrayEmpty(index, elem)
     }
 
     pub fn boxed(self) -> Self {

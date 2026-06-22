@@ -159,6 +159,16 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
                 )
             }
+            chc::Term::ArrayEmpty(index, elem) => {
+                let index_sort = self.ctx.fmt_sort(index);
+                let elem_sort = self.ctx.fmt_sort(elem);
+                let default = chc::Term::default_for(elem);
+                write!(
+                    f,
+                    "((as const (Array {index_sort} {elem_sort})) {})",
+                    Term::new(self.ctx, self.clause, &default)
+                )
+            }
             chc::Term::Tuple(ts) => {
                 let ss: Vec<_> = ts.iter().map(|t| self.clause.term_sort(t)).collect();
                 if ss.is_empty() {
