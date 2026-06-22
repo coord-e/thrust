@@ -195,6 +195,25 @@ mod thrust_models {
                 unimplemented!()
             }
         }
+
+        /// `Seq<T>` is the ghost sequence type used in specifications.
+        /// Like `Vec`, it is represented logically as `(Array<Int, T>, Int)`
+        /// — the array carries elements, the int carries length. Concrete
+        /// operations (indexing, push, concat, …) are added incrementally
+        /// in follow-up commits.
+        #[thrust::def::seq_model]
+        pub struct Seq<T: ?Sized>(pub Array<Int, T>, pub Int);
+
+        impl<T, U> PartialEq<U> for Seq<T> where U: super::Model<Ty = Self> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &U) -> bool {
+                unimplemented!()
+            }
+        }
+    }
+
+    impl<T> Model for model::Seq<T> where T: Model {
+        type Ty = model::Seq<<T as Model>::Ty>;
     }
 
     impl Model for model::Int {
