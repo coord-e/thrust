@@ -1982,7 +1982,7 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
                 subst_ty_params_in_term(arg, subst);
             }
         }
-        chc::Term::FormulaQuantifiedVar(sort, _) => {
+        chc::Term::EmptyArray(sort) | chc::Term::FormulaQuantifiedVar(sort, _) => {
             subst_ty_params_in_sort(sort, subst);
         }
     }

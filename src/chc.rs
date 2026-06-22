@@ -448,6 +448,7 @@ pub enum Term<V = TermVarIdx> {
     MutCurrent(Box<Term<V>>),
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
+    EmptyArray(Sort),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
@@ -499,6 +500,7 @@ where
                     f.append(allocator.line()).append(inner.nest(2)).group()
                 }
             }
+            Term::EmptyArray(_) => allocator.text("[]"),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ts.len() == 1 {
@@ -562,6 +564,7 @@ impl<V> Term<V> {
             Term::App(fun, args) => {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
+            Term::EmptyArray(s) => Term::EmptyArray(s),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
             Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
@@ -608,6 +611,7 @@ impl<V> Term<V> {
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
+            Term::EmptyArray(elem) => Sort::array(Sort::int(), elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -627,6 +631,7 @@ impl<V> Term<V> {
             | Term::Bool(_)
             | Term::Int(_)
             | Term::String(_)
+            | Term::EmptyArray(_)
             | Term::FormulaQuantifiedVar { .. } => Box::new(std::iter::empty()),
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
@@ -663,6 +668,29 @@ impl<V> Term<V> {
 
     pub fn string(s: String) -> Self {
         Term::String(s)
+    }
+
+    /// Some canonical value of the given sort. The exact value is unspecified;
+    /// callers must only use it where any well-typed value would do (e.g. the
+    /// element value of an [`Term::EmptyArray`]).
+    pub fn default_for(sort: &Sort) -> Self {
+        match sort {
+            Sort::Null => Term::Null,
+            Sort::Int => Term::Int(0),
+            Sort::Bool => Term::Bool(false),
+            Sort::String => Term::String(String::new()),
+            Sort::Box(s) => Term::Box(Box::new(Self::default_for(s))),
+            Sort::Mut(s) => Term::Mut(
+                Box::new(Self::default_for(s)),
+                Box::new(Self::default_for(s)),
+            ),
+            Sort::Tuple(ts) => Term::Tuple(ts.iter().map(Self::default_for).collect()),
+            Sort::Array(_, v) => Term::EmptyArray((**v).clone()),
+            // TODO: defaults for Datatype and Param.
+            Sort::Datatype(_) | Sort::Param(_) => {
+                unimplemented!("no default value for sort {sort:?}")
+            }
+        }
     }
 
     pub fn box_(t: Term<V>) -> Self {
@@ -745,6 +773,32 @@ impl<V> Term<V> {
     }
 
     pub fn select(self, index: Self) -> Self {
+        // `select(store(a, i, v), j)` with both indices literal: reduce to `v`
+        // or `select(a, j)`. pcsat doesn't fold this on its own and otherwise
+        // chokes on nested literal store/select chains.
+        if let (Term::App(Function::STORE, _), Term::Int(j)) = (&self, &index) {
+            let Term::App(_, mut args) = self else {
+                unreachable!()
+            };
+            assert_eq!(args.len(), 3, "STORE takes 3 args");
+            let stored_value = args.pop().unwrap();
+            let stored_index = args.pop().unwrap();
+            let base = args.pop().unwrap();
+            if let Term::Int(i) = &stored_index {
+                return if i == j {
+                    stored_value
+                } else {
+                    base.select(index)
+                };
+            }
+            return Term::App(
+                Function::SELECT,
+                vec![
+                    Term::App(Function::STORE, vec![base, stored_index, stored_value]),
+                    index,
+                ],
+            );
+        }
         Term::App(Function::SELECT, vec![self, index])
     }
 
@@ -757,6 +811,12 @@ impl<V> Term<V> {
     }
 
     pub fn tuple_proj(self, i: usize) -> Self {
+        // `tuple_proj(tuple(t0,...,tn), i)` ↦ `ti`. pcsat chokes on nested
+        // literal tuple constructors otherwise.
+        if let Term::Tuple(mut ts) = self {
+            assert!(i < ts.len(), "tuple_proj index out of bounds");
+            return ts.swap_remove(i);
+        }
         Term::TupleProj(Box::new(self), i)
     }
 

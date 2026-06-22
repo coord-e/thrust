@@ -11,6 +11,7 @@ fn unbox_term(term: Term) -> Term {
         Term::MutCurrent(t) => Term::MutCurrent(Box::new(unbox_term(*t))),
         Term::MutFinal(t) => Term::MutFinal(Box::new(unbox_term(*t))),
         Term::App(fun, args) => Term::App(fun, args.into_iter().map(unbox_term).collect()),
+        Term::EmptyArray(s) => Term::EmptyArray(unbox_sort(s)),
         Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(unbox_term).collect()),
         Term::TupleProj(t, i) => Term::TupleProj(Box::new(unbox_term(*t)), i),
         Term::DatatypeCtor(s1, s2, args) => Term::DatatypeCtor(

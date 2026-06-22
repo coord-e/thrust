@@ -196,11 +196,6 @@ mod thrust_models {
             }
         }
 
-        /// `Seq<T>` is the ghost sequence type used in specifications.
-        /// Like `Vec`, it is represented logically as `(Array<Int, T>, Int)`
-        /// — the array carries elements, the int carries length. Concrete
-        /// operations (indexing, push, concat, …) are added incrementally
-        /// in follow-up commits.
         #[thrust::def::seq_model]
         pub struct Seq<T: ?Sized>(pub Array<Int, T>, pub Int);
 
@@ -209,6 +204,46 @@ mod thrust_models {
             fn eq(&self, _other: &U) -> bool {
                 unimplemented!()
             }
+        }
+
+        impl<T, U> std::ops::Index<U> for Seq<T> where U: super::Model<Ty = Int> {
+            type Output = T;
+
+            #[thrust::ignored]
+            fn index(&self, _index: U) -> &Self::Output {
+                unimplemented!()
+            }
+        }
+
+        impl<T> Seq<T> {
+            #[allow(dead_code)]
+            #[thrust::def::seq_empty]
+            #[thrust::ignored]
+            pub fn empty() -> Self {
+                unimplemented!()
+            }
+
+            #[allow(dead_code)]
+            #[thrust::def::seq_singleton]
+            #[thrust::ignored]
+            pub fn singleton(_x: T) -> Self {
+                unimplemented!()
+            }
+
+            #[allow(dead_code)]
+            #[thrust::def::seq_len]
+            #[thrust::ignored]
+            pub fn len(&self) -> Int {
+                unimplemented!()
+            }
+
+            #[allow(dead_code)]
+            #[thrust::def::seq_push]
+            #[thrust::ignored]
+            pub fn push(self, _x: T) -> Self {
+                unimplemented!()
+            }
+
         }
     }
 
