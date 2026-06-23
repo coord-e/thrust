@@ -414,6 +414,7 @@ impl Function {
                 };
                 *elem
             }
+            Self::ITE => args.into_iter().nth(1).unwrap(),
             _ => unimplemented!(),
         }
     }
@@ -432,6 +433,7 @@ impl Function {
     pub const NEG: Function = Function::new("-");
     pub const STORE: Function = Function::new("store");
     pub const SELECT: Function = Function::new("select");
+    pub const ITE: Function = Function::new("ite");
 }
 
 #[derive(Debug, Clone)]
@@ -859,8 +861,57 @@ impl<V> Term<V> {
         Term::App(Function::NEG, vec![self])
     }
 
-    pub fn select(self, index: Self) -> Self {
+    pub fn select(self, index: Self) -> Self
+    where
+        V: Clone,
+    {
+        // Peephole 1: when both indices are concrete integer literals, reduce `select(store(a, i,
+        // v), j)` to `v` (`i == j`) or `select(a, j)` (`i != j`). Same motivation as the
+        // `tuple_proj` simplifier: keep datatype/array constructors from leaking into Spacer
+        // clauses where it can't reduce them. Non-literal indices are deferred to the solver via
+        // the general select-of-store axiom.
+        if let (Term::App(Function::STORE, _), Term::Int(j)) = (&self, &index) {
+            let Term::App(_, mut args) = self else {
+                unreachable!()
+            };
+            assert_eq!(args.len(), 3, "STORE takes 3 args");
+            let stored_value = args.pop().unwrap();
+            let stored_index = args.pop().unwrap();
+            let base = args.pop().unwrap();
+            if let Term::Int(i) = &stored_index {
+                return if i == j {
+                    stored_value
+                } else {
+                    base.select(index)
+                };
+            }
+            return Term::App(
+                Function::SELECT,
+                vec![
+                    Term::App(Function::STORE, vec![base, stored_index, stored_value]),
+                    index,
+                ],
+            );
+        }
+        // Peephole 2: inline one step of the `concat_int_array` recursive definitions to reduce
+        // indexed access to terms over the underlying sequences. The SMT-defined functions are
+        // still emitted (so the rewrites use exactly their unfolded form), but pcsat can prove
+        // indexed properties against the inlined ITE for *any* recursion bound, where unfolding
+        // through `define-fun-rec` would require an inductive invariant pcsat can't find.
+        //
+        // `select(concat_int_array(sa, sn, ta, tn), i)
+        //   ↦ ite(i < sn, select(sa, i), select(ta, i - sn))`
+        if let Term::ArrayConcat(_, t) = self {
+            let cond = index.clone().lt(t.len1.clone());
+            let then_ = t.array1.select(index.clone());
+            let else_ = t.array2.select(index.sub(t.len1));
+            return Term::ite(cond, then_, else_);
+        }
         Term::App(Function::SELECT, vec![self, index])
+    }
+
+    pub fn ite(cond: Self, then_: Self, else_: Self) -> Self {
+        Term::App(Function::ITE, vec![cond, then_, else_])
     }
 
     pub fn store(self, index: Self, elem: Self) -> Self {
@@ -872,6 +923,11 @@ impl<V> Term<V> {
     }
 
     pub fn tuple_proj(self, i: usize) -> Self {
+        // Spacer doesn't unfold tuple projections of literal constructors.
+        if let Term::Tuple(mut ts) = self {
+            assert!(i < ts.len(), "tuple_proj index out of bounds");
+            return ts.swap_remove(i);
+        }
         Term::TupleProj(Box::new(self), i)
     }
 
