@@ -137,6 +137,54 @@ pub fn array_model_store_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn seq_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_model"),
+    ]
+}
+
+pub fn seq_empty_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_empty"),
+    ]
+}
+
+pub fn seq_singleton_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_singleton"),
+    ]
+}
+
+pub fn seq_len_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_len"),
+    ]
+}
+
+pub fn seq_push_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_push"),
+    ]
+}
+
+pub fn seq_concat_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_concat"),
+    ]
+}
+
 pub fn exists_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

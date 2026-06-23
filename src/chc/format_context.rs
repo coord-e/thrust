@@ -21,6 +21,7 @@ use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 pub struct FormatContext {
     renamer: HoiceDatatypeRenamer,
     datatypes: Vec<chc::Datatype>,
+    int_array_elem_sorts: BTreeSet<chc::Sort>,
 }
 
 // FIXME: this is obviously ineffective and should be replaced
@@ -42,6 +43,12 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
         chc::Term::MutFinal(t) => term_sorts(clause, t, sorts),
         chc::Term::App(_fun, args) => {
             for arg in args {
+                term_sorts(clause, arg, sorts);
+            }
+        }
+        chc::Term::ArrayEmpty(_, _) => {}
+        chc::Term::ArrayConcat(_, t) => {
+            for arg in t.iter_args() {
                 term_sorts(clause, arg, sorts);
             }
         }
@@ -269,6 +276,13 @@ impl FormatContext {
                 datatypes.push(mono_datatype);
             }
         }
+        let int_array_elem_sorts: BTreeSet<_> = sorts
+            .iter()
+            .filter_map(|s| match s {
+                chc::Sort::Array(index, elem) if **index == chc::Sort::int() => Some(*elem.clone()),
+                _ => None,
+            })
+            .collect();
         let datatypes: Vec<_> = sorts
             .into_iter()
             .flat_map(builtin_sort_datatype)
@@ -276,11 +290,19 @@ impl FormatContext {
             .filter(|d| d.params == 0)
             .collect();
         let renamer = HoiceDatatypeRenamer::new(&datatypes);
-        FormatContext { renamer, datatypes }
+        FormatContext {
+            renamer,
+            datatypes,
+            int_array_elem_sorts,
+        }
     }
 
     pub fn datatypes(&self) -> &[chc::Datatype] {
         &self.datatypes
+    }
+
+    pub fn int_array_elem_sorts(&self) -> &BTreeSet<chc::Sort> {
+        &self.int_array_elem_sorts
     }
 
     pub fn box_ctor(&self, sort: &chc::Sort) -> impl std::fmt::Display {
@@ -345,6 +367,11 @@ impl FormatContext {
 
     pub fn matcher_pred_def(&self, sym: &chc::DatatypeSymbol) -> impl std::fmt::Display {
         format!("matcher_pred<{}>", self.fmt_datatype_symbol(sym))
+    }
+
+    pub fn concat_int_array(&self, elem: &chc::Sort) -> impl std::fmt::Display {
+        let elem = SortSymbol::new(elem);
+        format!("concat_int_array<{}>", elem)
     }
 
     fn fmt_sort_impl(&self, sort: &chc::Sort) -> Box<dyn std::fmt::Display> {

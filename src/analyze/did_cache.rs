@@ -24,6 +24,13 @@ struct DefIds {
     box_model_new: OnceCell<Option<DefId>>,
     array_model_store: OnceCell<Option<DefId>>,
 
+    seq_model: OnceCell<Option<DefId>>,
+    seq_empty: OnceCell<Option<DefId>>,
+    seq_singleton: OnceCell<Option<DefId>>,
+    seq_len: OnceCell<Option<DefId>>,
+    seq_push: OnceCell<Option<DefId>>,
+    seq_concat: OnceCell<Option<DefId>>,
+
     exists: OnceCell<Option<DefId>>,
     forall: OnceCell<Option<DefId>>,
     implies: OnceCell<Option<DefId>>,
@@ -177,6 +184,48 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .array_model_store
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::array_model_store_path()))
+    }
+
+    pub fn seq_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_model_path()))
+    }
+
+    pub fn seq_empty(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_empty
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_empty_path()))
+    }
+
+    pub fn seq_singleton(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_singleton
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_singleton_path()))
+    }
+
+    pub fn seq_len(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_len
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_len_path()))
+    }
+
+    pub fn seq_push(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_push
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_push_path()))
+    }
+
+    pub fn seq_concat(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_concat
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_concat_path()))
     }
 
     pub fn exists(&self) -> Option<DefId> {
