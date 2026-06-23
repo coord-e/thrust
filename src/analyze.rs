@@ -34,10 +34,16 @@ mod local_def;
 // TODO: organize structure and remove cross dependency between refine
 pub use did_cache::DefIdCache;
 
-pub fn mir_borrowck_skip_formula_fn(
-    tcx: rustc_middle::ty::TyCtxt<'_>,
+pub fn mir_borrowck_skip_formula_fn<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
     local_def_id: rustc_span::def_id::LocalDefId,
-) -> rustc_middle::query::queries::mir_borrowck::ProvidedValue<'_> {
+) -> Result<
+    &'tcx rustc_data_structures::fx::FxIndexMap<
+        rustc_span::def_id::LocalDefId,
+        rustc_middle::ty::DefinitionSiteHiddenType<'tcx>,
+    >,
+    rustc_span::ErrorGuaranteed,
+> {
     // TODO: unify impl with local_def::Analyzer
     // if the def is closure defined in formula_fn
     let root_def_id = tcx.typeck_root_def_id(local_def_id.to_def_id());
@@ -52,8 +58,9 @@ pub fn mir_borrowck_skip_formula_fn(
 
     if is_annotated_as_formula_fn {
         tracing::debug!(?local_def_id, "skipping borrow check for formula fn");
-        let dummy_result = rustc_middle::mir::ConcreteOpaqueTypes(Default::default());
-        return Ok(tcx.arena.alloc(dummy_result));
+        return Ok(tcx
+            .arena
+            .alloc(rustc_data_structures::fx::FxIndexMap::default()));
     }
 
     (rustc_interface::DEFAULT_QUERY_PROVIDERS

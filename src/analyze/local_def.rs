@@ -294,7 +294,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .tcx
             .opt_associated_item(self.local_def_id.to_def_id())?;
         let trait_item_id = impl_item_assoc
-            .trait_item_def_id
+            .trait_item_def_id()
             .and_then(|id| id.as_local())?;
 
         if trait_item_id == self.local_def_id {
@@ -311,11 +311,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return None;
         }
 
-        let trait_ref = self.tcx.impl_trait_ref(impl_did)?.instantiate_identity();
+        let trait_ref = self
+            .tcx
+            .impl_opt_trait_ref(impl_did)?
+            .instantiate_identity();
         let trait_item_did = self
             .tcx
             .associated_item(self.local_def_id.to_def_id())
-            .trait_item_def_id
+            .trait_item_def_id()
             .unwrap();
         self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
     }
@@ -562,6 +565,42 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return Some((lhs_local, *place));
         }
 
+        // nightly-2026+: CopyForDeref was replaced by plain Use(Copy(place)) for &mut T.
+        // Detect copies of &mut T reached through struct-field projections — these are deref
+        // aliases created so the result can be immediately dereffed (e.g. closure captures).
+        // We require a non-empty projection ending with a Field to avoid matching plain
+        // copies like `return_val = copy param` which are genuine transfers, not deref aliases.
+        if let mir::Rvalue::Use(mir::Operand::Copy(place)) = &rvalue {
+            let proj = place.projection.as_slice();
+            if let Some(mir::ProjectionElem::Field(..)) = proj.last() {
+                let place_ty = place.ty(&self.body.local_decls, self.tcx).ty;
+                if matches!(
+                    place_ty.kind(),
+                    mir_ty::TyKind::Ref(_, _, mir::Mutability::Mut)
+                ) {
+                    return Some((lhs_local, *place));
+                }
+            }
+        }
+
+        // nightly-2026+: box deref uses plain `copy (*box_local)` instead of CopyForDeref.
+        // Box<T> is not Copy, so `lhs = copy <box-place>` in optimized MIR must be the
+        // elaborated box deref pattern (reaching through the raw pointer alias from Transmute).
+        // The box may be reached through a reference (e.g. `copy (*ref_to_box)`), so we check
+        // the type of the full place after projections, not just the local's type.
+        if let mir::Rvalue::Use(mir::Operand::Copy(place)) = &rvalue {
+            if let Some((rest, [mir::ProjectionElem::Deref])) =
+                place.projection.as_slice().split_last_chunk::<1>()
+            {
+                if rest.is_empty() {
+                    let place_ty = place.ty(&self.body.local_decls, self.tcx).ty;
+                    if place_ty.is_box() {
+                        return Some((lhs_local, *place));
+                    }
+                }
+            }
+        }
+
         let unique_did = self.ctx.def_ids.unique()?;
         let nonnull_did = self.ctx.def_ids.nonnull()?;
 
@@ -569,8 +608,38 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         use rustc_abi::FieldIdx;
         const ZERO_FIELD: FieldIdx = FieldIdx::from_u32(0);
 
+        // nightly-2026+: box deref split into two statements. The pre-optimization MIR copies
+        // the NonNull field directly (instead of going through CopyForDeref/Transmute chain):
+        //   _nonnull = copy box_place.Field(0, Unique<T>).Field(0, NonNull<T>)
+        //   _ptr     = Transmute(_nonnull) as *const T
+        // Detect the first statement and map _nonnull → box_place so the Transmute can be handled.
+        if let mir::Rvalue::Use(mir::Operand::Copy(place)) = &rvalue {
+            if let Some((rest, [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1)])) =
+                place.projection.as_slice().split_last_chunk::<2>()
+            {
+                let rest_place = mir::Place {
+                    local: place.local,
+                    projection: self.tcx.mk_place_elems(rest),
+                };
+                let local_ty = rest_place.ty(&self.body.local_decls, self.tcx).ty;
+                if local_ty.is_box() {
+                    if let Some(inner_ty) = local_ty.boxed_ty() {
+                        if matches!(ty0.kind(), mir_ty::TyKind::Adt(def, args)
+                                if def.did() == unique_did && args.type_at(0) == inner_ty)
+                            && matches!(ty1.kind(), mir_ty::TyKind::Adt(def, args)
+                                if def.did() == nonnull_did && args.type_at(0) == inner_ty)
+                        {
+                            return Some((lhs_local, rest_place));
+                        }
+                    }
+                }
+            }
+        }
+
         // Box deref pattern: `(_box.0.0 as *const T) Transmute`
-        //   projection = [..., Field(0, Unique<T>), Field(0, NonNull<T>)], transmuted to *const T
+        // Two variants:
+        //   Old: projection = [..., Field(0, Unique<T>), Field(0, NonNull<T>)], transmuted to *const T
+        //   New (nightly-2026+): operand is a Box<T> local (NonNull was pre-fetched separately)
         let mir::Rvalue::Cast(mir::CastKind::Transmute, mir::Operand::Copy(place), cast_ty) =
             &rvalue
         else {
@@ -579,31 +648,33 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if !matches!(cast_ty.kind(), mir_ty::TyKind::RawPtr(_, mutbl) if mutbl.is_not()) {
             return None;
         }
-        let Some((rest, [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1)])) =
+        // Old pattern: last two projections are Field(0,Unique).Field(0,NonNull).
+        if let Some((rest, [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1)])) =
             place.projection.as_slice().split_last_chunk::<2>()
-        else {
-            return None;
-        };
-        let rest_place = mir::Place {
-            local: place.local,
-            projection: self.tcx.mk_place_elems(rest),
-        };
-        let local_ty = rest_place.ty(&self.body.local_decls, self.tcx).ty;
-        if !local_ty.is_box() {
-            return None;
-        }
-        let inner_ty = local_ty.boxed_ty()?;
-        if !matches!(ty0.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == unique_did && args.type_at(0) == inner_ty)
         {
-            return None;
+            let rest_place = mir::Place {
+                local: place.local,
+                projection: self.tcx.mk_place_elems(rest),
+            };
+            let local_ty = rest_place.ty(&self.body.local_decls, self.tcx).ty;
+            if local_ty.is_box() {
+                if let Some(inner_ty) = local_ty.boxed_ty() {
+                    if matches!(ty0.kind(), mir_ty::TyKind::Adt(def, args)
+                            if def.did() == unique_did && args.type_at(0) == inner_ty)
+                        && matches!(ty1.kind(), mir_ty::TyKind::Adt(def, args)
+                            if def.did() == nonnull_did && args.type_at(0) == inner_ty)
+                    {
+                        return Some((lhs_local, rest_place));
+                    }
+                }
+            }
         }
-        if !matches!(ty1.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == nonnull_did && args.type_at(0) == inner_ty)
-        {
-            return None;
+        // New pattern (nightly-2026+): operand is already a Box<T> (after NonNull pre-fetch).
+        let place_ty = place.ty(&self.body.local_decls, self.tcx).ty;
+        if place_ty.is_box() {
+            return Some((lhs_local, *place));
         }
-        Some((lhs_local, rest_place))
+        None
     }
 
     fn unelaborate_derefs(&mut self) {
