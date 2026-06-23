@@ -187,15 +187,6 @@ mod thrust_models {
             unimplemented!()
         }
 
-        pub struct Vec<T: ?Sized>(pub Array<Int, T>, pub Int);
-
-        impl<T, U> PartialEq<U> for Vec<T> where U: super::Model<Ty = Self> {
-            #[thrust::ignored]
-            fn eq(&self, _other: &U) -> bool {
-                unimplemented!()
-            }
-        }
-
         #[thrust::def::seq_model]
         pub struct Seq<T: ?Sized>(pub Array<Int, T>, pub Int);
 
@@ -264,8 +255,8 @@ mod thrust_models {
         }
     }
 
-    impl<T> Model for model::Seq<T> where T: Model {
-        type Ty = model::Seq<<T as Model>::Ty>;
+    impl<T: ?Sized> Model for model::Seq<T> {
+        type Ty = model::Seq<T>;
     }
 
     impl Model for model::Int {
@@ -381,11 +372,7 @@ mod thrust_models {
     }
 
     impl<T> Model for Vec<T> where T: Model {
-        type Ty = model::Vec<<T as Model>::Ty>;
-    }
-
-    impl<T: ?Sized> Model for model::Vec<T> {
-        type Ty = model::Vec<T>;
+        type Ty = model::Seq<<T as Model>::Ty>;
     }
 
     impl<T> Model for Option<T> where T: Model {
@@ -738,7 +725,7 @@ fn _extern_spec_vec_new<T>() -> Vec<T> where T: thrust_models::Model, T::Ty: Par
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(!vec == thrust_models::model::Vec((*vec).0.store((*vec).1, elem), (*vec).1 + 1))]
+#[thrust_macros::ensures(!vec == thrust_models::model::Seq((*vec).0.store((*vec).1, elem), (*vec).1 + 1))]
 fn _extern_spec_vec_push<T>(vec: &mut Vec<T>, elem: T)
     where T: thrust_models::Model, T::Ty: PartialEq
 {
@@ -764,7 +751,7 @@ fn _extern_spec_vec_index<T>(vec: &Vec<T>, index: usize) -> &T where T: thrust_m
 #[thrust_macros::ensures(
     *result == (*vec).0[index] &&
     !result == (!vec).0[index] &&
-    !vec == thrust_models::model::Vec((*vec).0.store(index, !result), (*vec).1)
+    !vec == thrust_models::model::Seq((*vec).0.store(index, !result), (*vec).1)
 )]
 fn _extern_spec_vec_index_mut<T>(vec: &mut Vec<T>, index: usize) -> &mut T
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -810,7 +797,7 @@ fn _extern_spec_vec_is_empty<T>(vec: &Vec<T>) -> bool where T: thrust_models::Mo
 #[thrust_macros::ensures(
     (
         (*vec).1 > len &&
-        !vec == thrust_models::model::Vec((*vec).0, len)
+        !vec == thrust_models::model::Seq((*vec).0, len)
     ) || (
         (*vec).1 <= len &&
         !vec == *vec
