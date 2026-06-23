@@ -189,6 +189,12 @@ fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> Use
         .into_iter()
         .map(|(name, sort)| (name, unbox_sort(sort)))
         .collect();
+    let body = match body {
+        UserDefinedPredBody::Raw(s) => UserDefinedPredBody::Raw(s),
+        UserDefinedPredBody::Formula(formula) => {
+            UserDefinedPredBody::Formula(unbox_formula(formula))
+        }
+    };
     UserDefinedPredDef { symbol, sig, body }
 }
 

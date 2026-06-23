@@ -1945,9 +1945,32 @@ impl Clause {
     pub fn is_nop(&self) -> bool {
         self.head.is_top() || self.body.is_bottom()
     }
+}
+
+/// Resolves the sort of term-level variables.
+///
+/// Rendering a [`Term`] to SMT-LIB2 needs the sort of each variable, because
+/// box/mut/tuple constructors and selectors are sort-indexed. Anything that can
+/// provide variable sorts (a [`Clause`] via its `vars`, or a bare list of sorts
+/// for a `define-fun` signature) can drive term rendering through this trait,
+/// so callers need not fabricate a [`Clause`].
+pub trait TermSortEnv {
+    fn var_sort(&self, var: TermVarIdx) -> Sort;
 
     fn term_sort(&self, term: &Term<TermVarIdx>) -> Sort {
-        term.sort(|v| self.vars[*v].clone())
+        term.sort(|v| self.var_sort(*v))
+    }
+}
+
+impl TermSortEnv for Clause {
+    fn var_sort(&self, var: TermVarIdx) -> Sort {
+        self.vars[var].clone()
+    }
+}
+
+impl TermSortEnv for IndexVec<TermVarIdx, Sort> {
+    fn var_sort(&self, var: TermVarIdx) -> Sort {
+        self[var].clone()
     }
 }
 
@@ -2007,11 +2030,22 @@ pub struct PredVarDef {
 
 pub type UserDefinedPredSig = Vec<(String, Sort)>;
 
+/// The body of a user-defined predicate.
+///
+/// A predicate can be defined either by a raw SMT-LIB2 string (inserted into the
+/// generated `define-fun` verbatim) or by a [`Formula`] translated from a Rust
+/// expression via the `formula_fn` infrastructure.
+#[derive(Debug, Clone)]
+pub enum UserDefinedPredBody {
+    Raw(String),
+    Formula(Formula<TermVarIdx>),
+}
+
 #[derive(Debug, Clone)]
 pub struct UserDefinedPredDef {
     symbol: UserDefinedPred,
     sig: UserDefinedPredSig,
-    body: String,
+    body: UserDefinedPredBody,
 }
 
 /// A CHC system.
@@ -2039,8 +2073,24 @@ impl System {
         sig: UserDefinedPredSig,
         body: String,
     ) {
-        self.user_defined_pred_defs
-            .push(UserDefinedPredDef { symbol, sig, body })
+        self.user_defined_pred_defs.push(UserDefinedPredDef {
+            symbol,
+            sig,
+            body: UserDefinedPredBody::Raw(body),
+        })
+    }
+
+    pub fn push_pred_define_formula(
+        &mut self,
+        symbol: UserDefinedPred,
+        sig: UserDefinedPredSig,
+        formula: Formula<TermVarIdx>,
+    ) {
+        self.user_defined_pred_defs.push(UserDefinedPredDef {
+            symbol,
+            sig,
+            body: UserDefinedPredBody::Formula(formula),
+        })
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
