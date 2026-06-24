@@ -1,1 +1,3 @@
 target/
+librust_out.rlib
+rust_out
