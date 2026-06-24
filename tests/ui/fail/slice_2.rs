@@ -1,4 +1,4 @@
-//@check-pass
+//@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
 
 #[thrust::trusted]
@@ -10,6 +10,5 @@ fn two_elem_slice() -> &'static [i32] {
 
 fn main() {
     let s = two_elem_slice();
-    let _ = s[0];
-    let _ = s[1];
+    let _ = s[2];
 }

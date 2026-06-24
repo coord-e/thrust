@@ -3,7 +3,7 @@
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result.1 > 0)]
+#[thrust_macros::ensures(result.len() > 0)]
 fn nonempty_slice() -> &'static [i32] {
     unimplemented!()
 }

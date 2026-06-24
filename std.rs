@@ -369,7 +369,7 @@ mod thrust_models {
     }
 
     impl<T: Model, const N: usize> Model for [T; N] {
-        type Ty = model::Array<model::Int, <T as Model>::Ty>;
+        type Ty = model::Seq<<T as Model>::Ty>;
     }
 
     impl<T> Model for Option<T> where T: Model {
