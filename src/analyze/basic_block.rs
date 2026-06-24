@@ -1055,62 +1055,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    /// Applies the `<[T] as IndexMut<usize>>::index_mut(s1, idx)` extern spec
-    /// constraints given already-reborrowed locals, producing CHC clauses.
-    ///
-    /// Called from `ReborrowVisitor` when rewriting `(*s)[idx] = val` into
-    /// `*ptr = val` so that model-specific Seq knowledge lives only in the
-    /// extern spec, not in the analyzer.
-    pub(super) fn type_slice_index_mut(
-        &mut self,
-        s1: Local,
-        idx: Local,
-        elem_mir_ty: mir_ty::Ty<'tcx>,
-        expected_ret: &rty::RefinedType<Var>,
-    ) {
-        let index_mut_trait = self.tcx.lang_items().index_mut_trait().unwrap();
-        let index_mut_method = self
-            .tcx
-            .associated_items(index_mut_trait)
-            .filter_by_name_unhygienic(rustc_span::Symbol::intern("index_mut"))
-            .next()
-            .expect("IndexMut::index_mut not found")
-            .def_id;
-
-        // Abstract args: [Self = [elem_ty], Idx = usize]
-        let slice_ty = mir_ty::Ty::new_slice(self.tcx, elem_mir_ty);
-        let abstract_args = self.tcx.mk_args(&[
-            mir_ty::GenericArg::from(slice_ty),
-            mir_ty::GenericArg::from(self.tcx.types.usize),
-        ]);
-
-        let func_ty: rty::Type<Var> = self.fn_def_ty(index_mut_method, abstract_args).vacuous();
-        let s1_rty = self.operand_refined_type(Operand::Move(s1.into()));
-        let idx_rty = self.operand_refined_type(Operand::Copy(idx.into()));
-        let mut expected_args = IndexVec::new();
-        expected_args.push(s1_rty);
-        expected_args.push(idx_rty);
-
-        if let rty::Type::Function(fn_ty) = func_ty {
-            let clauses = self.relate_fn_sub_type(fn_ty, expected_args, expected_ret.clone());
-            self.ctx.extend_clauses(clauses);
-        } else {
-            panic!("index_mut must resolve to a function type");
-        }
-    }
-
-    /// Builds a fresh refined type for `mir_ty` with existential vars, as done
-    /// for call return values in `analyze_terminator_binds`.
-    pub(super) fn build_fresh_refined_type(
-        &mut self,
-        mir_ty: mir_ty::Ty<'tcx>,
-    ) -> rty::RefinedType<Var> {
-        self.type_builder
-            .for_template(&mut self.ctx)
-            .with_scope(&self.env)
-            .build_refined(mir_ty)
-    }
-
     fn drop_local(&mut self, local: Local) {
         self.env.drop_local(local);
     }
