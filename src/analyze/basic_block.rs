@@ -663,6 +663,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
             }
+            Rvalue::Cast(
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::Unsize, _),
+                operand,
+                _ty,
+            ) => {
+                // &[T; N] → &[T]: both are modeled as &Seq<T>, so pass through directly.
+                self.operand_type(operand)
+            }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
                 let ty = self.env.place_type(place);
