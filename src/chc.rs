@@ -467,6 +467,7 @@ impl Function {
                 };
                 *elem
             }
+            Self::ITE => args.into_iter().nth(1).unwrap(),
             _ => unimplemented!(),
         }
     }
@@ -485,6 +486,67 @@ impl Function {
     pub const NEG: Function = Function::new("-");
     pub const STORE: Function = Function::new("store");
     pub const SELECT: Function = Function::new("select");
+    pub const ITE: Function = Function::new("ite");
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ArrayConcatTerm<V = TermVarIdx> {
+    pub array1: Term<V>,
+    pub len1: Term<V>,
+    pub array2: Term<V>,
+    pub len2: Term<V>,
+}
+
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &ArrayConcatTerm<V>
+where
+    V: Var,
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator
+            .text("concat")
+            .append(allocator.line())
+            .append(self.array1.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
+            .append(self.len1.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
+            .append(self.array2.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
+            .append(self.len2.pretty_atom(allocator))
+            .parens()
+    }
+}
+
+impl<V> ArrayConcatTerm<V> {
+    pub fn iter_args(&self) -> impl Iterator<Item = &Term<V>> {
+        std::iter::once(&self.array1)
+            .chain(std::iter::once(&self.len1))
+            .chain(std::iter::once(&self.array2))
+            .chain(std::iter::once(&self.len2))
+    }
+
+    pub fn iter_args_mut(&mut self) -> impl Iterator<Item = &mut Term<V>> {
+        std::iter::once(&mut self.array1)
+            .chain(std::iter::once(&mut self.len1))
+            .chain(std::iter::once(&mut self.array2))
+            .chain(std::iter::once(&mut self.len2))
+    }
+
+    pub fn subst_var<F, W>(self, mut f: F) -> ArrayConcatTerm<W>
+    where
+        F: FnMut(V) -> Term<W>,
+    {
+        ArrayConcatTerm {
+            array1: self.array1.subst_var(&mut f),
+            len1: self.len1.subst_var(&mut f),
+            array2: self.array2.subst_var(&mut f),
+            len2: self.len2.subst_var(f),
+        }
+    }
 }
 
 /// A logical term.
@@ -501,6 +563,8 @@ pub enum Term<V = TermVarIdx> {
     MutCurrent(Box<Term<V>>),
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
+    ArrayEmpty(Sort, Sort),
+    ArrayConcat(Sort, Box<ArrayConcatTerm<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
@@ -552,6 +616,8 @@ where
                     f.append(allocator.line()).append(inner.nest(2)).group()
                 }
             }
+            Term::ArrayEmpty(_, _) => allocator.text("[]"),
+            Term::ArrayConcat(_, t) => t.pretty(allocator),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ts.len() == 1 {
@@ -615,6 +681,8 @@ impl<V> Term<V> {
             Term::App(fun, args) => {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
+            Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(s1, s2),
+            Term::ArrayConcat(s, t) => Term::ArrayConcat(s, Box::new(t.subst_var(f))),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
             Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
@@ -661,6 +729,8 @@ impl<V> Term<V> {
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
+            Term::ArrayEmpty(index, elem) => Sort::array(index.clone(), elem.clone()),
+            Term::ArrayConcat(elem, _) => Sort::array(Sort::int(), elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -680,6 +750,7 @@ impl<V> Term<V> {
             | Term::Bool(_)
             | Term::Int(_)
             | Term::String(_)
+            | Term::ArrayEmpty { .. }
             | Term::FormulaQuantifiedVar { .. } => Box::new(std::iter::empty()),
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
@@ -687,6 +758,7 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.fv_impl(),
             Term::MutFinal(t) => t.fv_impl(),
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::ArrayConcat(_, t) => Box::new(t.iter_args().flat_map(|t| t.fv_impl())),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
@@ -718,12 +790,57 @@ impl<V> Term<V> {
         Term::String(s)
     }
 
+    /// Some canonical value of the given sort. The exact value is unspecified;
+    /// callers must only use it where any well-typed value would do (e.g. the
+    /// element value of an [`Term::ArrayEmpty`]).
+    pub fn default_for(sort: &Sort) -> Self {
+        match sort {
+            Sort::Null => Term::Null,
+            Sort::Int => Term::Int(0),
+            Sort::Bool => Term::Bool(false),
+            Sort::String => Term::String(String::new()),
+            Sort::Box(s) => Term::Box(Box::new(Self::default_for(s))),
+            Sort::Mut(s) => Term::Mut(
+                Box::new(Self::default_for(s)),
+                Box::new(Self::default_for(s)),
+            ),
+            Sort::Tuple(ts) => Term::Tuple(ts.iter().map(Self::default_for).collect()),
+            Sort::Array(i, e) => Term::ArrayEmpty((**i).clone(), (**e).clone()),
+            // TODO: defaults for Datatype and Param and Forall.
+            Sort::Datatype(_) | Sort::Param(_) | Sort::Forall(_) => {
+                unimplemented!("no default value for sort {sort:?}")
+            }
+        }
+    }
+
     pub fn box_(t: Term<V>) -> Self {
         Term::Box(Box::new(t))
     }
 
     pub fn mut_(t1: Term<V>, t2: Term<V>) -> Self {
         Term::Mut(Box::new(t1), Box::new(t2))
+    }
+
+    pub fn array_empty(index: Sort, elem: Sort) -> Self {
+        Term::ArrayEmpty(index, elem)
+    }
+
+    pub fn array_concat(
+        elem_sort: Sort,
+        array1: Term<V>,
+        len1: Term<V>,
+        array2: Term<V>,
+        len2: Term<V>,
+    ) -> Self {
+        Term::ArrayConcat(
+            elem_sort,
+            Box::new(ArrayConcatTerm {
+                array1,
+                len1,
+                array2,
+                len2,
+            }),
+        )
     }
 
     pub fn boxed(self) -> Self {
@@ -797,8 +914,57 @@ impl<V> Term<V> {
         Term::App(Function::NEG, vec![self])
     }
 
-    pub fn select(self, index: Self) -> Self {
+    pub fn select(self, index: Self) -> Self
+    where
+        V: Clone,
+    {
+        // Peephole 1: when both indices are concrete integer literals, reduce `select(store(a, i,
+        // v), j)` to `v` (`i == j`) or `select(a, j)` (`i != j`). Same motivation as the
+        // `tuple_proj` simplifier: keep datatype/array constructors from leaking into Spacer
+        // clauses where it can't reduce them. Non-literal indices are deferred to the solver via
+        // the general select-of-store axiom.
+        if let (Term::App(Function::STORE, _), Term::Int(j)) = (&self, &index) {
+            let Term::App(_, mut args) = self else {
+                unreachable!()
+            };
+            assert_eq!(args.len(), 3, "STORE takes 3 args");
+            let stored_value = args.pop().unwrap();
+            let stored_index = args.pop().unwrap();
+            let base = args.pop().unwrap();
+            if let Term::Int(i) = &stored_index {
+                return if i == j {
+                    stored_value
+                } else {
+                    base.select(index)
+                };
+            }
+            return Term::App(
+                Function::SELECT,
+                vec![
+                    Term::App(Function::STORE, vec![base, stored_index, stored_value]),
+                    index,
+                ],
+            );
+        }
+        // Peephole 2: inline one step of the `concat_int_array` recursive definitions to reduce
+        // indexed access to terms over the underlying sequences. The SMT-defined functions are
+        // still emitted (so the rewrites use exactly their unfolded form), but pcsat can prove
+        // indexed properties against the inlined ITE for *any* recursion bound, where unfolding
+        // through `define-fun-rec` would require an inductive invariant pcsat can't find.
+        //
+        // `select(concat_int_array(sa, sn, ta, tn), i)
+        //   ↦ ite(i < sn, select(sa, i), select(ta, i - sn))`
+        if let Term::ArrayConcat(_, t) = self {
+            let cond = index.clone().lt(t.len1.clone());
+            let then_ = t.array1.select(index.clone());
+            let else_ = t.array2.select(index.sub(t.len1));
+            return Term::ite(cond, then_, else_);
+        }
         Term::App(Function::SELECT, vec![self, index])
+    }
+
+    pub fn ite(cond: Self, then_: Self, else_: Self) -> Self {
+        Term::App(Function::ITE, vec![cond, then_, else_])
     }
 
     pub fn store(self, index: Self, elem: Self) -> Self {
@@ -810,6 +976,11 @@ impl<V> Term<V> {
     }
 
     pub fn tuple_proj(self, i: usize) -> Self {
+        // Spacer doesn't unfold tuple projections of literal constructors.
+        if let Term::Tuple(mut ts) = self {
+            assert!(i < ts.len(), "tuple_proj index out of bounds");
+            return ts.swap_remove(i);
+        }
         Term::TupleProj(Box::new(self), i)
     }
 

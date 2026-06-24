@@ -91,7 +91,7 @@ pub struct AnnotPathSegment {
 
 /// A trait for resolving variables in annotations to their logical representation and their sorts.
 pub trait Resolver {
-    type Output;
+    type Output: Clone;
     fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)>;
 }
 
@@ -1222,7 +1222,7 @@ struct RefinementResolver<'a, T> {
     self_: Option<(Ident, chc::Sort)>,
 }
 
-impl<'a, T> Resolver for RefinementResolver<'a, T> {
+impl<'a, T: Clone> Resolver for RefinementResolver<'a, T> {
     type Output = rty::RefinedTypeVar<T>;
     fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)> {
         if let Some((self_ident, sort)) = &self.self_ {
@@ -1256,7 +1256,7 @@ pub struct MappedResolver<'a, T, F> {
     map: F,
 }
 
-impl<'a, T, F, U> Resolver for MappedResolver<'a, T, F>
+impl<'a, T: Clone, F, U: Clone> Resolver for MappedResolver<'a, T, F>
 where
     F: Fn(T) -> U,
 {
@@ -1290,7 +1290,7 @@ impl<'a, T> Default for StackedResolver<'a, T> {
     }
 }
 
-impl<'a, T> Resolver for StackedResolver<'a, T> {
+impl<'a, T: Clone> Resolver for StackedResolver<'a, T> {
     type Output = T;
     fn resolve(&self, ident: Ident) -> Option<(Self::Output, chc::Sort)> {
         for resolver in &self.resolvers {

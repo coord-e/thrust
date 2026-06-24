@@ -161,6 +161,25 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     List::open(args.iter().map(|t| Term::new(self.ctx, self.clause, t)))
                 )
             }
+            chc::Term::ArrayEmpty(index, elem) => {
+                let index_sort = self.ctx.fmt_sort(index);
+                let elem_sort = self.ctx.fmt_sort(elem);
+                let default = chc::Term::default_for(elem);
+                write!(
+                    f,
+                    "((as const (Array {index_sort} {elem_sort})) {})",
+                    Term::new(self.ctx, self.clause, &default)
+                )
+            }
+            chc::Term::ArrayConcat(elem, t) => {
+                let name = self.ctx.concat_int_array(elem);
+                write!(
+                    f,
+                    "({} {})",
+                    name,
+                    List::open(t.iter_args().map(|t| Term::new(self.ctx, self.clause, t)))
+                )
+            }
             chc::Term::Tuple(ts) => {
                 let ss: Vec<_> = ts.iter().map(|t| self.clause.term_sort(t)).collect();
                 if ss.is_empty() {
@@ -690,6 +709,21 @@ impl<'a> std::fmt::Display for System<'a> {
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
+        }
+
+        for elem in self.ctx.int_array_elem_sorts() {
+            let name = self.ctx.concat_int_array(elem);
+            let elem_ty = self.ctx.fmt_sort(elem);
+            writeln!(
+                f,
+                "(define-fun-rec {name} \
+                  ((sa (Array Int {elem_ty})) (sn Int) (ta (Array Int {elem_ty})) (tn Int)) \
+                  (Array Int {elem_ty}) \
+                  (ite (<= tn 0) sa \
+                       (store ({name} sa sn ta (- tn 1)) \
+                              (+ sn (- tn 1)) \
+                              (select ta (- tn 1)))))\n",
+            )?;
         }
 
         // insert command from #![thrust::raw_command()] here
