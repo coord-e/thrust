@@ -484,11 +484,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let free = |idx| chc::Term::var(rty::RefinedTypeVar::Free(idx));
         let value = chc::Term::var(rty::RefinedTypeVar::Value);
 
-        let receiver = rty::FunctionParamIdx::from_usize(0);
         let args: Vec<_> = params
             .iter()
             .enumerate()
-            .skip(1)
             .map(|(idx, _)| free(rty::FunctionParamIdx::from_usize(idx)))
             .collect();
 
@@ -512,20 +510,21 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         );
         self.register_forall_pred(post_pred.clone());
 
-        params[receiver].extend_refinement(
-            chc::Atom::new(
-                pre_pred.into(),
-                [vec![value.clone()], args.clone()].concat(),
-            )
-            .into(),
-        );
+        params
+            .iter_mut()
+            .last()
+            .expect("Closure should have at least one argument.")
+            .extend_refinement({
+                let (args_front, _args_last) = args.split_at(args.len() - 1);
+                chc::Atom::new(
+                    pre_pred.into(),
+                    [args_front, std::slice::from_ref(&value.clone())].concat(),
+                )
+                .into()
+            });
 
         ret.extend_refinement(
-            chc::Atom::new(
-                post_pred.into(),
-                [vec![free(receiver)], args, vec![value.clone()]].concat(),
-            )
-            .into(),
+            chc::Atom::new(post_pred.into(), [args, vec![value.clone()]].concat()).into(),
         );
         let ret = Box::new(ret);
 
