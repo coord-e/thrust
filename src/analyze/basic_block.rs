@@ -1055,6 +1055,73 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    /// Handles `(*s)[idx] = val` where `s: &mut Seq<T>`.
+    ///
+    /// The reborrow visitor cannot handle the `[Deref, Index]` projection via
+    /// `locate_place`, so we intercept this pattern before it runs.
+    ///
+    /// Effect: advances `s`'s "current" Seq to `store(old_arr, idx, val)` so
+    /// that subsequent reads through `s` see the post-write value.
+    fn assign_to_slice_index(
+        &mut self,
+        slice_local: Local,
+        idx_local: Local,
+        rvalue: &mir::Rvalue<'tcx>,
+    ) {
+        let local_ty = self.env.local_type(slice_local);
+
+        // When is_mut_local(slice_local), bind_local wraps the &mut Seq in an Own box:
+        //   local_ty.ty = Own(Pointer(Mut, Seq<T>))
+        // Otherwise it's a direct mutable reference:
+        //   local_ty.ty = Pointer(Mut, Seq<T>)
+        let ptr_ty = local_ty
+            .ty
+            .clone()
+            .into_pointer()
+            .expect("expected pointer");
+        let (is_box_wrapped, seq_ty) = if ptr_ty.is_own() {
+            let inner_ptr = ptr_ty
+                .elem
+                .ty
+                .into_pointer()
+                .expect("Box content not pointer");
+            let seq_ty = inner_ptr.elem.ty;
+            (true, seq_ty)
+        } else {
+            (false, ptr_ty.elem.ty)
+        };
+
+        let idx_ty = self.env.local_type(idx_local);
+        let rvalue_ty = self.rvalue_type(rvalue.clone());
+
+        let mut builder = PlaceTypeBuilder::default();
+        let (_, local_term) = builder.subsume(local_ty);
+        let (_, idx_term) = builder.subsume(idx_ty);
+        let (_, val_term) = builder.subsume(rvalue_ty);
+
+        // Navigate to the current Seq term, accounting for the Box wrapper
+        let current_seq = if is_box_wrapped {
+            local_term.clone().box_current().mut_current()
+        } else {
+            local_term.clone().mut_current()
+        };
+
+        // Seq<T> = (Box<Array<Int,T>>, Box<Int>) — extract arr and boxed len
+        let arr = current_seq.clone().tuple_proj(0).box_current();
+        let len_boxed = current_seq.tuple_proj(1);
+        let new_arr = arr.store(idx_term, val_term);
+        let new_seq_term = chc::Term::tuple(vec![chc::Term::box_(new_arr), len_boxed]);
+
+        // Allocate a fresh var for the post-write Seq and constrain it
+        let new_current = self.env.push_temp_var(seq_ty);
+        builder.push_formula(chc::Term::var(new_current.into()).equal_to(new_seq_term));
+        let assumption = builder.build_assumption();
+        self.env.assume(assumption);
+
+        // Advance s's observable current so subsequent reads see the new value
+        self.env.swap_mut_current(slice_local, new_current);
+    }
+
     fn drop_local(&mut self, local: Local) {
         self.env.drop_local(local);
     }
@@ -1163,6 +1230,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if stmt_idx == statements.len() - 1 && self.terminator_is_drop_call().is_some() {
                 tracing::warn!(%stmt_idx, ?stmt, "skip before std::ops::Drop");
                 continue;
+            }
+            // (*s)[i] = val must be intercepted before the reborrow visitor,
+            // which cannot handle Index projections via locate_place.
+            if let StatementKind::Assign(ref x) = stmt.kind {
+                let (lhs, rvalue) = &**x;
+                if self.is_defined(lhs.local) {
+                    if let [mir::PlaceElem::Deref, mir::PlaceElem::Index(idx_local)] =
+                        lhs.projection.as_slice()
+                    {
+                        tracing::debug!(%stmt_idx, ?stmt, "slice element mutation");
+                        self.assign_to_slice_index(lhs.local, *idx_local, rvalue);
+                        for local in self.drop_points.after_statement(stmt_idx).iter() {
+                            tracing::info!(?local, ?stmt_idx, "implicitly dropped after statement");
+                            self.drop_local(local);
+                        }
+                        continue;
+                    }
+                }
             }
             self.reborrow_visitor().visit_statement(&mut stmt);
             tracing::debug!(%stmt_idx, ?stmt);

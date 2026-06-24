@@ -620,6 +620,46 @@ where
             .push(TempVarBinding::Type(rty::RefinedType::unrefined(ty)))
     }
 
+    /// Replaces the "current" slot of a `Mut` flow binding with a fresh TempVar.
+    /// Used to advance the observable state of a `&mut [T]` local after an
+    /// element-level write (`(*s)[i] = val`), so that subsequent reads through
+    /// `s` see the post-write array.
+    ///
+    /// Handles two cases:
+    /// - Direct `Mut`: the local itself has `FlowBinding::Mut(_, _)` (non-mut MIR local)
+    /// - Box-wrapped: `is_mut_local` caused bind_local to wrap the `&mut Seq` in a Box,
+    ///   giving `FlowBinding::Box(content)` where `content` has `FlowBinding::Mut(_, _)`
+    pub fn swap_mut_current(&mut self, local: Local, new_current: TempVarIdx) {
+        let binding = self
+            .flow_locals
+            .get(&local)
+            .cloned()
+            .expect("swap_mut_current: local not in flow_locals");
+        match binding {
+            FlowBinding::Mut(_, final_) => {
+                self.flow_locals
+                    .insert(local, FlowBinding::Mut(new_current, final_));
+            }
+            FlowBinding::Box(content_idx) => {
+                let content_binding = self.temp_vars[content_idx]
+                    .as_flow()
+                    .cloned()
+                    .expect("swap_mut_current: Box content has no flow binding");
+                match content_binding {
+                    FlowBinding::Mut(_, final_) => {
+                        self.temp_vars[content_idx] =
+                            TempVarBinding::Flow(FlowBinding::Mut(new_current, final_));
+                    }
+                    _ => panic!("swap_mut_current: Box content is not Mut for {:?}", local),
+                }
+            }
+            _ => panic!(
+                "swap_mut_current: expected Mut or Box(Mut) binding for {:?}",
+                local
+            ),
+        }
+    }
+
     // when var = Var::Temp(idx), idx must be temp_vars.next_index() in bind_*
     fn bind_own(
         &mut self,
