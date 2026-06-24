@@ -454,7 +454,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .unwrap();
                 self.const_value_ty(&val, ty)
             }
-            _ => unimplemented!("const: {:?}", const_),
+            mir::Const::Ty(ty, _) => {
+                // Type-level constant (e.g. array lengths written as `const N: usize`).
+                // For primitive types, extract the scalar value directly.
+                let scalar_int = const_
+                    .try_to_scalar_int()
+                    .expect("type-level const must be a primitive scalar");
+                let val = mir::ConstValue::Scalar(mir::interpret::Scalar::Int(scalar_int));
+                self.const_value_ty(&val, ty)
+            }
         }
     }
 
@@ -473,6 +481,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::CopyForDeref(place) => {
+                // Semantically equivalent to Copy for our model; used by MIR when
+                // copying a mutable reference out of an aggregate (e.g. [&mut T]).
+                self.env.place_type(self.elaborate_place(&place))
+            }
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
