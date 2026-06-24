@@ -1,4 +1,4 @@
-use rustc_middle::mir::{self, Local};
+use rustc_middle::mir::{self, Local, Operand};
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
 use crate::analyze::ReplacePlacesVisitor;
@@ -44,6 +44,52 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
         location: mir::Location,
     ) {
         if !self.analyzer.is_defined(place.local) {
+            self.super_assign(place, rvalue, location);
+            return;
+        }
+
+        // (*s)[idx] = val: rewrite as *ptr = val where ptr = index_mut(s, idx).
+        // This routes through the existing extern spec instead of encoding Seq
+        // structure directly in the analyzer.
+        if let [mir::PlaceElem::Deref, mir::PlaceElem::Index(idx_local)] =
+            place.projection.as_slice()
+        {
+            let slice_local = place.local;
+            let idx_local = *idx_local;
+            let slice_mir_ty = self.analyzer.local_decls[slice_local].ty;
+            let (inner_slice_ty, elem_ty) = match slice_mir_ty.kind() {
+                mir_ty::TyKind::Ref(_, inner, _) => match inner.kind() {
+                    mir_ty::TyKind::Slice(elem_ty) => (*inner, *elem_ty),
+                    _ => unimplemented!("Index projection on non-slice ref"),
+                },
+                _ => unimplemented!("Index projection on non-ref"),
+            };
+
+            // Reborrow *s → s1: &mut [T], updating s's current to a fresh prophecy
+            let s1 = self.insert_reborrow(
+                mir::Place {
+                    local: slice_local,
+                    projection: self.tcx.mk_place_elems(&[mir::PlaceElem::Deref]),
+                },
+                inner_slice_ty,
+            );
+
+            // Build fresh return type for ptr: &mut T
+            let r = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
+            let ptr_mir_ty = mir_ty::Ty::new_mut_ref(self.tcx, r, elem_ty);
+            let ptr_rty = self.analyzer.build_fresh_refined_type(ptr_mir_ty);
+
+            // Apply index_mut extern spec constraints
+            self.analyzer
+                .type_slice_index_mut(s1, idx_local, elem_ty, &ptr_rty);
+
+            // Bind the ptr local
+            let ptr_decl = mir::LocalDecl::new(ptr_mir_ty, rustc_span::DUMMY_SP).immutable();
+            let ptr_local = self.analyzer.local_decls.push(ptr_decl);
+            self.analyzer.bind_local(ptr_local, ptr_rty);
+
+            // Rewrite place: (*s)[idx] → *ptr, then process *ptr = val normally
+            *place = self.tcx.mk_place_deref(ptr_local.into());
             self.super_assign(place, rvalue, location);
             return;
         }
