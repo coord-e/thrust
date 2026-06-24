@@ -480,16 +480,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 // In the model, &[T] is &immut TupleType([Box<Array<Int,T>>, Box<Int>]),
                 // so the length is (*operand).1.
                 if op == mir::UnOp::PtrMetadata {
-                    if let rty::Type::Pointer(ref ptr) = operand_ty.ty {
-                        if matches!(ptr.kind, rty::PointerKind::Ref(rty::RefKind::Immut))
-                            && operand_ty
-                                .ty
-                                .as_pointer()
-                                .unwrap()
-                                .elem
-                                .ty
-                                .as_tuple()
-                                .is_some()
+                    if let rty::Type::Pointer(_) = operand_ty.ty {
+                        if operand_ty
+                            .ty
+                            .as_pointer()
+                            .unwrap()
+                            .elem
+                            .ty
+                            .as_tuple()
+                            .is_some()
                         {
                             return operand_ty.deref().tuple_proj(1).deref();
                         }
@@ -553,6 +552,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
                 let mut builder = PlaceTypeBuilder::default();
                 let (ty, term) = builder.subsume(ty);
+                builder.build(rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
+            }
+            Rvalue::RawPtr(mir::RawPtrKind::FakeForPtrMetadata, place) => {
+                // &raw const (fake) (*s) — used for bounds-checking &mut [T] slices.
+                // Strip Subtype projections ("(fake)") and treat as an immutable ref
+                // so that PtrMetadata can extract the length from the Seq model.
+                let stripped: Vec<_> = place
+                    .projection
+                    .into_iter()
+                    .filter(|e| !matches!(e, mir::PlaceElem::Subtype(_)))
+                    .collect();
+                let stripped_place = mir::Place {
+                    local: place.local,
+                    projection: self.tcx.mk_place_elems(&stripped),
+                };
+                let inner_ty = self.env.place_type(self.elaborate_place(&stripped_place));
+                let mut builder = PlaceTypeBuilder::default();
+                let (ty, term) = builder.subsume(inner_ty);
                 builder.build(rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
             }
             Rvalue::Aggregate(kind, fields) => {
