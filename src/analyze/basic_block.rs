@@ -8,6 +8,7 @@ use rustc_middle::mir::{
 };
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
+use rustc_span::source_map::Spanned;
 
 use crate::analyze;
 use crate::chc;
@@ -1098,6 +1099,105 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.place_type(place).immut().into()
     }
 
+    /// If `stmt` is `(*s)[idx] = val` where `s: &mut [T]`, rewrite it in-place
+    /// to `*ptr = val` by synthetically processing an `index_mut(s, idx)` call
+    /// through the existing reborrow + terminator-bind pipeline.  Returns
+    /// `Some(ptr_local)` when a rewrite happened; the caller must `drop_local`
+    /// that local after processing `*ptr = val` to close the prophecy chain.
+    fn preprocess_slice_index_assign(&mut self, stmt: &mut mir::Statement<'tcx>) -> Option<Local> {
+        // Pattern-match: Assign with projection [Deref, Index(idx_local)]
+        let (slice_local, idx_local, inner_slice_ty, elem_ty, rvalue) = {
+            let StatementKind::Assign(x) = &stmt.kind else {
+                return None;
+            };
+            let (place, rvalue) = &**x;
+            let [mir::PlaceElem::Deref, mir::PlaceElem::Index(idx_local)] =
+                place.projection.as_slice()
+            else {
+                return None;
+            };
+            let idx_local = *idx_local;
+            let slice_ty = self.local_decls[place.local].ty;
+            let mir_ty::TyKind::Ref(_, inner, mir_ty::Mutability::Mut) = slice_ty.kind() else {
+                return None;
+            };
+            let mir_ty::TyKind::Slice(elem_ty) = inner.kind() else {
+                return None;
+            };
+            (place.local, idx_local, *inner, *elem_ty, rvalue.clone())
+        };
+
+        // Create the return-value local ptr: &mut elem_ty (immutable local, mutable pointee)
+        let r = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
+        let ptr_ty = mir_ty::Ty::new_mut_ref(self.tcx, r, elem_ty);
+        let ptr_local = self
+            .local_decls
+            .push(mir::LocalDecl::new(ptr_ty, rustc_span::DUMMY_SP).immutable());
+
+        // Resolve <[T] as IndexMut<usize>>::index_mut
+        let index_mut_trait = self.tcx.lang_items().index_mut_trait().unwrap();
+        let index_mut_def_id = self
+            .tcx
+            .associated_items(index_mut_trait)
+            .filter_by_name_unhygienic(rustc_span::Symbol::intern("index_mut"))
+            .next()
+            .expect("<[T] as IndexMut<usize>>::index_mut not found")
+            .def_id;
+        let fn_ty = mir_ty::Ty::new_fn_def(
+            self.tcx,
+            index_mut_def_id,
+            self.tcx.mk_args(&[
+                mir_ty::GenericArg::from(inner_slice_ty),
+                mir_ty::GenericArg::from(self.tcx.types.usize),
+            ]),
+        );
+
+        // Build synthetic call terminator: index_mut(slice, idx) → ptr
+        let mut synthetic_term = mir::Terminator {
+            kind: TerminatorKind::Call {
+                func: Operand::Constant(Box::new(mir::ConstOperand {
+                    span: rustc_span::DUMMY_SP,
+                    user_ty: None,
+                    const_: mir::Const::zero_sized(fn_ty),
+                })),
+                args: Box::new([
+                    Spanned {
+                        node: Operand::Copy(slice_local.into()),
+                        span: rustc_span::DUMMY_SP,
+                    },
+                    Spanned {
+                        node: Operand::Copy(idx_local.into()),
+                        span: rustc_span::DUMMY_SP,
+                    },
+                ]),
+                destination: ptr_local.into(),
+                target: Some(mir::START_BLOCK),
+                unwind: mir::UnwindAction::Continue,
+                call_source: mir::CallSource::Normal,
+                fn_span: rustc_span::DUMMY_SP,
+            },
+            source_info: mir::SourceInfo::outermost(rustc_span::DUMMY_SP),
+        };
+
+        // Feed through the existing pipeline: reborrow the slice arg, then apply extern spec
+        self.reborrow_visitor()
+            .visit_terminator(&mut synthetic_term);
+        self.analyze_terminator_binds(&synthetic_term);
+
+        // Rewrite the statement to: *ptr = val
+        stmt.kind = StatementKind::Assign(Box::new((
+            self.tcx.mk_place_deref(ptr_local.into()),
+            rvalue,
+        )));
+        tracing::info!(
+            ?slice_local,
+            ?idx_local,
+            ?ptr_local,
+            "rewrote slice index assign"
+        );
+        Some(ptr_local)
+    }
+
     #[tracing::instrument(skip(self, lhs, rvalue))]
     fn analyze_assignment(
         &mut self,
@@ -1164,6 +1264,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::warn!(%stmt_idx, ?stmt, "skip before std::ops::Drop");
                 continue;
             }
+            let slice_ptr = self.preprocess_slice_index_assign(&mut stmt);
             self.reborrow_visitor().visit_statement(&mut stmt);
             tracing::debug!(%stmt_idx, ?stmt);
             match &stmt.kind {
@@ -1175,6 +1276,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 | StatementKind::StorageLive(_)
                 | StatementKind::StorageDead(_) => {}
                 _ => unimplemented!("stmt={:?}", stmt.kind),
+            }
+            // After processing *ptr = val, drop ptr to close the prophecy chain:
+            // ptr.final == ptr.current (post-write) propagates back through the
+            // extern spec to update the slice's current value.
+            if let Some(ptr_local) = slice_ptr {
+                self.drop_local(ptr_local);
             }
             for local in self.drop_points.after_statement(stmt_idx).iter() {
                 tracing::info!(?local, ?stmt_idx, "implicitly dropped after statement");
