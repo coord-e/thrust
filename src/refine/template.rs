@@ -464,6 +464,68 @@ impl<'tcx> TypeBuilder<'tcx> {
             abi,
         }
     }
+
+    /// Extracts the parameter list for a `Fn` / `FnMut` / `FnOnce` trait predicate
+    /// whose `Self` type matches `param_ty`. Returns `None` otherwise.
+    ///
+    /// The first parameter is the closure value (wrapped in a `&` / `&mut` pointer
+    /// for `Fn` / `FnMut`, or owned for `FnOnce`), followed by the logical arguments
+    /// as a single tuple matching the call-site shape produced by
+    /// `<F as Fn<(A,)>>::call(...)`.
+    #[tracing::instrument(skip(self))]
+    pub(crate) fn closure_trait_args(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        pred: mir_ty::TraitPredicate<'tcx>,
+    ) -> Option<IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>> {
+        let trait_ref = pred.trait_ref;
+        if trait_ref.self_ty() != param_ty.to_ty(self.tcx) {
+            return None;
+        }
+        tracing::debug!(?trait_ref.args);
+
+        let receiver_type = self.build(trait_ref.args.type_at(0));
+
+        use mir_ty::ClosureKind::*;
+        let receiver_type = match self.tcx.fn_trait_kind_from_def_id(trait_ref.def_id)? {
+            Fn => rty::PointerType::immut_to(receiver_type).into(),
+            FnMut => rty::PointerType::mut_to(receiver_type).into(),
+            FnOnce => receiver_type,
+        };
+
+        let mir_ty::Tuple(other_params) = trait_ref.args.type_at(1).kind() else {
+            panic!("Closure should have at least one argument.")
+        };
+
+        let other_params = other_params.iter().map(|ty| self.build(ty).vacuous());
+        let params = std::iter::once(receiver_type.vacuous())
+            .chain(other_params)
+            .map(rty::RefinedType::unrefined)
+            .collect();
+
+        tracing::debug!("found the signature for closure trait: {params:#?}");
+        Some(params)
+    }
+
+    /// Extracts the return type refinement for `<F as FnOnce>::Output` projection
+    /// where `F = param_ty`. Returns `None` otherwise.
+    #[tracing::instrument(skip(self))]
+    pub(crate) fn closure_trait_ret(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        pred: mir_ty::ProjectionPredicate<'tcx>,
+    ) -> Option<rty::RefinedType<rty::FunctionParamIdx>> {
+        let projection = pred.projection_term;
+        if projection.def_id != self.tcx.lang_items().fn_once_output()?
+            || projection.args.type_at(0) != param_ty.to_ty(self.tcx)
+        {
+            return None;
+        }
+
+        let ret_ty = self.build(pred.term.expect_type()).vacuous();
+        tracing::debug!(?ret_ty);
+        Some(rty::RefinedType::unrefined(ret_ty))
+    }
 }
 
 /// Translates [`mir_ty::Ty`] to [`rty::Type`] using templates for refinements.
