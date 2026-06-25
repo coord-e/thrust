@@ -401,6 +401,37 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .tcx
                 .try_normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), *input_ty)
                 .unwrap_or(*input_ty);
+
+            // Eagerly register closure type parameters (e.g. `F: Fn(...)` declared on
+            // this function) so that basic-block analysis can look up the contract
+            // when it later sees `<F as Fn<...>>::call(...)`.
+            let param_ty = match inst.kind() {
+                mir_ty::TyKind::Param(p) => Some(*p),
+                mir_ty::TyKind::Ref(_, inner, _) => {
+                    if let mir_ty::TyKind::Param(p) = inner.kind() {
+                        Some(*p)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(param_ty) = param_ty {
+                if let Some(fun_ty) = self.type_builder.build_closure_type_for_param(
+                    param_ty,
+                    self.local_def_id,
+                    self.tcx.mk_args(&[]),
+                ) {
+                    self.type_builder.register_closure_type_param(
+                        analyze::TypeParam::GenericType(
+                            self.type_builder.owner_fn_id(),
+                            param_ty.index,
+                        ),
+                        fun_ty,
+                    );
+                }
+            }
+
             let (fn_def_id, fn_args) = match inst.kind() {
                 mir_ty::TyKind::Closure(def_id, args) => {
                     (*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
