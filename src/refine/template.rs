@@ -473,7 +473,7 @@ impl<'tcx> TypeBuilder<'tcx> {
     /// as a single tuple matching the call-site shape produced by
     /// `<F as Fn<(A,)>>::call(...)`.
     #[tracing::instrument(skip(self))]
-    pub(crate) fn closure_trait_args(
+    fn closure_trait_args(
         &self,
         param_ty: mir_ty::ParamTy,
         pred: mir_ty::TraitPredicate<'tcx>,
@@ -510,7 +510,7 @@ impl<'tcx> TypeBuilder<'tcx> {
     /// Extracts the return type refinement for `<F as FnOnce>::Output` projection
     /// where `F = param_ty`. Returns `None` otherwise.
     #[tracing::instrument(skip(self))]
-    pub(crate) fn closure_trait_ret(
+    fn closure_trait_ret(
         &self,
         param_ty: mir_ty::ParamTy,
         pred: mir_ty::ProjectionPredicate<'tcx>,

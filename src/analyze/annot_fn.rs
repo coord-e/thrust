@@ -380,7 +380,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let mir_ty::TyKind::Closure(def_id, args) = closure_ty.kind() else {
             if let mir_ty::TyKind::Param(ty) = closure_ty.kind() {
                 tracing::debug!("ParamTy is found: {ty:?}");
-                let closure_fun_ty = self.type_param_as_callable_sig(*ty);
+                let closure_fun_ty = self.type_builder.build_closure_type_for_param(
+                    *ty,
+                    self.local_def_id,
+                    self.generic_args,
+                );
                 tracing::debug!(
                     "the obtained FunctionType for the closure {ty:?}: {closure_fun_ty:#?}"
                 );
@@ -398,39 +402,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
     }
 
-    #[tracing::instrument(skip(self))]
-    #[allow(dead_code)]
-    fn closure_trait_args(
-        &self,
-        param_ty: mir_ty::ParamTy,
-        pred: mir_ty::TraitPredicate<'tcx>,
-    ) -> Option<IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>> {
-        self.type_builder.closure_trait_args(param_ty, pred)
-    }
-
-    #[tracing::instrument(skip(self))]
-    #[allow(dead_code)]
-    fn closure_trait_ret(
-        &self,
-        param_ty: mir_ty::ParamTy,
-        pred: mir_ty::ProjectionPredicate<'tcx>,
-    ) -> Option<rty::RefinedType<rty::FunctionParamIdx>> {
-        self.type_builder.closure_trait_ret(param_ty, pred)
-    }
-
     fn register_forall_pred(&self, forall_pred: chc::ForallPred) {
         self.analyzer
             .system
             .borrow_mut()
             .register_forall_pred(forall_pred.clone());
-    }
-
-    fn type_param_as_callable_sig(&self, param_ty: mir_ty::ParamTy) -> Option<rty::FunctionType> {
-        self.type_builder.build_closure_type_for_param(
-            param_ty,
-            self.local_def_id,
-            self.generic_args,
-        )
     }
 
     /// Extracts the logical argument terms passed to `closure_precondition`/
