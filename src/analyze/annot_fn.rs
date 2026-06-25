@@ -611,9 +611,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     }
 
     fn node_arg_type_at(&self, hir_id: HirId, idx: usize) -> rty::Type<rty::Closed> {
-        let generic_args = self.typeck.node_args(hir_id);
-        let generic_args =
-            mir_ty::EarlyBinder::bind(generic_args).instantiate(self.tcx, self.generic_args);
+        let mut generic_args = self.typeck.node_args(hir_id);
+        if !self.generic_args.is_empty() {
+            generic_args =
+                mir_ty::EarlyBinder::bind(generic_args).instantiate(self.tcx, self.generic_args);
+        }
         let elem_ty = generic_args.type_at(idx);
         self.type_builder.build(elem_ty)
     }
