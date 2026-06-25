@@ -185,7 +185,11 @@ impl<'tcx> TypeBuilder<'tcx> {
         rty::AliasType::new(*index, args).into()
     }
 
-    pub fn register_closure_type_param(&self, type_param: TypeParam, fun_type: rty::FunctionType) {
+    pub(crate) fn register_closure_type_param(
+        &self,
+        type_param: TypeParam,
+        fun_type: rty::FunctionType,
+    ) {
         tracing::info!(?type_param, ?fun_type, "register_closure_type_param");
         self.closure_type_params
             .borrow_mut()
