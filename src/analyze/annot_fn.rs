@@ -399,6 +399,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     }
 
     #[tracing::instrument(skip(self))]
+    #[allow(dead_code)]
     fn closure_trait_args(
         &self,
         param_ty: mir_ty::ParamTy,
@@ -408,6 +409,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     }
 
     #[tracing::instrument(skip(self))]
+    #[allow(dead_code)]
     fn closure_trait_ret(
         &self,
         param_ty: mir_ty::ParamTy,
@@ -424,78 +426,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     }
 
     fn type_param_as_callable_sig(&self, param_ty: mir_ty::ParamTy) -> Option<rty::FunctionType> {
-        let param_ty = self
-            .instantiate_generics(param_ty, self.generic_args)
-            .unwrap_or(param_ty);
-        let mut predicates = self
-            .tcx
-            .predicates_of(self.local_def_id)
-            .predicates
-            .iter()
-            .map(|(clause, _)| {
-                self.instantiate_generics(*clause, self.generic_args)
-                    .unwrap_or(*clause)
-            });
-
-        let mut params = predicates.clone().find_map(|clause| {
-            self.closure_trait_args(param_ty, clause.as_trait_clause()?.skip_binder())
-        })?;
-        let mut ret = predicates.find_map(|clause| {
-            self.closure_trait_ret(param_ty, clause.as_projection_clause()?.skip_binder())
-        })?;
-
-        let free = |idx| chc::Term::var(rty::RefinedTypeVar::Free(idx));
-        let value = chc::Term::var(rty::RefinedTypeVar::Value);
-
-        let args: Vec<_> = params
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| free(rty::FunctionParamIdx::from_usize(idx)))
-            .collect();
-
-        let type_params = vec![self.type_builder.build(param_ty.to_ty(self.tcx)).to_sort()];
-        let mut params_sort: Vec<chc::Sort> = params.iter().map(|rty| rty.ty.to_sort()).collect();
-        let ret_sort = ret.ty.to_sort();
-
-        let pre_pred = refine::closure_pre_forall_pred(
-            self.tcx,
-            self.type_builder.owner_fn_id(),
-            type_params.clone(),
-            params_sort.clone(),
-        );
-        self.register_forall_pred(pre_pred.clone());
-        params_sort.push(ret_sort);
-        let post_pred = refine::closure_post_forall_pred(
-            self.tcx,
-            self.type_builder.owner_fn_id(),
-            type_params,
-            params_sort,
-        );
-        self.register_forall_pred(post_pred.clone());
-
-        params
-            .iter_mut()
-            .last()
-            .expect("Closure should have at least one argument.")
-            .extend_refinement({
-                let (args_front, _args_last) = args.split_at(args.len() - 1);
-                chc::Atom::new(
-                    pre_pred.into(),
-                    [args_front, std::slice::from_ref(&value.clone())].concat(),
-                )
-                .into()
-            });
-
-        ret.extend_refinement(
-            chc::Atom::new(post_pred.into(), [args, vec![value.clone()]].concat()).into(),
-        );
-        let ret = Box::new(ret);
-
-        Some(rty::FunctionType {
-            params,
-            ret,
-            abi: rty::FunctionAbi::RustCall,
-        })
+        self.type_builder.build_closure_type_for_param(
+            param_ty,
+            self.local_def_id,
+            self.generic_args,
+        )
     }
 
     /// Extracts the logical argument terms passed to `closure_precondition`/

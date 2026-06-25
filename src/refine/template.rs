@@ -526,6 +526,104 @@ impl<'tcx> TypeBuilder<'tcx> {
         tracing::debug!(?ret_ty);
         Some(rty::RefinedType::unrefined(ret_ty))
     }
+
+    /// Builds the [`rty::FunctionType`] for a type parameter `param_ty` declared
+    /// on the function identified by `local_def_id`, when `param_ty` is bounded
+    /// by `Fn` / `FnMut` / `FnOnce`.
+    ///
+    /// `generic_args` are the generic arguments of the enclosing function
+    /// (the function whose body is being type-checked). When the enclosing
+    /// function is itself generic, `predicates_of(local_def_id)` is the raw
+    /// predicate list which is then instantiated with `generic_args`. When
+    /// `generic_args` is empty, predicates are used un-instantiated.
+    ///
+    /// Returns `None` if `param_ty` has no `Fn` / `FnMut` / `FnOnce` trait bound.
+    /// As a side effect, the closure pre/post forall predicates are registered
+    /// with the [`chc::System`].
+    pub fn build_closure_type_for_param(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        local_def_id: rustc_hir::def_id::LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Option<rty::FunctionType> {
+        let param_ty = if !generic_args.is_empty() {
+            mir_ty::EarlyBinder::bind(param_ty).instantiate(self.tcx, generic_args)
+        } else {
+            param_ty
+        };
+        let mut predicates = self
+            .tcx
+            .predicates_of(local_def_id.to_def_id())
+            .predicates
+            .iter()
+            .map(|(clause, _)| {
+                if !generic_args.is_empty() {
+                    mir_ty::EarlyBinder::bind(*clause).instantiate(self.tcx, generic_args)
+                } else {
+                    *clause
+                }
+            });
+
+        let mut params = predicates.clone().find_map(|clause| {
+            self.closure_trait_args(param_ty, clause.as_trait_clause()?.skip_binder())
+        })?;
+        let mut ret = predicates.find_map(|clause| {
+            self.closure_trait_ret(param_ty, clause.as_projection_clause()?.skip_binder())
+        })?;
+
+        let free = |idx| chc::Term::var(rty::RefinedTypeVar::Free(idx));
+        let value = chc::Term::var(rty::RefinedTypeVar::Value);
+
+        let args: Vec<_> = params
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| free(rty::FunctionParamIdx::from_usize(idx)))
+            .collect();
+
+        let type_params = vec![self.build(param_ty.to_ty(self.tcx)).to_sort()];
+        let mut params_sort: Vec<chc::Sort> = params.iter().map(|rty| rty.ty.to_sort()).collect();
+        let ret_sort = ret.ty.to_sort();
+
+        let pre_pred = refine::closure_pre_forall_pred(
+            self.tcx,
+            self.owner_fn_id,
+            type_params.clone(),
+            params_sort.clone(),
+        );
+        self.system
+            .borrow_mut()
+            .register_forall_pred(pre_pred.clone());
+        params_sort.push(ret_sort);
+        let post_pred =
+            refine::closure_post_forall_pred(self.tcx, self.owner_fn_id, type_params, params_sort);
+        self.system
+            .borrow_mut()
+            .register_forall_pred(post_pred.clone());
+
+        params
+            .iter_mut()
+            .last()
+            .expect("Closure should have at least one argument.")
+            .extend_refinement({
+                let (args_front, _args_last) = args.split_at(args.len() - 1);
+                chc::Atom::new(
+                    pre_pred.into(),
+                    [args_front, std::slice::from_ref(&value.clone())].concat(),
+                )
+                .into()
+            });
+
+        ret.extend_refinement(
+            chc::Atom::new(post_pred.into(), [args, vec![value.clone()]].concat()).into(),
+        );
+        let ret = Box::new(ret);
+
+        Some(rty::FunctionType {
+            params,
+            ret,
+            abi: rty::FunctionAbi::RustCall,
+        })
+    }
 }
 
 /// Translates [`mir_ty::Ty`] to [`rty::Type`] using templates for refinements.
