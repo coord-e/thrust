@@ -1037,12 +1037,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                     .map(|ty| self.type_builder.build(ty).to_sort())
                                     .collect();
 
-                                let typeck_result = self.tcx.typeck(self.local_def_id);
                                 let params = args
                                     .iter()
                                     .map(|expr| {
-                                        let ty = typeck_result.expr_ty(expr);
-                                        self.type_builder.build(ty).to_sort()
+                                        self.type_builder.build(self.expr_ty(expr)).to_sort()
                                     })
                                     .collect();
 
