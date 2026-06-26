@@ -66,7 +66,7 @@ fn unbox_pred(pred: Pred) -> Pred {
         Pred::Var(pred) => Pred::Var(pred),
         Pred::Matcher(pred) => unbox_matcher_pred(pred),
         Pred::UserDefined(pred) => Pred::UserDefined(pred),
-        Pred::ForallPred(pred) => Pred::ForallPred(pred),
+        Pred::ForallPred(pred) => Pred::ForallPred(unbox_forall_pred_var_def(pred)),
     }
 }
 
@@ -195,10 +195,12 @@ fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> Use
 }
 
 fn unbox_forall_pred_var_def(pred: ForallPred) -> ForallPred {
-    let args = pred.type_parameters.into_iter().map(unbox_sort).collect();
+    let type_parameters = pred.type_parameters.into_iter().map(unbox_sort).collect();
+    let params = pred.params.into_iter().map(unbox_sort).collect();
     ForallPred {
-        type_parameters: args,
-        ..pred
+        inner: pred.inner,
+        type_parameters,
+        params,
     }
 }
 
