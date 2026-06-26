@@ -555,10 +555,7 @@ impl<'tcx> Analyzer<'tcx> {
             .owner_fn_id(caller_def_id)
             .generic_args(generic_args);
 
-        let mut expected = analyzer.expected_ty();
-        // parameters in annotations are left as params
-        // TODO: remove this after annotation V2
-        Self::instantiate_generic_args(&mut expected, generic_args, &type_builder);
+        let expected = analyzer.expected_ty();
         instantiated_ty_cache
             .borrow_mut()
             .insert(generic_args, expected.clone());
