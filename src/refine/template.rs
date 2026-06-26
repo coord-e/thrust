@@ -171,6 +171,21 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     fn translate_alias_type(&self, ty: &mir_ty::AliasTy<'tcx>) -> rty::Type<rty::Closed> {
+        let projection = mir_ty::Ty::new_projection(self.tcx, ty.def_id, ty.args);
+        if let Ok(normalized) = self
+            .tcx
+            .try_normalize_erasing_regions(self.typing_env, projection)
+        {
+            if normalized != projection {
+                tracing::debug!(
+                    "alias projection {:#?} normalized to {:#?}",
+                    projection,
+                    normalized
+                );
+                return self.build(normalized);
+            }
+        }
+
         let args: Vec<rty::Type<rty::Closed>> = ty.args.types().map(|t| self.build(t)).collect();
         let mut type_params = self.type_params.borrow_mut();
         tracing::debug!(?type_params);
