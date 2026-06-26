@@ -390,7 +390,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 );
                 if let Some(closure_fun_ty) = closure_fun_ty.clone() {
                     self.type_builder.register_closure_type_param(
-                        analyze::TypeParam::GenericType(self.type_builder.owner_fn_id(), ty.index),
+                        analyze::TypeParam::GenericType(
+                            self.type_builder.param_def_id(ty),
+                            ty.index,
+                        ),
                         closure_fun_ty,
                     );
                 };

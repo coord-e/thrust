@@ -856,7 +856,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     ResolvedCallable::Closure(*closure_def_id, parent_args)
                 }
                 mir_ty::TyKind::Param(ty) => ResolvedCallable::Generic(TypeParam::GenericType(
-                    self.type_builder.owner_fn_id(),
+                    self.type_builder.param_def_id(ty),
                     ty.index,
                 )),
                 kind => {

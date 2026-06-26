@@ -389,7 +389,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .trait_item_def_id
             .unwrap();
         self.ctx
-            .def_ty_with_args(trait_item_did, trait_ref.args, trait_ref.def_id)
+            .def_ty_with_args(trait_item_did, trait_ref.args, impl_did)
     }
 
     // TODO: Remove this eager precompute together with
@@ -424,7 +424,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 ) {
                     self.type_builder.register_closure_type_param(
                         analyze::TypeParam::GenericType(
-                            self.type_builder.owner_fn_id(),
+                            self.type_builder.param_def_id(&param_ty),
                             param_ty.index,
                         ),
                         fun_ty,

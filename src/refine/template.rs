@@ -125,6 +125,16 @@ impl<'tcx> TypeBuilder<'tcx> {
         self.owner_fn_id
     }
 
+    /// Returns the def_id of the declaration site of the given type parameter.
+    ///
+    /// For impl methods, an inherited parameter (e.g. the impl's `I`) reports
+    /// the def_id of the parameter declared on the impl block, so all uses
+    /// of that parameter across the impl's methods share a single cache key.
+    pub fn param_def_id(&self, ty: &mir_ty::ParamTy) -> DefId {
+        let generics = self.tcx.generics_of(self.owner_fn_id);
+        generics.param_at(ty.index as usize, self.tcx).def_id
+    }
+
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
         // FIXME:
         // `__ThrustSelf` is currently treated as a distinct `ParamTy` from `Self`,
@@ -152,18 +162,19 @@ impl<'tcx> TypeBuilder<'tcx> {
             .get(&ty.index)
             .expect("unknown type param idx");
 
-        tracing::debug!("translating ParamTy {ty:?}...");
+        let param_def_id = self.param_def_id(ty);
+        tracing::debug!("translating ParamTy {ty:?} (decl={param_def_id:?})...");
 
         let mut type_params = self.type_params.borrow_mut();
         let forall_sort_idx = type_params
-            .entry(TypeParam::GenericType(self.owner_fn_id, ty.index))
+            .entry(TypeParam::GenericType(param_def_id, ty.index))
             .or_insert_with(|| {
                 let idx = self.system.borrow_mut().new_forall_sort();
                 tracing::debug!(
-                    "issue the new ForallSortIdx {} for ParamTy {:?} at {:?}.",
+                    "issue the new ForallSortIdx {} for ParamTy {:?} (decl={:?}).",
                     idx,
                     ty,
-                    self.owner_fn_id
+                    param_def_id
                 );
                 idx
             });
