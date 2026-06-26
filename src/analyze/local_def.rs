@@ -446,6 +446,52 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .ctx
                 .def_ty_with_args(fn_def_id, fn_args, self.owner_fn_id);
         }
+
+        let parent_def_id = self.tcx.parent(self.local_def_id.to_def_id());
+        if matches!(
+            self.tcx.def_kind(parent_def_id),
+            rustc_hir::def::DefKind::Impl { .. }
+        ) {
+            if let Some(impl_local_def_id) = parent_def_id.as_local() {
+                self.precompute_impl_closure_type_params(impl_local_def_id);
+            }
+        }
+    }
+
+    /// Walks `impl_local_def_id`'s `predicates_of` and registers any
+    /// `Fn`/`FnMut`/`FnOnce` type parameters declared on the impl.
+    fn precompute_impl_closure_type_params(&mut self, impl_local_def_id: LocalDefId) {
+        for (clause, _) in self
+            .tcx
+            .predicates_of(impl_local_def_id.to_def_id())
+            .predicates
+            .iter()
+        {
+            let Some(trait_clause) = clause.as_trait_clause() else {
+                continue;
+            };
+            let trait_ref = trait_clause.skip_binder();
+            if self
+                .tcx
+                .fn_trait_kind_from_def_id(trait_ref.def_id())
+                .is_none()
+            {
+                continue;
+            }
+            let mir_ty::TyKind::Param(p) = trait_ref.self_ty().kind() else {
+                continue;
+            };
+            if let Some(fun_ty) = self.type_builder.build_closure_type_for_param(
+                *p,
+                impl_local_def_id,
+                self.tcx.mk_args(&[]),
+            ) {
+                self.type_builder.register_closure_type_param(
+                    analyze::TypeParam::GenericType(self.type_builder.param_def_id(p), p.index),
+                    fun_ty,
+                );
+            }
+        }
     }
 
     // Note that we do not expect predicate variables to be generated here
