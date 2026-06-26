@@ -120,12 +120,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }) {
                 self.ctx
                     .register_deferred_def_without_analysis(owner_fn_id, local_def_id);
-            } else if analyzer.is_fully_annotated() {
+            } else {
                 let expected = analyzer.expected_ty();
                 self.ctx
                     .register_generic_def(owner_fn_id, local_def_id, Some(expected));
-            } else {
-                self.ctx.register_deferred_def(owner_fn_id, local_def_id);
             }
         } else {
             let expected = analyzer.expected_ty();
