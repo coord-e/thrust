@@ -1199,7 +1199,19 @@ pub struct UserDefinedPred {
 
 impl std::fmt::Display for UserDefinedPred {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.inner.fmt(f)
+        // SMT2 identifiers produced by Thrust come from Rust names (e.g.
+        // `Map<I, F>_step`), which the backed solver rejects because
+        // `,` and ` ` are not allowed inside an identifier. Sanitize at the
+        // display boundary so the existing human-readable naming convention
+        // is preserved (`Map<I, F>_step` → `Map<I-F>_step`).
+        for c in self.inner.chars() {
+            match c {
+                ',' => f.write_str("-")?,
+                ' ' | '\t' | '\n' | '\r' => {}
+                c => f.write_str(c.encode_utf8(&mut [0; 4]))?,
+            }
+        }
+        Ok(())
     }
 }
 
