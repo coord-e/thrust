@@ -2255,6 +2255,34 @@ impl System {
         })
     }
 
+    /// Scans every [`UserDefinedPredDef`]'s body for references to registered
+    /// [`ForallPred`]s and records the matches in `dependencies`.
+    ///
+    /// The user-supplied SMT-LIB2 body of a `#[thrust_macros::predicate]` is a
+    /// raw string and therefore opaque to the analyzer. To still let dependency
+    /// analysis see transitive `ForallPred` uses, we look for the SMT-LIB2
+    /// representation of every registered `ForallPred` as a substring of each
+    /// body. Must be called after every `ForallPred` has been registered
+    /// (i.e. after `crate::refine::template` and trait/closure pre/post
+    /// construction finish) and before [`System::compute_dependency`].
+    pub fn populate_user_defined_pred_dependencies(&mut self) {
+        use crate::chc::format_context::format_forall_pred_name;
+
+        let forall_names: Vec<(ForallPred, String)> = self
+            .forall_pred_vars
+            .iter()
+            .map(|pred| (pred.clone(), format_forall_pred_name(pred)))
+            .collect();
+
+        for udpd in &mut self.user_defined_pred_defs {
+            for (pred, name) in &forall_names {
+                if udpd.body.contains(name.as_str()) {
+                    udpd.dependencies.insert(pred.clone());
+                }
+            }
+        }
+    }
+
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
         if clause.is_nop() {
             return None;
@@ -2339,7 +2367,8 @@ impl System {
     /// variables
     /// (see <https://github.com/coord-e/thrust?tab=readme-ov-file#configuration>).
     pub fn solve(&self) -> Result<(), CheckSatError> {
-        let system = unbox(self.clone());
+        let mut system = unbox(self.clone());
+        system.populate_user_defined_pred_dependencies();
         if let Ok(file) = std::env::var("THRUST_PRETTY_OUTPUT") {
             let mut f = std::fs::File::create(file).unwrap();
             for (idx, c) in system.clauses.iter_enumerated() {

@@ -141,6 +141,15 @@ impl<'a> SortSymbols<'a> {
     }
 }
 
+/// SMT-LIB2 representation of a [`chc::ForallPred`]'s identifier as it appears
+/// in atoms (e.g. `q_completed_8cab…<a0>`). Used by the SMT emitter and by
+/// [`chc::System::populate_user_defined_pred_dependencies`] to substring-match
+/// `ForallPred` references inside user-defined predicate bodies.
+pub fn format_forall_pred_name(p: &chc::ForallPred) -> String {
+    let ss = SortSymbols::new(&p.type_parameters);
+    format!("{}{}", p.inner, ss)
+}
+
 fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
     let symbol = SortSymbol::new(&s).to_symbol();
     let d = match s {
@@ -374,8 +383,7 @@ impl FormatContext {
     }
 
     pub fn forall_pred(&self, p: &chc::ForallPred) -> impl std::fmt::Display {
-        let ss = SortSymbols::new(&p.type_parameters);
-        format!("{}{}", p.inner, ss)
+        format_forall_pred_name(p)
     }
 
     pub fn concat_int_array(&self, elem: &chc::Sort) -> impl std::fmt::Display {
