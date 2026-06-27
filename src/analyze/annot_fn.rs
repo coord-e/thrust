@@ -431,12 +431,27 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     /// unchanged. For `Fn` the receiver is `&T` (sort `Box<T>`), and for `FnMut` it is
     /// `&mut T` (sort `Mut<T>`); the term is wrapped accordingly so that it matches
     /// the sort expected by the registered pre/post forall predicates.
+    ///
+    /// `Box` sorts are stripped by the `unbox` pass (`src/chc/unbox.rs`) before the
+    /// CHC reaches the solver, so this function does not need a special case for
+    /// `model::Box<T>` receivers. For `model::Mut<T>` (constructed by `Mut::new(..)`
+    /// in the annotation) the term is returned as-is, since its sort already matches
+    /// the env expected by the forall predicate; wrapping it again would produce a
+    /// `Mut<Mut<T>>` value and cause a sort mismatch at the call site.
     fn wrap_closure_receiver(
         &self,
         receiver: &'tcx rustc_hir::Expr<'tcx>,
+        receiver_ty: mir_ty::Ty<'tcx>,
         fn_ty: &rty::FunctionType,
     ) -> chc::Term<rty::FunctionParamIdx> {
         let receiver_term = self.to_term(receiver);
+
+        if let mir_ty::TyKind::Adt(adt, _) = receiver_ty.kind() {
+            if Some(adt.did()) == self.def_ids.mut_model() {
+                return receiver_term;
+            }
+        }
+
         let first_param = &fn_ty.params[rty::FunctionParamIdx::from_usize(0)];
         match first_param.ty.as_pointer() {
             Some(p) if p.is_mut() => chc::Term::mut_(receiver_term.clone(), receiver_term),
@@ -477,9 +492,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure precondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.wrap_closure_receiver(receiver, &fn_ty))
-            .chain(logical_args)
-            .collect();
+        let param_args: Vec<_> =
+            std::iter::once(self.wrap_closure_receiver(receiver, receiver_ty, &fn_ty))
+                .chain(logical_args)
+                .collect();
         FormulaOrTerm::Formula(fn_ty.precondition_formula(&param_args))
     }
 
@@ -507,9 +523,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure postcondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.wrap_closure_receiver(receiver, &fn_ty))
-            .chain(logical_args)
-            .collect();
+        let param_args: Vec<_> =
+            std::iter::once(self.wrap_closure_receiver(receiver, receiver_ty, &fn_ty))
+                .chain(logical_args)
+                .collect();
         let result = self.to_term(result);
         FormulaOrTerm::Formula(fn_ty.postcondition_formula(&param_args, result))
     }
