@@ -855,10 +855,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     let parent_args = self.tcx.mk_args(&closure_args[..parent_count]);
                     ResolvedCallable::Closure(*closure_def_id, parent_args)
                 }
-                mir_ty::TyKind::Param(ty) => ResolvedCallable::Generic(TypeParam::GenericType(
-                    self.type_builder.param_def_id(ty),
-                    ty.index,
-                )),
+                mir_ty::TyKind::Param(ty) => ResolvedCallable::Generic(TypeParam::GenericType {
+                    param_def_id: self.type_builder.param_def_id(ty),
+                    local_idx: self.type_builder.param_local_idx(ty),
+                }),
                 kind => {
                     panic!("expected closure arg for fn trait, got: {kind:?}");
                 }

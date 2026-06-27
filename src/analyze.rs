@@ -215,7 +215,14 @@ pub type TypeParamMap<'tcx> = HashMap<TypeParam, ForallSortIdx>;
 
 #[derive(Eq, PartialEq, Hash, Debug, Clone)]
 pub enum TypeParam {
-    GenericType(DefId, u32),
+    /// A type parameter identified by its declaration def_id and its
+    /// **local** index within the declaring item (i.e. lifetime and const
+    /// parameters are skipped). Using the local index lets monomorphization
+    /// substitute it with the actual generic argument at the same position.
+    GenericType {
+        param_def_id: DefId,
+        local_idx: u32,
+    },
     AssocType(DefId, Vec<rty::Type<rty::Closed>>),
 }
 

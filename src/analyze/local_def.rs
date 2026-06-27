@@ -423,10 +423,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     self.tcx.mk_args(&[]),
                 ) {
                     self.type_builder.register_closure_type_param(
-                        analyze::TypeParam::GenericType(
-                            self.type_builder.param_def_id(&param_ty),
-                            param_ty.index,
-                        ),
+                        analyze::TypeParam::GenericType {
+                            param_def_id: self.type_builder.param_def_id(&param_ty),
+                            local_idx: self.type_builder.param_local_idx(&param_ty),
+                        },
                         fun_ty,
                     );
                 }
@@ -487,7 +487,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.tcx.mk_args(&[]),
             ) {
                 self.type_builder.register_closure_type_param(
-                    analyze::TypeParam::GenericType(self.type_builder.param_def_id(p), p.index),
+                    analyze::TypeParam::GenericType {
+                        param_def_id: self.type_builder.param_def_id(p),
+                        local_idx: self.type_builder.param_local_idx(p),
+                    },
                     fun_ty,
                 );
             }

@@ -135,6 +135,17 @@ impl<'tcx> TypeBuilder<'tcx> {
         generics.param_at(ty.index as usize, self.tcx).def_id
     }
 
+    /// Returns the local index of a type parameter within the declaring item,
+    /// skipping lifetime and const parameters. This is the position used for
+    /// monomorphization of generic arguments.
+    pub fn param_local_idx(&self, ty: &mir_ty::ParamTy) -> u32 {
+        let idx = self
+            .param_idx_mapping
+            .get(&ty.index)
+            .expect("unknown type param idx");
+        u32::from(*idx)
+    }
+
     fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
         // FIXME:
         // `__ThrustSelf` is currently treated as a distinct `ParamTy` from `Self`,
@@ -157,17 +168,17 @@ impl<'tcx> TypeBuilder<'tcx> {
             tracing::debug!("replace {ty:?} with {self_ty:?}.");
             return self.translate_param_type(&self_ty);
         }
-        let param_local_idx = *self
-            .param_idx_mapping
-            .get(&ty.index)
-            .expect("unknown type param idx");
+        let param_local_idx = self.param_local_idx(ty);
 
         let param_def_id = self.param_def_id(ty);
         tracing::debug!("translating ParamTy {ty:?} (decl={param_def_id:?})...");
 
         let mut type_params = self.type_params.borrow_mut();
         let forall_sort_idx = type_params
-            .entry(TypeParam::GenericType(param_def_id, ty.index))
+            .entry(TypeParam::GenericType {
+                param_def_id,
+                local_idx: param_local_idx,
+            })
             .or_insert_with(|| {
                 let idx = self.system.borrow_mut().new_forall_sort();
                 tracing::debug!(
@@ -178,7 +189,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                 );
                 idx
             });
-        rty::ParamType::new(param_local_idx, *forall_sort_idx).into()
+        rty::ParamType::new(rty::TypeParamIdx::from(param_local_idx), *forall_sort_idx).into()
     }
 
     fn translate_alias_type(&self, ty: &mir_ty::AliasTy<'tcx>) -> rty::Type<rty::Closed> {
