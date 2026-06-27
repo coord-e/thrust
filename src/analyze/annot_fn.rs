@@ -907,7 +907,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             .next()
                             .is_some()
                         {
-                            let typing_env = mir_ty::TypingEnv::fully_monomorphized();
+                            let typing_env = mir_ty::TypingEnv::post_analysis(
+                                self.tcx,
+                                self.type_builder.owner_fn_id(),
+                            );
                             let generic_args = self.typeck.node_args(func_expr.hir_id);
                             tracing::debug!(
                                 lhs = ?def_id,
