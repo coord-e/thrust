@@ -2157,6 +2157,9 @@ pub struct UserDefinedPredDef {
     symbol: UserDefinedPred,
     sig: UserDefinedPredSig,
     body: String,
+    /// `ForallPred`s referenced from `body`. Populated just before dependency
+    /// analysis by `System::populate_user_defined_pred_dependencies`.
+    pub dependencies: HashSet<ForallPred>,
 }
 
 pub fn compute_transitive_closure<T>(direct_deps: &HashMap<T, HashSet<T>>) -> HashMap<T, HashSet<T>>
@@ -2234,8 +2237,22 @@ impl System {
         sig: UserDefinedPredSig,
         body: String,
     ) {
-        self.user_defined_pred_defs
-            .push(UserDefinedPredDef { symbol, sig, body })
+        self.push_pred_define_with_deps(symbol, sig, body, HashSet::new())
+    }
+
+    pub fn push_pred_define_with_deps(
+        &mut self,
+        symbol: UserDefinedPred,
+        sig: UserDefinedPredSig,
+        body: String,
+        dependencies: HashSet<ForallPred>,
+    ) {
+        self.user_defined_pred_defs.push(UserDefinedPredDef {
+            symbol,
+            sig,
+            body,
+            dependencies,
+        })
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {

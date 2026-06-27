@@ -186,12 +186,22 @@ fn unbox_datatype(datatype: Datatype) -> Datatype {
 }
 
 fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> UserDefinedPredDef {
-    let UserDefinedPredDef { symbol, sig, body } = user_defined_pred_def;
+    let UserDefinedPredDef {
+        symbol,
+        sig,
+        body,
+        dependencies,
+    } = user_defined_pred_def;
     let sig = sig
         .into_iter()
         .map(|(name, sort)| (name, unbox_sort(sort)))
         .collect();
-    UserDefinedPredDef { symbol, sig, body }
+    UserDefinedPredDef {
+        symbol,
+        sig,
+        body,
+        dependencies,
+    }
 }
 
 fn unbox_forall_pred_var_def(pred: ForallPred) -> ForallPred {
