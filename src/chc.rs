@@ -2189,6 +2189,15 @@ where
     closure
 }
 
+/// A thing that can be referenced from a clause body and contribute to the
+/// transitive dependency closure: a predicate variable, or a user-defined
+/// predicate whose body may call `ForallPred`s.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum ExistsDep {
+    PredVar(PredVarId),
+    UserDefined(UserDefinedPred),
+}
+
 /// A CHC system.
 #[derive(Debug, Clone, Default)]
 pub struct System {
@@ -2299,20 +2308,21 @@ impl System {
             .collect()
     }
 
-    fn compute_exists_dependency(clause: &Clause) -> HashSet<PredVarId> {
+    fn compute_exists_dependency(clause: &Clause) -> HashSet<ExistsDep> {
         clause
             .body
             .iter_atoms()
-            .filter_map(|atom| match atom.pred {
-                Pred::Var(id) => Some(id),
+            .filter_map(|atom| match &atom.pred {
+                Pred::Var(id) => Some(ExistsDep::PredVar(*id)),
+                Pred::UserDefined(p) => Some(ExistsDep::UserDefined(p.clone())),
                 _ => None,
             })
             .collect()
     }
 
     fn compute_dependency(&self) -> HashMap<PredVarId, HashSet<ForallPred>> {
-        let mut exists_deps: HashMap<PredVarId, HashSet<PredVarId>> = HashMap::new();
-        let mut forall_deps: HashMap<PredVarId, HashSet<ForallPred>> = HashMap::new();
+        let mut exists_deps: HashMap<ExistsDep, HashSet<ExistsDep>> = HashMap::new();
+        let mut forall_deps: HashMap<ExistsDep, HashSet<ForallPred>> = HashMap::new();
 
         for (clause_idx, clause) in self.clauses.iter_enumerated() {
             let Pred::Var(head_id) = clause.head.pred else {
@@ -2329,8 +2339,23 @@ impl System {
                 exists
             );
 
-            exists_deps.entry(head_id).or_default().extend(exists);
-            forall_deps.entry(head_id).or_default().extend(forall);
+            let head_dep = ExistsDep::PredVar(head_id);
+            exists_deps
+                .entry(head_dep.clone())
+                .or_default()
+                .extend(exists);
+            forall_deps.entry(head_dep).or_default().extend(forall);
+        }
+        // Each `UserDefinedPred`'s body may call `ForallPred`s. We populate
+        // these lazily via `populate_user_defined_pred_dependencies`; thread
+        // them into the forall map so transitive propagation sees them.
+        for udpd in &self.user_defined_pred_defs {
+            if !udpd.dependencies.is_empty() {
+                forall_deps
+                    .entry(ExistsDep::UserDefined(udpd.symbol.clone()))
+                    .or_default()
+                    .extend(udpd.dependencies.iter().cloned());
+            }
         }
         tracing::debug!("direct forall dependencies: {:#?}", forall_deps);
         tracing::debug!("direct exists dependencies: {:#?}", exists_deps);
@@ -2340,11 +2365,24 @@ impl System {
 
         let mut propagated_forall_deps = HashMap::new();
 
-        for (pred, reachable_preds) in transitive_exists_deps {
-            let mut deps = forall_deps.get(&pred).cloned().unwrap_or_default();
+        for (dep, reachable) in transitive_exists_deps {
+            let ExistsDep::PredVar(pred) = dep else {
+                // Only `PredVar` heads appear as `dep` keys here: a clause
+                // head is always `Pred::Var` (see the loop above). Other
+                // variants would only be reachable successors.
+                continue;
+            };
 
-            for reachable in reachable_preds {
-                if let Some(foralls) = forall_deps.get(&reachable) {
+            // Direct ForallPred deps of the head predicate variable (those
+            // `ForallPred` atoms that appear directly in the clause body of
+            // `pred`). The transitive-closure result excludes the start node
+            // itself, so we add this here explicitly.
+            let mut deps = forall_deps.get(&dep).cloned().unwrap_or_default();
+
+            // ForallPred deps contributed by each reachable successor
+            // (`PredVar` or `UserDefinedPred`).
+            for r in &reachable {
+                if let Some(foralls) = forall_deps.get(r) {
                     deps.extend(foralls.iter().cloned());
                 }
             }
