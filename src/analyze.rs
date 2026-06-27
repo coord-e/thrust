@@ -725,6 +725,13 @@ impl<'tcx> Analyzer<'tcx> {
     }
 
     pub fn solve(&mut self) {
+        let mut reverse = HashMap::new();
+        for (tp, &idx) in self.type_params.borrow().iter() {
+            if let TypeParam::GenericType { local_idx, .. } = tp {
+                reverse.insert(idx, *local_idx);
+            }
+        }
+        self.system.borrow_mut().type_params_reverse = reverse;
         if let Err(err) = self.system.borrow().solve() {
             self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
