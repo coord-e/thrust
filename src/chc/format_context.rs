@@ -235,6 +235,7 @@ fn collect_sorts(system: &chc::System) -> BTreeSet<chc::Sort> {
 fn monomorphize_datatype(
     sort: &chc::DatatypeSort,
     datatypes: &[chc::Datatype],
+    forall_sort_resolver: &impl Fn(chc::ForallSortIdx) -> Option<usize>,
 ) -> Option<chc::Datatype> {
     let datatype = datatypes.iter().find(|d| d.symbol == sort.symbol).unwrap();
     if datatype.params == 0 {
@@ -254,7 +255,7 @@ fn monomorphize_datatype(
                     .iter()
                     .map(|s| {
                         let mut sel_sort = s.sort.clone();
-                        sel_sort.instantiate_params(&sort.args);
+                        sel_sort.instantiate_params(&sort.args, forall_sort_resolver);
                         chc::DatatypeSelector {
                             symbol: chc::DatatypeSymbol::new(format!("{}{}", s.symbol, ss)),
                             sort: sel_sort,
@@ -270,10 +271,12 @@ fn monomorphize_datatype(
 
 impl FormatContext {
     pub fn from_system(system: &chc::System) -> Self {
+        let type_params_reverse = system.type_params_reverse.clone();
+        let resolver = |idx: chc::ForallSortIdx| type_params_reverse.get(&idx).map(|&i| i as usize);
         let sorts = collect_sorts(system);
         let mut datatypes = system.datatypes.clone();
         for sort in sorts.iter().flat_map(|s| s.as_datatype()) {
-            if let Some(mono_datatype) = monomorphize_datatype(sort, &datatypes) {
+            if let Some(mono_datatype) = monomorphize_datatype(sort, &datatypes, &resolver) {
                 datatypes.push(mono_datatype);
             }
         }

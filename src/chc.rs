@@ -339,23 +339,31 @@ impl Sort {
         }
     }
 
-    pub fn instantiate_params(&mut self, args: &[Sort]) {
+    pub fn instantiate_params<F>(&mut self, args: &[Sort], forall_sort_resolver: &F)
+    where
+        F: Fn(crate::chc::ForallSortIdx) -> Option<usize>,
+    {
         match self {
             Sort::Param(i) => *self = args[*i].clone(),
-            Sort::Box(s) => s.instantiate_params(args),
-            Sort::Mut(s) => s.instantiate_params(args),
+            Sort::Forall(idx) => {
+                if let Some(local_idx) = forall_sort_resolver(*idx) {
+                    *self = args[local_idx].clone();
+                }
+            }
+            Sort::Box(s) => s.instantiate_params(args, forall_sort_resolver),
+            Sort::Mut(s) => s.instantiate_params(args, forall_sort_resolver),
             Sort::Tuple(ss) => {
                 for s in ss {
-                    s.instantiate_params(args);
+                    s.instantiate_params(args, forall_sort_resolver);
                 }
             }
             Sort::Array(s1, s2) => {
-                s1.instantiate_params(args);
-                s2.instantiate_params(args);
+                s1.instantiate_params(args, forall_sort_resolver);
+                s2.instantiate_params(args, forall_sort_resolver);
             }
             Sort::Datatype(sort) => {
                 for s in &mut sort.args {
-                    s.instantiate_params(args);
+                    s.instantiate_params(args, forall_sort_resolver);
                 }
             }
             _ => {}
@@ -2188,6 +2196,15 @@ pub struct System {
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
     pub forall_sorts: Vec<ForallSortIdx>,
     pub num_forall_sort_idx: ForallSortIdx,
+    /// Reverse map from [`ForallSortIdx`] to the local index of the type
+    /// parameter it was issued for, populated by the analyzer. Used during
+    /// datatype monomorphization to substitute `Sort::Forall` placeholders
+    /// in ADT field types with the corresponding generic argument.
+    ///
+    /// Only entries for `analyze::TypeParam::GenericType` are recorded.
+    /// `analyze::TypeParam::AssocType` forall sorts are intentionally omitted
+    /// and remain as opaque forall sorts in the SMT output.
+    pub type_params_reverse: HashMap<ForallSortIdx, u32>,
     forall_pred_vars: HashSet<ForallPred>,
 }
 

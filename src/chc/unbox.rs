@@ -218,6 +218,7 @@ pub fn unbox(system: System) -> System {
         pred_vars,
         forall_sorts,
         num_forall_sort_idx,
+        type_params_reverse,
         forall_pred_vars,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
@@ -239,6 +240,7 @@ pub fn unbox(system: System) -> System {
         pred_vars,
         forall_sorts,
         num_forall_sort_idx,
+        type_params_reverse,
         forall_pred_vars,
     }
 }
