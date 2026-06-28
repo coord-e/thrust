@@ -70,6 +70,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(local_def_id)))]
     fn refine_fn_def(&mut self, local_def_id: LocalDefId) {
         let sig = self.ctx.fn_sig(local_def_id.to_def_id());
+        let def_ids = self.ctx.def_ids();
 
         let mut analyzer = self.ctx.local_def_analyzer(local_def_id);
 
@@ -118,6 +119,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         } else {
             local_def_id.to_def_id()
         };
+        if self
+            .tcx
+            .get_attrs_by_path(local_def_id.to_def_id(), &analyze::annot::slice_len_path())
+            .next()
+            .is_some()
+        {
+            def_ids.register_slice_len(target_def_id);
+        }
 
         use mir_ty::TypeVisitableExt as _;
         if sig.has_param() {

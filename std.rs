@@ -817,6 +817,7 @@ fn _extern_spec_vec_truncate<T>(vec: &mut Vec<T>, len: usize) where T: thrust_mo
 }
 
 #[thrust::extern_spec_fn]
+#[thrust::def::slice_len]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(result == slice.2)]
 fn _extern_spec_slice_len<T>(slice: &[T]) -> usize

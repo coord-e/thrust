@@ -32,6 +32,7 @@ struct DefIds {
     seq_prepend: OnceCell<Option<DefId>>,
     seq_subsequence: OnceCell<Option<DefId>>,
     seq_concat: OnceCell<Option<DefId>>,
+    slice_len: OnceCell<DefId>,
 
     exists: OnceCell<Option<DefId>>,
     forall: OnceCell<Option<DefId>>,
@@ -242,6 +243,17 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .seq_concat
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_concat_path()))
+    }
+
+    pub fn register_slice_len(&self, def_id: DefId) {
+        self.def_ids
+            .slice_len
+            .set(def_id)
+            .expect("slice len DefId registered twice");
+    }
+
+    pub fn slice_len(&self) -> Option<DefId> {
+        self.def_ids.slice_len.get().copied()
     }
 
     pub fn exists(&self) -> Option<DefId> {

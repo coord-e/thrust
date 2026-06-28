@@ -37,6 +37,14 @@ pub fn extern_spec_fn_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("extern_spec_fn")]
 }
 
+pub fn slice_len_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("slice_len"),
+    ]
+}
+
 pub fn raw_command_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("raw_command")]
 }

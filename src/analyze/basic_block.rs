@@ -1,13 +1,16 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use rustc_hir::def::DefKind;
+use rustc_hir::def::{DefKind, Namespace};
+use rustc_hir::lang_items::LangItem;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{
     self, BasicBlock, Body, Local, Operand, Rvalue, StatementKind, TerminatorKind,
 };
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
+use rustc_span::source_map::Spanned;
+use rustc_span::{sym, Symbol};
 
 use crate::analyze;
 use crate::chc;
@@ -23,6 +26,258 @@ use crate::rty::{
 mod drop_point;
 mod visitor;
 pub use drop_point::DropPoints;
+
+fn lang_item_method(tcx: TyCtxt<'_>, item: LangItem, name: Symbol) -> DefId {
+    let trait_id = tcx.lang_items().get(item).unwrap();
+    tcx.associated_items(trait_id)
+        .in_definition_order()
+        .find(|item| item.name() == name && item.namespace() == Namespace::ValueNS)
+        .unwrap()
+        .def_id
+}
+
+fn fn_operand<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    args: mir_ty::GenericArgsRef<'tcx>,
+    span: rustc_span::Span,
+) -> Operand<'tcx> {
+    Operand::Constant(Box::new(mir::ConstOperand {
+        span,
+        user_ty: None,
+        const_: mir::Const::Val(
+            mir::ConstValue::ZeroSized,
+            mir_ty::Ty::new_fn_def(tcx, def_id, args),
+        ),
+    }))
+}
+
+struct IndexedPlaceFinder<'a, 'tcx> {
+    body: &'a Body<'tcx>,
+    tcx: TyCtxt<'tcx>,
+    index: Local,
+    found: Option<(mir::Place<'tcx>, bool)>,
+}
+
+impl<'tcx> mir::visit::Visitor<'tcx> for IndexedPlaceFinder<'_, 'tcx> {
+    fn visit_place(
+        &mut self,
+        place: &mir::Place<'tcx>,
+        context: mir::visit::PlaceContext,
+        _location: mir::Location,
+    ) {
+        if self.found.is_some() {
+            return;
+        }
+        let Some(index_pos) = place
+            .projection
+            .iter()
+            .position(|elem| elem == mir::PlaceElem::Index(self.index))
+        else {
+            return;
+        };
+        let indexed = mir::Place {
+            local: place.local,
+            projection: self
+                .tcx
+                .mk_place_elems(&place.projection.as_slice()[..=index_pos]),
+        };
+        let base = mir::Place {
+            local: place.local,
+            projection: self
+                .tcx
+                .mk_place_elems(&place.projection.as_slice()[..index_pos]),
+        };
+        if matches!(
+            base.ty(&self.body.local_decls, self.tcx).ty.kind(),
+            mir_ty::TyKind::Slice(_)
+        ) {
+            self.found = Some((indexed, context.is_mutating_use()));
+        }
+    }
+}
+
+/// Reconstructs the trait call erased by MIR's first-class slice indexing operation.
+///
+/// A bounds check followed by `slice[index]` is changed into an `Index::index` or
+/// `IndexMut::index_mut` call whose returned reference replaces the indexed place. This keeps the
+/// analyzer independent of the model selected for slices: all semantics continue to come from the
+/// extern specs of those trait methods.
+pub fn lower_slice_indexing<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
+    use mir::visit::Visitor as _;
+
+    for bb in body.basic_blocks.indices().collect::<Vec<_>>() {
+        let Some(terminator) = body.basic_blocks[bb].terminator.as_ref() else {
+            continue;
+        };
+        let TerminatorKind::Assert {
+            cond,
+            msg,
+            target,
+            unwind,
+            ..
+        } = &terminator.kind
+        else {
+            continue;
+        };
+        let mir::AssertMessage::BoundsCheck { len, index } = &**msg else {
+            continue;
+        };
+        let len = len.clone();
+        let index = index.clone();
+        let condition_local = cond
+            .place()
+            .filter(|place| place.projection.is_empty())
+            .map(|p| p.local);
+        let Some(index_place) = index.place() else {
+            continue;
+        };
+        if !index_place.projection.is_empty() {
+            continue;
+        }
+        let index_local = index_place.local;
+        let target = *target;
+        let unwind = *unwind;
+        let source_info = terminator.source_info;
+
+        let mut finder = IndexedPlaceFinder {
+            body,
+            tcx,
+            index: index_local,
+            found: None,
+        };
+        finder.visit_basic_block_data(target, &body.basic_blocks[target]);
+        let Some((indexed_place, mutable)) = finder.found else {
+            continue;
+        };
+
+        let mut base_projection = indexed_place.projection.as_slice().to_vec();
+        assert_eq!(
+            base_projection.pop(),
+            Some(mir::PlaceElem::Index(index_local))
+        );
+        assert_eq!(base_projection.pop(), Some(mir::PlaceElem::Deref));
+        let receiver = mir::Place {
+            local: indexed_place.local,
+            projection: tcx.mk_place_elems(&base_projection),
+        };
+        let receiver_ty = receiver.ty(&body.local_decls, tcx).ty;
+        let mir_ty::TyKind::Ref(_, slice_ty, receiver_mutability) = receiver_ty.kind() else {
+            continue;
+        };
+        let mir_ty::TyKind::Slice(elem_ty) = slice_ty.kind() else {
+            continue;
+        };
+        if mutable && !receiver_mutability.is_mut() {
+            continue;
+        }
+
+        let ref_mutability = if mutable {
+            mir_ty::Mutability::Mut
+        } else {
+            mir_ty::Mutability::Not
+        };
+        let region = mir_ty::Region::new_from_kind(tcx, mir_ty::RegionKind::ReErased);
+        let result_ty = mir_ty::Ty::new_ref(tcx, region, *elem_ty, ref_mutability);
+        let result_local = body
+            .local_decls
+            .push(mir::LocalDecl::new(result_ty, source_info.span).immutable());
+
+        let replacement = tcx.mk_place_deref(result_local.into());
+        let mut replacer =
+            analyze::ReplacePlacesVisitor::with_replacement(tcx, indexed_place, replacement);
+        let target_data = &mut body.basic_blocks.as_mut()[target];
+        for statement in &mut target_data.statements {
+            replacer.visit_statement(statement);
+        }
+        if let Some(terminator) = &mut target_data.terminator {
+            replacer.visit_terminator(terminator);
+        }
+
+        let (lang_item, method_name) = if mutable {
+            (LangItem::IndexMut, sym::index_mut)
+        } else {
+            (LangItem::Index, sym::index)
+        };
+        let method = lang_item_method(tcx, lang_item, method_name);
+        let args = tcx.mk_args(&[(*slice_ty).into(), tcx.types.usize.into()]);
+        let func = fn_operand(tcx, method, args, source_info.span);
+        let receiver = if !mutable && receiver_mutability.is_mut() {
+            let immut_receiver_ty =
+                mir_ty::Ty::new_ref(tcx, region, *slice_ty, mir_ty::Mutability::Not);
+            let immut_receiver = body
+                .local_decls
+                .push(mir::LocalDecl::new(immut_receiver_ty, source_info.span).immutable());
+            body.basic_blocks.as_mut()[bb]
+                .statements
+                .push(mir::Statement::new(
+                    source_info,
+                    StatementKind::Assign(Box::new((
+                        immut_receiver.into(),
+                        Rvalue::Ref(
+                            region,
+                            mir::BorrowKind::Shared,
+                            tcx.mk_place_deref(receiver),
+                        ),
+                    ))),
+                ));
+            Operand::Copy(immut_receiver.into())
+        } else if mutable {
+            Operand::Move(receiver)
+        } else {
+            Operand::Copy(receiver)
+        };
+        let call_args = vec![
+            Spanned {
+                node: receiver,
+                span: source_info.span,
+            },
+            Spanned {
+                node: index,
+                span: source_info.span,
+            },
+        ];
+
+        let mut lowered_locals: Vec<_> = condition_local.into_iter().collect();
+        if let Some(len_place) = len.place().filter(|place| place.projection.is_empty()) {
+            lowered_locals.push(len_place.local);
+            for statement in &body.basic_blocks[bb].statements {
+                let Some((lhs, Rvalue::UnaryOp(mir::UnOp::PtrMetadata, operand))) =
+                    statement.kind.as_assign()
+                else {
+                    continue;
+                };
+                if lhs.local == len_place.local {
+                    if let Some(raw_place) =
+                        operand.place().filter(|place| place.projection.is_empty())
+                    {
+                        lowered_locals.push(raw_place.local);
+                    }
+                }
+            }
+        }
+        for statement in &mut body.basic_blocks.as_mut()[bb].statements {
+            let Some((lhs, _)) = statement.kind.as_assign() else {
+                continue;
+            };
+            if lowered_locals.contains(&lhs.local) {
+                statement.kind = StatementKind::Nop;
+            }
+        }
+        body.basic_blocks.as_mut()[bb].terminator = Some(mir::Terminator {
+            source_info,
+            kind: TerminatorKind::Call {
+                func,
+                args: call_args.into_boxed_slice(),
+                destination: result_local.into(),
+                target: Some(target),
+                unwind,
+                call_source: mir::CallSource::Normal,
+                fn_span: source_info.span,
+            },
+        });
+    }
+}
 
 /// Whether a basic block needs a precondition of its own, rather than
 /// inheriting its predecessor's outgoing env state.
@@ -1011,6 +1266,47 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         // definition
         assert!(lhs.projection.is_empty());
+
+        if let Rvalue::UnaryOp(mir::UnOp::PtrMetadata, operand) = rvalue {
+            let operand_mir_ty = operand.ty(&self.local_decls, self.tcx);
+            let mir_ty::TyKind::Ref(_, slice_ty, mutability) = operand_mir_ty.kind() else {
+                unimplemented!("PtrMetadata for {operand_mir_ty:?}")
+            };
+            let mir_ty::TyKind::Slice(elem_ty) = slice_ty.kind() else {
+                unimplemented!("PtrMetadata for {operand_mir_ty:?}")
+            };
+            let slice_len = self
+                .ctx
+                .def_ids()
+                .slice_len()
+                .expect("slice len extern spec was not registered");
+            let args = self.tcx.mk_args(&[(*elem_ty).into()]);
+            let func = fn_operand(self.tcx, slice_len, args, rustc_span::DUMMY_SP);
+            let operand = if mutability.is_mut() {
+                let place = operand
+                    .place()
+                    .expect("mutable slice metadata operand must be a place");
+                let region = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
+                let ty = mir_ty::Ty::new_ref(self.tcx, region, *slice_ty, mir_ty::Mutability::Not);
+                let local = self
+                    .local_decls
+                    .push(mir::LocalDecl::new(ty, rustc_span::DUMMY_SP).immutable());
+                let rty = self.immut_borrow_place(self.tcx.mk_place_deref(place));
+                self.bind_local(local, rty);
+                Operand::Copy(local.into())
+            } else {
+                operand.clone()
+            };
+            let decl = self.local_decls[lhs.local].clone();
+            let rty = self
+                .type_builder
+                .for_template(&mut self.ctx)
+                .with_scope(&self.env)
+                .build_refined(decl.ty);
+            self.type_call(func, [operand], &rty);
+            self.bind_local(lhs.local, rty);
+            return;
+        }
 
         if let Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent) = rvalue {
             // mutable borrow
