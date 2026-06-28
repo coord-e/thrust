@@ -1012,6 +1012,51 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // definition
         assert!(lhs.projection.is_empty());
 
+        if let Rvalue::UnaryOp(mir::UnOp::PtrMetadata, operand) = rvalue {
+            // Calls to `[T]::len` have already been lowered to this assignment in optimized MIR:
+            //
+            //     _len = PtrMetadata(copy _slice);
+            //
+            let operand_mir_ty = operand.ty(&self.local_decls, self.tcx);
+            let mir_ty::TyKind::Ref(_, slice_ty, mutability) = operand_mir_ty.kind() else {
+                unimplemented!("PtrMetadata for {operand_mir_ty:?}")
+            };
+            let mir_ty::TyKind::Slice(elem_ty) = slice_ty.kind() else {
+                unimplemented!("PtrMetadata for {operand_mir_ty:?}")
+            };
+            let slice_len = self
+                .tcx
+                .lang_items()
+                .slice_len_fn()
+                .expect("slice len lang item is unavailable");
+            let args = self.tcx.mk_args(&[(*elem_ty).into()]);
+            let func = analyze::fn_operand(self.tcx, slice_len, args, rustc_span::DUMMY_SP);
+            let operand = if mutability.is_mut() {
+                let place = operand
+                    .place()
+                    .expect("mutable slice metadata operand must be a place");
+                let region = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
+                let ty = mir_ty::Ty::new_ref(self.tcx, region, *slice_ty, mir_ty::Mutability::Not);
+                let local = self
+                    .local_decls
+                    .push(mir::LocalDecl::new(ty, rustc_span::DUMMY_SP).immutable());
+                let rty = self.immut_borrow_place(self.tcx.mk_place_deref(place));
+                self.bind_local(local, rty);
+                Operand::Copy(local.into())
+            } else {
+                operand.clone()
+            };
+            let decl = self.local_decls[lhs.local].clone();
+            let rty = self
+                .type_builder
+                .for_template(&mut self.ctx)
+                .with_scope(&self.env)
+                .build_refined(decl.ty);
+            self.type_call(func, [operand], &rty);
+            self.bind_local(lhs.local, rty);
+            return;
+        }
+
         if let Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent) = rvalue {
             // mutable borrow
             let rty = self.mutable_borrow(stmt_idx, *referent);

@@ -1310,6 +1310,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let _guard = span.enter();
 
         self.unelaborate_derefs();
+        analyze::reconstruct_slice_indexing::reconstruct(self.tcx, &mut self.body);
         self.reassign_local_mutabilities();
         self.refine_basic_blocks();
         self.analyze_basic_blocks(expected);
