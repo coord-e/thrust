@@ -1189,10 +1189,14 @@ where
         }
     }
 
-    pub fn drop_local(&mut self, local: Local) {
-        let assumption = self.dropping_assumption(&Path::Local(local));
+    pub fn drop_place(&mut self, place: Place<'_>) {
+        let assumption = self.dropping_assumption(&place.into());
         if !assumption.is_top() {
             self.assume(assumption);
         }
+    }
+
+    pub fn drop_local(&mut self, local: Local) {
+        self.drop_place(local.into());
     }
 }

@@ -49,7 +49,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     body: Body<'tcx>,
     /// to substitute HIR types during translation in [`crate::analyze::annot_fn`]
     generic_args: mir_ty::GenericArgsRef<'tcx>,
-    drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints>,
+    drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints<'tcx>>,
     type_builder: TypeBuilder<'tcx>,
 }
 
@@ -1098,7 +1098,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .get_mut(&bb)
                         .unwrap()
                         .before_statements
-                        .push(a);
+                        .push(a.into());
                 }
             }
             // function return type is basic block return type
