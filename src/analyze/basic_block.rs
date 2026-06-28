@@ -1305,6 +1305,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     let var = self.env.immut_bind_tmp(param_unrefined_rty);
                     param_terms.insert(param_idx, chc::Term::var(var.into()));
                     outer_fn_param_vars.insert(outer_idx, var);
+
+                    // XXX: A user-supplied loop invariant replaces the inferred precondition, so
+                    // it no longer carries the relationship between a function's entry argument
+                    // (`OuterFnParam`) and its current local. The invariant cannot express both
+                    // views of the same argument with the current syntax. As an ad-hoc workaround,
+                    // equate them when the local is non-flow, since its representation cannot change.
+                    let local = analyze::local_of_function_param(outer_idx);
+                    if !param_ty.to_sort().is_singleton() && self.env.is_non_flow_local(local) {
+                        assumption.body.push_conj(
+                            chc::Term::var(PlaceTypeVar::Var(var))
+                                .equal_to(self.env.local_type(local).term),
+                        );
+                    }
                 }
                 BasicBlockTypeParamKind::Synthetic => {}
             }
