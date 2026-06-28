@@ -238,7 +238,11 @@ mod thrust_models {
             #[allow(dead_code)]
             #[thrust::def::seq_subsequence]
             #[thrust::ignored]
-            pub fn subsequence(self, _start: Int, _end: Int) -> Self {
+            pub fn subsequence<U, V>(self, _start: U, _end: V) -> Self
+            where
+                U: super::Model<Ty = Int>,
+                V: super::Model<Ty = Int>,
+            {
                 unimplemented!()
             }
 
@@ -934,6 +938,29 @@ fn _extern_spec_slice_last_mut<T>(slice: &mut [T]) -> Option<&mut T>
 
 // TODO: The following specs for Index/IndexMut methods are too specific; we should write specs for
 //       a generic index (I: SliceIndex) that isn't specific to usize, maybe once #83 is implemented.
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    (
+        (*slice).len() > 0
+        && (!slice).1 == (*slice).1
+        && (!slice).2 == (*slice).2
+        && result == Some((
+            thrust_models::model::Mut::new((*slice)[0], (!slice)[0]),
+            thrust_models::model::Mut::new(
+                (*slice).subsequence(1, (*slice).len()),
+                (!slice).subsequence(1, (!slice).len()),
+            ),
+        ))
+    )
+    || ((*slice).len() == 0 && result == None && !slice == *slice)
+)]
+fn _extern_spec_slice_split_first_mut<T>(slice: &mut [T]) -> Option<(&mut T, &mut [T])>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::split_first_mut(slice)
+}
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(index < slice.2)]
