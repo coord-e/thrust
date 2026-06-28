@@ -644,12 +644,12 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(
                 f,
                 "(define-fun-rec {name} \
-                  ((sa (Array Int {elem_ty})) (sn Int) (ta (Array Int {elem_ty})) (tn Int)) \
+                  ((sa (Array Int {elem_ty})) (so Int) (sn Int) (ta (Array Int {elem_ty})) (to Int) (tn Int)) \
                   (Array Int {elem_ty}) \
                   (ite (<= tn 0) sa \
-                       (store ({name} sa sn ta (- tn 1)) \
-                              (+ sn (- tn 1)) \
-                              (select ta (- tn 1)))))\n",
+                       (store ({name} sa so sn ta to (- tn 1)) \
+                              (+ so sn (- tn 1)) \
+                              (select ta (+ to (- tn 1))))))\n",
             )?;
         }
 

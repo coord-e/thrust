@@ -29,6 +29,8 @@ struct DefIds {
     seq_singleton: OnceCell<Option<DefId>>,
     seq_len: OnceCell<Option<DefId>>,
     seq_push: OnceCell<Option<DefId>>,
+    seq_prepend: OnceCell<Option<DefId>>,
+    seq_subsequence: OnceCell<Option<DefId>>,
     seq_concat: OnceCell<Option<DefId>>,
 
     exists: OnceCell<Option<DefId>>,
@@ -219,6 +221,20 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .seq_push
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_push_path()))
+    }
+
+    pub fn seq_prepend(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_prepend
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_prepend_path()))
+    }
+
+    pub fn seq_subsequence(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .seq_subsequence
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::seq_subsequence_path()))
     }
 
     pub fn seq_concat(&self) -> Option<DefId> {

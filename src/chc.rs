@@ -439,8 +439,10 @@ impl Function {
 #[derive(Debug, Clone)]
 pub struct ArrayConcatTerm<V = TermVarIdx> {
     pub array1: Term<V>,
+    pub offset1: Term<V>,
     pub len1: Term<V>,
     pub array2: Term<V>,
+    pub offset2: Term<V>,
     pub len2: Term<V>,
 }
 
@@ -457,10 +459,16 @@ where
             .append(self.array1.pretty_atom(allocator))
             .append(allocator.text(","))
             .append(allocator.line())
+            .append(self.offset1.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
             .append(self.len1.pretty_atom(allocator))
             .append(allocator.text(","))
             .append(allocator.line())
             .append(self.array2.pretty_atom(allocator))
+            .append(allocator.text(","))
+            .append(allocator.line())
+            .append(self.offset2.pretty_atom(allocator))
             .append(allocator.text(","))
             .append(allocator.line())
             .append(self.len2.pretty_atom(allocator))
@@ -471,15 +479,19 @@ where
 impl<V> ArrayConcatTerm<V> {
     pub fn iter_args(&self) -> impl Iterator<Item = &Term<V>> {
         std::iter::once(&self.array1)
+            .chain(std::iter::once(&self.offset1))
             .chain(std::iter::once(&self.len1))
             .chain(std::iter::once(&self.array2))
+            .chain(std::iter::once(&self.offset2))
             .chain(std::iter::once(&self.len2))
     }
 
     pub fn iter_args_mut(&mut self) -> impl Iterator<Item = &mut Term<V>> {
         std::iter::once(&mut self.array1)
+            .chain(std::iter::once(&mut self.offset1))
             .chain(std::iter::once(&mut self.len1))
             .chain(std::iter::once(&mut self.array2))
+            .chain(std::iter::once(&mut self.offset2))
             .chain(std::iter::once(&mut self.len2))
     }
 
@@ -489,8 +501,10 @@ impl<V> ArrayConcatTerm<V> {
     {
         ArrayConcatTerm {
             array1: self.array1.subst_var(&mut f),
+            offset1: self.offset1.subst_var(&mut f),
             len1: self.len1.subst_var(&mut f),
             array2: self.array2.subst_var(&mut f),
+            offset2: self.offset2.subst_var(&mut f),
             len2: self.len2.subst_var(f),
         }
     }
@@ -775,16 +789,20 @@ impl<V> Term<V> {
     pub fn array_concat(
         elem_sort: Sort,
         array1: Term<V>,
+        offset1: Term<V>,
         len1: Term<V>,
         array2: Term<V>,
+        offset2: Term<V>,
         len2: Term<V>,
     ) -> Self {
         Term::ArrayConcat(
             elem_sort,
             Box::new(ArrayConcatTerm {
                 array1,
+                offset1,
                 len1,
                 array2,
+                offset2,
                 len2,
             }),
         )
@@ -899,12 +917,13 @@ impl<V> Term<V> {
         // indexed properties against the inlined ITE for *any* recursion bound, where unfolding
         // through `define-fun-rec` would require an inductive invariant pcsat can't find.
         //
-        // `select(concat_int_array(sa, sn, ta, tn), i)
-        //   ↦ ite(i < sn, select(sa, i), select(ta, i - sn))`
+        // `select(concat_int_array(sa, so, sn, ta, to, tn), i)`
+        //   ↦ ite(i < so + sn, select(sa, i), select(ta, to + i - (so + sn)))`
         if let Term::ArrayConcat(_, t) = self {
-            let cond = index.clone().lt(t.len1.clone());
+            let split = t.offset1.clone().add(t.len1.clone());
+            let cond = index.clone().lt(split.clone());
             let then_ = t.array1.select(index.clone());
-            let else_ = t.array2.select(index.sub(t.len1));
+            let else_ = t.array2.select(t.offset2.add(index.sub(split)));
             return Term::ite(cond, then_, else_);
         }
         Term::App(Function::SELECT, vec![self, index])
