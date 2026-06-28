@@ -4,7 +4,7 @@
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    (*result).1 > 1 && (*result).0[1] == 20
+    (*result).2 > 1 && (*result).0[(*result).1 + 1] == 20
 )]
 fn slice() -> &'static mut [i32] {
     unimplemented!()

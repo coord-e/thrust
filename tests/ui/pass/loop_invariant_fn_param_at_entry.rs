@@ -2,7 +2,7 @@
 //@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result.1 == v.1 + 2)]
+#[thrust_macros::ensures(result.2 == v.2 + 2)]
 #[thrust_macros::invariant_context]
 fn push_two(v: Vec<i64>) -> Vec<i64> {
     let mut w = v;
@@ -10,7 +10,7 @@ fn push_two(v: Vec<i64>) -> Vec<i64> {
     while i < 2 {
         thrust_macros::invariant!(
             |i: i64, w: Vec<i64>, v: thrust_models::FnParam<Vec<i64>>|
-                w.1 == v.at_entry().1 + i && i <= 2
+                w.2 == v.at_entry().2 + i && i <= 2
         );
         w.push(i);
         i += 1;

@@ -4,11 +4,11 @@
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    result.1 == 4
-        && result.0[0] == 10
-        && result.0[1] == 20
-        && result.0[2] == 30
-        && result.0[3] == 40
+    result.2 == 4
+        && result.0[result.1] == 10
+        && result.0[result.1 + 1] == 20
+        && result.0[result.1 + 2] == 30
+        && result.0[result.1 + 3] == 40
 )]
 fn slice() -> &'static [i32] {
     unimplemented!()
