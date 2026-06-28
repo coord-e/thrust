@@ -922,6 +922,10 @@ where
         self.locals.contains_key(&local) || self.flow_locals.contains_key(&local)
     }
 
+    pub fn is_non_flow_local(&self, local: Local) -> bool {
+        self.locals.contains_key(&local)
+    }
+
     fn flow_binding(&self, var: Var) -> Option<&FlowBinding> {
         match var {
             Var::Local(local) => self.flow_locals.get(&local),
