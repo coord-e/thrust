@@ -1,66 +1,44 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{HashMap, HashSet};
 
 use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
 use rustc_mir_dataflow::{impls::MaybeLiveLocals, ResultsCursor};
 
+/// Implicit-drop targets. A drop is a `Place`; a whole-local drop is just a
+/// place with an empty projection (semantically a bare `Local`).
 #[derive(Debug, Clone, Default)]
-pub struct DropPoints {
-    // TODO: ad-hoc
-    pub before_statements: Vec<Local>,
-    after_statements: Vec<DenseBitSet<Local>>,
-    after_terminator: HashMap<BasicBlock, DenseBitSet<Local>>,
-    /// Locals dropped after the terminator regardless of the target, in
-    /// addition to the liveness-derived sets above. A set, since the same local
-    /// must not be dropped twice; ordered by index to keep drops deterministic.
-    after_terminator_extra: BTreeSet<Local>,
+pub struct DropPoints<'tcx> {
+    pub before_statements: HashSet<mir::Place<'tcx>>,
+    after_statements: Vec<HashSet<mir::Place<'tcx>>>,
+    after_terminator: HashMap<BasicBlock, HashSet<mir::Place<'tcx>>>,
+    /// Drops scheduled after the terminator regardless of the target, in
+    /// addition to the liveness-derived sets above.
+    after_terminator_extra: HashSet<mir::Place<'tcx>>,
 }
 
-impl DropPoints {
+impl DropPoints<'_> {
     pub fn builder<'mir, 'tcx>(body: &'mir Body<'tcx>) -> DropPointsBuilder<'mir, 'tcx> {
         DropPointsBuilder {
             body,
             bb_ins_cache: HashMap::new(),
         }
     }
+}
 
-    pub fn position(&self, local: Local) -> Option<usize> {
-        self.after_statements
-            .iter()
-            .position(|s| s.contains(local))
-            .or_else(|| {
-                self.is_after_terminator(local)
-                    .then_some(self.after_statements.len())
-            })
-    }
-
-    fn is_after_terminator(&self, local: Local) -> bool {
-        self.after_terminator.values().any(|s| s.contains(local))
-            || self.after_terminator_extra.contains(&local)
-    }
-
-    pub fn remove_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
-        self.after_statements[statement_index].remove(local)
-    }
-
-    pub fn insert_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
-        self.after_statements[statement_index].insert(local)
-    }
-
-    pub fn after_statement(&self, statement_index: usize) -> DenseBitSet<Local> {
+impl<'tcx> DropPoints<'tcx> {
+    pub fn after_statement(&self, statement_index: usize) -> HashSet<mir::Place<'tcx>> {
         self.after_statements[statement_index].clone()
     }
 
-    pub fn insert_after_terminator(&mut self, local: Local) {
-        self.after_terminator_extra.insert(local);
+    pub fn insert_after_terminator(&mut self, place: mir::Place<'tcx>) {
+        self.after_terminator_extra.insert(place);
     }
 
-    pub fn after_terminator(&self, target: &BasicBlock) -> Vec<Local> {
-        let mut t = self.after_terminator[target].clone();
-        t.union(self.after_statements.last().unwrap());
-        t.iter()
-            .chain(self.after_terminator_extra.iter().copied())
-            .collect()
+    pub fn after_terminator(&self, target: &BasicBlock) -> HashSet<mir::Place<'tcx>> {
+        let mut set = self.after_terminator[target].clone();
+        set.extend(self.after_statements.last().unwrap().iter().copied());
+        set.extend(self.after_terminator_extra.iter().copied());
+        set
     }
 }
 
@@ -147,12 +125,12 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
         &mut self,
         results: &mut ResultsCursor<'mir, 'tcx, MaybeLiveLocals>,
         bb: BasicBlock,
-    ) -> DropPoints {
+    ) -> DropPoints<'tcx> {
         let data = &self.body.basic_blocks[bb];
 
         let mut after_terminator = HashMap::new();
         let mut after_statements = Vec::new();
-        after_statements.resize_with(data.statements.len() + 1, || DenseBitSet::new_empty(0));
+        after_statements.resize_with(data.statements.len() + 1, HashSet::new);
 
         results.seek_to_block_end(bb);
         let live_locals_after_terminator = results.get().clone();
@@ -169,7 +147,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
                 t.subtract(&self.bb_ins_cache[&succ_bb]);
                 t
             };
-            after_terminator.insert(succ_bb, edge_drops);
+            after_terminator.insert(succ_bb, edge_drops.iter().map(Into::into).collect());
             ins.union(&self.bb_ins_cache[&succ_bb]);
         }
 
@@ -193,7 +171,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
                 }
                 t.subtract(&last_live_locals);
                 t.subtract(&moved_locals(self.body, bb, statement_index));
-                t
+                t.iter().map(Into::into).collect()
             };
             last_live_locals = live_locals;
         }
@@ -207,10 +185,10 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
             "analyzed implicit drop points"
         );
         DropPoints {
-            before_statements: Default::default(),
+            before_statements: HashSet::default(),
             after_statements,
             after_terminator,
-            after_terminator_extra: Default::default(),
+            after_terminator_extra: HashSet::default(),
         }
     }
 }
