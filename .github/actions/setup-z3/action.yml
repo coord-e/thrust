@@ -4,24 +4,25 @@ inputs:
   z3-version:
     description: The version of Z3 to install.
     required: false
-    default: 4.13.0
-  z3-variant:
-    description: The variant of Z3 to install.
-    required: false
-    default: glibc-2.35
+    default: 4.16.0
   z3-sha256sum:
     description: Expected sha256sum of downloaded binary archive.
     required: false
     default: |
-      884e3a411fa11b125522fc35eba3391b772517c047f8064fb4b656d92a73b38c  z3-4.13.0-x64-glibc-2.35.zip
-      bc31ad12446d7db1bd9d0ac82dec9d7b5129b8b8dd6e44b571a83ac6010d2f9b  z3-4.13.0-x64-glibc-2.31.zip
-      50fae93d74689bc3460bec939273cf602a4c6f60a047f2a9cf48f609dc444d48  z3-4.13.0-arm64-glibc-2.35.zip
+      7288c49a5bd6dbafd7b0b0d1f65956b91672da24b08f09242919af159be3418e  z3-4.16.0-x64-glibc-2.39.zip
+      87fcd963d3eecb0f12cf1c3ef0ad74e84a3a7bd3caed5d94445645ef94ae6274  z3-4.16.0-arm64-glibc-2.38.zip
 runs:
   using: composite
   steps:
     - id: arch
       shell: bash
-      run: echo "z3-arch=$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]' >> $GITHUB_OUTPUT
+      run: |
+        ARCH=$(echo "$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')
+        echo "z3-arch=$ARCH" >> $GITHUB_OUTPUT
+        case "$ARCH" in
+          arm64) echo "z3-variant=glibc-2.38" >> $GITHUB_OUTPUT ;;
+          *)     echo "z3-variant=glibc-2.39" >> $GITHUB_OUTPUT ;;
+        esac
     - shell: bash
       run: |
         wget -q "$RELEASE_URL/$RELEASE_NAME.zip"
@@ -32,5 +33,5 @@ runs:
         echo ~/.setup-z3/bin >> $GITHUB_PATH
       env:
         RELEASE_URL: https://github.com/Z3Prover/z3/releases/download/z3-${{ inputs.z3-version }}
-        RELEASE_NAME: z3-${{ inputs.z3-version }}-${{ steps.arch.outputs.z3-arch }}-${{ inputs.z3-variant }}
+        RELEASE_NAME: z3-${{ inputs.z3-version }}-${{ steps.arch.outputs.z3-arch }}-${{ steps.arch.outputs.z3-variant }}
         INPUT_Z3_SHA256SUM: ${{ inputs.z3-sha256sum }}
