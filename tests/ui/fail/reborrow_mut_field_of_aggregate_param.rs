@@ -1,8 +1,7 @@
 //@error-in-other-file: Unsat
 
-// Regression test for #125: reborrowing a `&mut`-typed field out of an
-// aggregate (tuple/struct) parameter used to panic with "deref unbound var"
-// because the aggregate parameter was bound without flow bindings.
+// Regression test for #125: reborrowing a `&mut` field out of an aggregate
+// parameter used to panic with "deref unbound var".
 
 fn bump(r: &mut i64) {
     *r = 1;

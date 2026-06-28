@@ -649,15 +649,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
 
             fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, location: mir::Location) {
-                // to be reborrowed; see analyze::basic_block::visitor. The reborrow
-                // pass reborrows any `&mut`-typed operand place — Copy or Move —
-                // including a `&mut` field copied out of an aggregate
-                // (`copy (_1.0)`), which is a *partial* reborrow of the base local
-                // `_1`. Mark the base local to match it.
-                //
-                // The type test is `&mut` reference specifically, not
-                // `is_mutable_ptr()`: the latter also matches `*mut` raw pointers,
-                // which are `Copy` and are never reborrowed.
+                // to be reborrowed; see analyze::basic_block::visitor. A `&mut`
+                // field read out of an aggregate is `copy (_1.0)`, so match Copy
+                // too to mark the base local. Reference only: `is_mutable_ptr()`
+                // also covers `*mut`, which is Copy but never reborrowed.
                 if let mir::Operand::Move(place) | mir::Operand::Copy(place) = operand {
                     if matches!(
                         place.ty(&self.body.local_decls, self.tcx).ty.kind(),
