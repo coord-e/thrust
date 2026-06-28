@@ -13,10 +13,6 @@ name = "thrust-rustc"
 path = "src/main.rs"
 test = false
 
-[lib]
-# TODO: why is this necessary?
-test = false
-
 [[test]]
 name = "ui"
 harness = false

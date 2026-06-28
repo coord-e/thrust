@@ -30,9 +30,26 @@ mod basic_block;
 mod crate_;
 mod did_cache;
 mod local_def;
+mod reconstruct_slice_indexing;
 
 // TODO: organize structure and remove cross dependency between refine
 pub use did_cache::DefIdCache;
+
+fn fn_operand<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    args: mir_ty::GenericArgsRef<'tcx>,
+    span: rustc_span::Span,
+) -> mir::Operand<'tcx> {
+    mir::Operand::Constant(Box::new(mir::ConstOperand {
+        span,
+        user_ty: None,
+        const_: mir::Const::Val(
+            mir::ConstValue::ZeroSized,
+            mir_ty::Ty::new_fn_def(tcx, def_id, args),
+        ),
+    }))
+}
 
 pub fn mir_borrowck_skip_formula_fn(
     tcx: rustc_middle::ty::TyCtxt<'_>,

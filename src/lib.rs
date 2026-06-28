@@ -4,6 +4,8 @@ extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
+#[cfg(test)]
+extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_index;
 extern crate rustc_interface;
