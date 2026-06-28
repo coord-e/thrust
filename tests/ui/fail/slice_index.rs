@@ -3,7 +3,7 @@
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result.1 == 1 && result.0[0] == 10)]
+#[thrust_macros::ensures(result.2 == 1 && result.0[result.1] == 10)]
 fn slice() -> &'static [i32] {
     unimplemented!()
 }

@@ -5,18 +5,24 @@ use super::*;
 fn unbox_array_concat_term(t: ArrayConcatTerm) -> ArrayConcatTerm {
     let ArrayConcatTerm {
         array1,
+        offset1,
         len1,
         array2,
+        offset2,
         len2,
     } = t;
     let array1 = unbox_term(array1);
+    let offset1 = unbox_term(offset1);
     let len1 = unbox_term(len1);
     let array2 = unbox_term(array2);
+    let offset2 = unbox_term(offset2);
     let len2 = unbox_term(len2);
     ArrayConcatTerm {
         array1,
+        offset1,
         len1,
         array2,
+        offset2,
         len2,
     }
 }
