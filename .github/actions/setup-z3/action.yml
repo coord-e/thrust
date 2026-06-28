@@ -4,17 +4,17 @@ inputs:
   z3-version:
     description: The version of Z3 to install.
     required: false
-    default: 4.15.8
+    default: 4.15.4
   z3-variant:
-    description: The variant of Z3 to install (includes arch, e.g. x64-glibc-2.39, arm64-glibc-2.38).
+    description: The variant of Z3 to install (includes arch, e.g. x64-glibc-2.39, arm64-glibc-2.34).
     required: false
     default: x64-glibc-2.39
   z3-sha256sum:
     description: Expected sha256sum of downloaded binary archive.
     required: false
     default: |
-      08a3312ef3a632c6e203c07ebdf19ef42f4975c1bd077e25501d204f674542fd  z3-4.15.8-x64-glibc-2.39.zip
-      5d2e5e63018827b9611c15e1bfa48ffd9c0eaeeda6bdf184fd0963cbc0471528  z3-4.15.8-arm64-glibc-2.38.zip
+      a41b690e89c343931471506cdc6d957b6044a200fd2d240cc017432afdff7d3e  z3-4.15.4-x64-glibc-2.39.zip
+      9e832578e28d9ed51a79b97948728a874854a3c38ee49e7aae05e7d6e0e93508  z3-4.15.4-arm64-glibc-2.34.zip
 runs:
   using: composite
   steps:
