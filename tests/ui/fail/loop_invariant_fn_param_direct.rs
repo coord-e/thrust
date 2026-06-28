@@ -1,9 +1,9 @@
 //@error-in-other-file: refers to function parameter `a` directly
 //@compile-flags: -C debug-assertions=off
 
-// Referring to a function argument's local directly (without `FnParam`) is rejected: the choice
-// between its entry value and its current value must be made explicit via `FnParam` and
-// `at_entry()`/`at_here()`.
+// Naively referring to a function argument's local directly (without `FnParam`) is rejected: the
+// choice between its entry value and its current value would be implicit. Compare with the paired
+// pass test, which makes that choice explicit via `FnParam` and `at_entry()`/`at_here()`.
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
