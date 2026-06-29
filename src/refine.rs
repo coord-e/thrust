@@ -18,15 +18,16 @@ pub use env::{
     Assumption, EnumDefProvider, Env, PlaceType, PlaceTypeBuilder, PlaceTypeVar, TempVarIdx, Var,
 };
 
-use crate::chc::{DatatypeSymbol, UserDefinedPred};
+use crate::chc::{DatatypeSymbol, ForallPred, Sort, UserDefinedPred};
 use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
-fn stable_def_id_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> String {
+fn stable_def_id_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId, prefix: &str) -> String {
     let hash = tcx.def_path_hash(did);
     let path = tcx.def_path(did);
     if let Some(name) = path.data.last().and_then(|d| d.data.get_opt_name()) {
-        format!("{}_{}", name, hash.0.to_hex())
+        tracing::debug!("stable_def_id_symbol: name={}", name);
+        format!("{}_{}_{}", prefix, name, hash.0.to_hex())
     } else {
         hash.0.to_hex()
     }
@@ -37,5 +38,40 @@ pub fn datatype_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> DatatypeSymbol {
 }
 
 pub fn user_defined_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> UserDefinedPred {
-    UserDefinedPred::new(stable_def_id_symbol(tcx, did))
+    UserDefinedPred::new(stable_def_id_symbol(tcx, did, "p"))
+}
+
+pub fn trait_forall_pred(
+    tcx: mir_ty::TyCtxt<'_>,
+    did: DefId,
+    type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
+) -> ForallPred {
+    ForallPred::new(stable_def_id_symbol(tcx, did, "q"), type_parameters, params)
+}
+
+pub fn closure_pre_forall_pred(
+    tcx: mir_ty::TyCtxt<'_>,
+    did: DefId,
+    type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
+) -> ForallPred {
+    ForallPred::new(
+        stable_def_id_symbol(tcx, did, "q_pre"),
+        type_parameters,
+        params,
+    )
+}
+
+pub fn closure_post_forall_pred(
+    tcx: mir_ty::TyCtxt<'_>,
+    did: DefId,
+    type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
+) -> ForallPred {
+    ForallPred::new(
+        stable_def_id_symbol(tcx, did, "q_post"),
+        type_parameters,
+        params,
+    )
 }

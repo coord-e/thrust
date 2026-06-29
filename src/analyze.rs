@@ -8,6 +8,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
@@ -19,7 +20,7 @@ use rustc_span::Symbol;
 
 use crate::analyze;
 use crate::annot::{AnnotFormula, AnnotParser, Resolver};
-use crate::chc;
+use crate::chc::{self, ForallSortIdx};
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
@@ -181,8 +182,17 @@ struct DeferredDefTy<'tcx> {
 }
 
 #[derive(Debug, Clone)]
+struct GenericDefTy<'tcx> {
+    // this is different from a key in defs when the def is extern_spec_fn
+    local_def_id: LocalDefId,
+    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
+    rty: Option<rty::RefinedType>,
+}
+
+#[derive(Debug, Clone)]
 enum DefTy<'tcx> {
     Concrete(rty::RefinedType),
+    Generic(GenericDefTy<'tcx>),
     Deferred(DeferredDefTy<'tcx>),
 }
 
@@ -218,6 +228,20 @@ impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
 }
 
 pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
+pub type TypeParamMap<'tcx> = HashMap<TypeParam, ForallSortIdx>;
+
+#[derive(Eq, PartialEq, Hash, Debug, Clone)]
+pub enum TypeParam {
+    /// A type parameter identified by its declaration def_id and its
+    /// **local** index within the declaring item (i.e. lifetime and const
+    /// parameters are skipped). Using the local index lets monomorphization
+    /// substitute it with the actual generic argument at the same position.
+    GenericType {
+        param_def_id: DefId,
+        local_idx: u32,
+    },
+    AssocType(DefId, Vec<rty::Type<rty::Closed>>),
+}
 
 #[derive(Debug, Clone)]
 struct DeferredFormulaFnDef<'tcx> {
@@ -245,6 +269,9 @@ pub struct Analyzer<'tcx> {
     def_ids: did_cache::DefIdCache<'tcx>,
 
     enum_defs: Rc<RefCell<EnumDefs>>,
+
+    type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
@@ -272,6 +299,8 @@ impl<'tcx> Analyzer<'tcx> {
         let system = Default::default();
         let basic_blocks = Default::default();
         let enum_defs = Default::default();
+        let type_params = Default::default();
+        let closure_type_params = Default::default();
         Self {
             tcx,
             defs,
@@ -280,6 +309,8 @@ impl<'tcx> Analyzer<'tcx> {
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
             enum_defs,
+            type_params,
+            closure_type_params,
         }
     }
 
@@ -313,7 +344,7 @@ impl<'tcx> Analyzer<'tcx> {
                     .iter()
                     .map(|field| {
                         let field_ty = self.tcx.type_of(field.did).instantiate_identity();
-                        TypeBuilder::new(self.tcx, self.def_ids(), def_id).build(field_ty)
+                        self.type_builder(self.def_ids(), def_id).build(field_ty)
                     })
                     .collect();
                 rty::EnumVariantDef {
@@ -408,19 +439,40 @@ impl<'tcx> Analyzer<'tcx> {
             ?mode,
             "register_deferred_def"
         );
-        self.defs.insert(
-            target_def_id,
+        self.defs.entry(target_def_id).or_insert_with(|| {
             DefTy::Deferred(DeferredDefTy {
                 local_def_id,
                 cache: Rc::new(RefCell::new(HashMap::new())),
                 mode,
+            })
+        });
+    }
+
+    pub fn register_generic_def(
+        &mut self,
+        target_def_id: DefId,
+        local_def_id: LocalDefId,
+        rty: Option<rty::RefinedType>,
+    ) {
+        tracing::info!(?target_def_id, ?local_def_id, ?rty, "register_generic_def");
+        self.defs.insert(
+            target_def_id,
+            DefTy::Generic(GenericDefTy {
+                rty,
+                local_def_id,
+                cache: Rc::new(RefCell::new(HashMap::new())),
             }),
         );
+    }
+
+    pub fn get_closure_type(&self, type_param: TypeParam) -> Option<rty::FunctionType> {
+        self.closure_type_params.borrow().get(&type_param).cloned()
     }
 
     pub fn concrete_def_ty(&self, def_id: DefId) -> Option<&rty::RefinedType> {
         self.defs.get(&def_id).and_then(|def_ty| match def_ty {
             DefTy::Concrete(rty) => Some(rty),
+            DefTy::Generic(GenericDefTy { rty, .. }) => rty.as_ref(),
             DefTy::Deferred(_) => None,
         })
     }
@@ -433,9 +485,17 @@ impl<'tcx> Analyzer<'tcx> {
         def_id: DefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<rty::FunctionType> {
-        let type_builder = TypeBuilder::new(self.tcx, self.def_ids(), def_id);
+        let type_builder = TypeBuilder::new(
+            self.tcx,
+            self.def_ids(),
+            def_id,
+            self.type_params.clone(),
+            self.closure_type_params.clone(),
+            self.system.clone(),
+        );
         let mut def_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => rty.clone(),
+            DefTy::Generic(generic) => generic.cache.borrow().get(&generic_args)?.clone(),
             DefTy::Deferred(deferred) => deferred.cache.borrow().get(&generic_args)?.clone(),
         };
         def_ty.instantiate_ty_params(
@@ -452,6 +512,7 @@ impl<'tcx> Analyzer<'tcx> {
         &self,
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Option<annot_fn::FormulaFn<'tcx>> {
         let deferred_formula_fn = self.formula_fns.get(&local_def_id)?;
 
@@ -460,8 +521,9 @@ impl<'tcx> Analyzer<'tcx> {
             return Some(formula_fn.clone());
         }
 
-        let translator = annot_fn::AnnotFnTranslator::new(self, local_def_id, generic_args)
-            .with_def_id_cache(self.def_ids());
+        let translator =
+            annot_fn::AnnotFnTranslator::new(self, local_def_id, generic_args, owner_fn_id)
+                .with_def_id_cache(self.def_ids());
         let formula_fn = translator.to_formula_fn();
         deferred_formula_fn_cache
             .borrow_mut()
@@ -471,53 +533,59 @@ impl<'tcx> Analyzer<'tcx> {
         Some(formula_fn)
     }
 
-    pub fn def_ty_with_args(
-        &mut self,
-        def_id: DefId,
+    fn instantiate_generic_args(
+        ty: &mut rty::RefinedType,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
-    ) -> Option<rty::RefinedType> {
-        let type_builder = TypeBuilder::new(self.tcx, self.def_ids(), def_id);
-
-        let deferred_ty = match self.defs.get(&def_id)? {
-            DefTy::Concrete(rty) => {
-                let mut def_ty = rty.clone();
-                def_ty.instantiate_ty_params(
-                    generic_args
-                        .types()
-                        .map(|ty| type_builder.build(ty))
-                        .map(rty::RefinedType::unrefined)
-                        .collect(),
-                );
-                return Some(def_ty);
-            }
-            DefTy::Deferred(deferred) => deferred,
-        };
-
-        let deferred_ty_cache = Rc::clone(&deferred_ty.cache); // to cut reference to allow &mut self
-        if let Some(rty) = deferred_ty_cache.borrow().get(&generic_args) {
-            return Some(rty.clone());
-        }
-        let deferred_ty_mode = deferred_ty.mode;
-
-        let mut analyzer = self.local_def_analyzer(deferred_ty.local_def_id);
-        analyzer.generic_args(generic_args);
-
-        let mut expected = analyzer.expected_ty();
-        // parameters in annotations are left as params
-        // TODO: remove this after annotation V2
-        expected.instantiate_ty_params(
+        type_builder: &TypeBuilder<'tcx>,
+    ) {
+        ty.instantiate_ty_params(
             generic_args
                 .types()
                 .map(|ty| type_builder.build(ty))
                 .map(rty::RefinedType::unrefined)
                 .collect(),
         );
-        deferred_ty_cache
+    }
+
+    pub fn def_ty_with_args(
+        &mut self,
+        def_id: DefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+        caller_def_id: DefId,
+    ) -> Option<rty::RefinedType> {
+        let type_builder = self.type_builder(self.def_ids(), caller_def_id);
+
+        let (local_def_id, instantiated_ty_cache, deferred_ty_mode) =
+            match self.defs.get(&def_id)? {
+                DefTy::Concrete(rty) => {
+                    let mut def_ty = rty.clone();
+                    Self::instantiate_generic_args(&mut def_ty, generic_args, &type_builder);
+                    return Some(def_ty);
+                }
+                DefTy::Generic(generic) => (generic.local_def_id, Rc::clone(&generic.cache), None),
+                DefTy::Deferred(deferred) => (
+                    deferred.local_def_id,
+                    Rc::clone(&deferred.cache),
+                    Some(deferred.mode),
+                ),
+            };
+
+        if let Some(rty) = instantiated_ty_cache.borrow().get(&generic_args) {
+            return Some(rty.clone());
+        }
+
+        let mut analyzer = self.local_def_analyzer(local_def_id);
+        analyzer
+            .owner_fn_id(caller_def_id)
+            .generic_args(generic_args);
+
+        let expected = analyzer.expected_ty();
+        instantiated_ty_cache
             .borrow_mut()
             .insert(generic_args, expected.clone());
         tracing::info!(?def_id, rty = %expected.display(), ?generic_args, "deferred def");
 
-        if deferred_ty_mode.should_analyze() {
+        if deferred_ty_mode.is_some_and(|mode| mode.should_analyze()) {
             let mut body_analyzer = if analyzer.local_def_id().to_def_id() == def_id {
                 analyzer
             } else {
@@ -657,11 +725,30 @@ impl<'tcx> Analyzer<'tcx> {
         &mut self,
         local_def_id: LocalDefId,
         bb: BasicBlock,
+        owner_fn_id: DefId,
     ) -> basic_block::Analyzer<'tcx, '_> {
-        basic_block::Analyzer::new(self, local_def_id, bb)
+        basic_block::Analyzer::new(self, local_def_id, bb, owner_fn_id)
+    }
+
+    pub fn type_builder(&self, def_ids: DefIdCache<'tcx>, owner_fn_id: DefId) -> TypeBuilder<'tcx> {
+        TypeBuilder::new(
+            self.tcx,
+            def_ids,
+            owner_fn_id,
+            self.type_params.clone(),
+            self.closure_type_params.clone(),
+            self.system.clone(),
+        )
     }
 
     pub fn solve(&mut self) {
+        let mut reverse = HashMap::new();
+        for (tp, &idx) in self.type_params.borrow().iter() {
+            if let TypeParam::GenericType { local_idx, .. } = tp {
+                reverse.insert(idx, *local_idx);
+            }
+        }
+        self.system.borrow_mut().type_params_reverse = reverse;
         if let Err(err) = self.system.borrow().solve() {
             self.tcx.dcx().err(format!("verification error: {:?}", err));
         }
@@ -752,6 +839,7 @@ impl<'tcx> Analyzer<'tcx> {
         resolver: T,
         self_type_name: Option<String>,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver<Output = rty::FunctionParamIdx>,
@@ -782,7 +870,9 @@ impl<'tcx> Analyzer<'tcx> {
             if require_annot.is_some() {
                 unimplemented!();
             }
-            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+            let Some(formula_fn) =
+                self.formula_fn_with_args(formula_def_id, generic_args, owner_fn_id)
+            else {
                 panic!(
                     "require annotation {:?} is not a formula function",
                     formula_def_id
@@ -801,6 +891,7 @@ impl<'tcx> Analyzer<'tcx> {
         resolver: T,
         self_type_name: Option<String>,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Option<AnnotFormula<T::Output>>
     where
         T: Resolver<Output = rty::RefinedTypeVar<rty::FunctionParamIdx>>,
@@ -832,7 +923,9 @@ impl<'tcx> Analyzer<'tcx> {
             if ensure_annot.is_some() {
                 unimplemented!();
             }
-            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+            let Some(formula_fn) =
+                self.formula_fn_with_args(formula_def_id, generic_args, owner_fn_id)
+            else {
                 panic!(
                     "ensure annotation {:?} is not a formula function",
                     formula_def_id
@@ -903,6 +996,7 @@ impl<'tcx> Analyzer<'tcx> {
         &self,
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Vec<(rty::TypePosition, rty::Refinement<rty::FunctionParamIdx>)> {
         let mut out = Vec::new();
         for (position, def_id) in self.extract_refinement_paths(local_def_id) {
@@ -912,7 +1006,9 @@ impl<'tcx> Analyzer<'tcx> {
                     def_id
                 );
             };
-            let Some(formula_fn) = self.formula_fn_with_args(formula_def_id, generic_args) else {
+            let Some(formula_fn) =
+                self.formula_fn_with_args(formula_def_id, generic_args, owner_fn_id)
+            else {
                 panic!(
                     "refinement_path annotation {:?} is not a formula function",
                     formula_def_id

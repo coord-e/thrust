@@ -1,5 +1,8 @@
 //! A multi-sorted CHC system with tuples.
 
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
+
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
@@ -84,6 +87,45 @@ impl DatatypeSort {
     }
 }
 
+rustc_index::newtype_index! {
+    /// An index representing sort-level variable.
+    ///
+    /// We manage sort-level variables using indices that are unique in the whole CHC system.
+    /// [`System`] contains `Vec<ForallSortIdx>` that manages the indices of the variables.
+    #[orderable]
+    #[debug_format = "a{}"]
+    pub struct ForallSortIdx { }
+}
+
+impl Default for ForallSortIdx {
+    fn default() -> Self {
+        0_usize.into()
+    }
+}
+
+impl std::fmt::Display for ForallSortIdx {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "a{}", self.index())
+    }
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ForallSortIdx
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator
+            .as_string(self)
+            .annotate(ForallSortIdx::color_spec())
+    }
+}
+
+impl ForallSortIdx {
+    fn color_spec() -> termcolor::ColorSpec {
+        termcolor::ColorSpec::new()
+    }
+}
+
 /// A sort is the type of a logical term.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
@@ -97,6 +139,7 @@ pub enum Sort {
     Tuple(Vec<Sort>),
     Array(Box<Sort>, Box<Sort>),
     Datatype(DatatypeSort),
+    Forall(ForallSortIdx),
 }
 
 impl From<DatatypeSort> for Sort {
@@ -154,6 +197,7 @@ where
                 }
             }
             Sort::Datatype(sort) => sort.pretty(allocator),
+            Sort::Forall(idx) => idx.pretty(allocator),
         }
     }
 }
@@ -180,7 +224,12 @@ impl Sort {
     fn walk_impl<'a, 'b>(&'a self, mut f: Box<dyn FnMut(&'a Sort) + 'b>) {
         f(self);
         match self {
-            Sort::Null | Sort::Int | Sort::Bool | Sort::String | Sort::Param(_) => {}
+            Sort::Null
+            | Sort::Int
+            | Sort::Bool
+            | Sort::String
+            | Sort::Param(_)
+            | Sort::Forall(_) => {}
             Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
             Sort::Tuple(ss) => {
                 for s in ss {
@@ -261,6 +310,10 @@ impl Sort {
         Sort::Datatype(DatatypeSort { symbol, args })
     }
 
+    pub fn forall(index: ForallSortIdx) -> Self {
+        Sort::Forall(index)
+    }
+
     pub fn into_datatype(self) -> Option<DatatypeSort> {
         match self {
             Sort::Datatype(sort) => Some(sort),
@@ -286,23 +339,31 @@ impl Sort {
         }
     }
 
-    pub fn instantiate_params(&mut self, args: &[Sort]) {
+    pub fn instantiate_params<F>(&mut self, args: &[Sort], forall_sort_resolver: &F)
+    where
+        F: Fn(crate::chc::ForallSortIdx) -> Option<usize>,
+    {
         match self {
             Sort::Param(i) => *self = args[*i].clone(),
-            Sort::Box(s) => s.instantiate_params(args),
-            Sort::Mut(s) => s.instantiate_params(args),
+            Sort::Forall(idx) => {
+                if let Some(local_idx) = forall_sort_resolver(*idx) {
+                    *self = args[local_idx].clone();
+                }
+            }
+            Sort::Box(s) => s.instantiate_params(args, forall_sort_resolver),
+            Sort::Mut(s) => s.instantiate_params(args, forall_sort_resolver),
             Sort::Tuple(ss) => {
                 for s in ss {
-                    s.instantiate_params(args);
+                    s.instantiate_params(args, forall_sort_resolver);
                 }
             }
             Sort::Array(s1, s2) => {
-                s1.instantiate_params(args);
-                s2.instantiate_params(args);
+                s1.instantiate_params(args, forall_sort_resolver);
+                s2.instantiate_params(args, forall_sort_resolver);
             }
             Sort::Datatype(sort) => {
                 for s in &mut sort.args {
-                    s.instantiate_params(args);
+                    s.instantiate_params(args, forall_sort_resolver);
                 }
             }
             _ => {}
@@ -436,7 +497,7 @@ impl Function {
     pub const ITE: Function = Function::new("ite");
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArrayConcatTerm<V = TermVarIdx> {
     pub array1: Term<V>,
     pub len1: Term<V>,
@@ -497,7 +558,7 @@ impl<V> ArrayConcatTerm<V> {
 }
 
 /// A logical term.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term<V = TermVarIdx> {
     Null,
     Var(V),
@@ -753,8 +814,8 @@ impl<V> Term<V> {
             ),
             Sort::Tuple(ts) => Term::Tuple(ts.iter().map(Self::default_for).collect()),
             Sort::Array(i, e) => Term::ArrayEmpty((**i).clone(), (**e).clone()),
-            // TODO: defaults for Datatype and Param.
-            Sort::Datatype(_) | Sort::Param(_) => {
+            // TODO: defaults for Datatype and Param and Forall.
+            Sort::Datatype(_) | Sort::Param(_) | Sort::Forall(_) => {
                 unimplemented!("no default value for sort {sort:?}")
             }
         }
@@ -1146,7 +1207,19 @@ pub struct UserDefinedPred {
 
 impl std::fmt::Display for UserDefinedPred {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.inner.fmt(f)
+        // SMT2 identifiers produced by Thrust come from Rust names (e.g.
+        // `Map<I, F>_step`), which the backed solver rejects because
+        // `,` and ` ` are not allowed inside an identifier. Sanitize at the
+        // display boundary so the existing human-readable naming convention
+        // is preserved (`Map<I, F>_step` → `Map<I-F>_step`).
+        for c in self.inner.chars() {
+            match c {
+                ',' => f.write_str("-")?,
+                ' ' | '\t' | '\n' | '\r' => {}
+                c => f.write_str(c.encode_utf8(&mut [0; 4]))?,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1165,6 +1238,51 @@ impl UserDefinedPred {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ForallPred {
+    inner: String,
+    type_parameters: Vec<Sort>,
+    params: Vec<Sort>,
+}
+
+impl std::fmt::Display for ForallPred {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ForallPred
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let args = allocator.intersperse(
+            self.type_parameters.iter().map(|a| a.pretty(allocator)),
+            allocator.text(", "),
+        );
+        allocator
+            .text("forall_pred")
+            .append(
+                allocator
+                    .as_string(&self.inner)
+                    .append(args.angles())
+                    .angles(),
+            )
+            .group()
+    }
+}
+
+impl ForallPred {
+    pub fn new(inner: String, type_parameters: Vec<Sort>, params: Vec<Sort>) -> Self {
+        Self {
+            inner,
+            type_parameters,
+            params,
+        }
+    }
+}
+
 /// A predicate.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Pred {
@@ -1172,6 +1290,7 @@ pub enum Pred {
     Var(PredVarId),
     Matcher(MatcherPred),
     UserDefined(UserDefinedPred),
+    ForallPred(ForallPred),
 }
 
 impl std::fmt::Display for Pred {
@@ -1181,6 +1300,7 @@ impl std::fmt::Display for Pred {
             Pred::Var(p) => p.fmt(f),
             Pred::Matcher(p) => p.fmt(f),
             Pred::UserDefined(p) => p.fmt(f),
+            Pred::ForallPred(p) => p.fmt(f),
         }
     }
 }
@@ -1196,6 +1316,7 @@ where
             Pred::Var(p) => p.pretty(allocator),
             Pred::Matcher(p) => p.pretty(allocator),
             Pred::UserDefined(p) => p.pretty(allocator),
+            Pred::ForallPred(p) => p.pretty(allocator),
         }
     }
 }
@@ -1224,6 +1345,12 @@ impl From<UserDefinedPred> for Pred {
     }
 }
 
+impl From<ForallPred> for Pred {
+    fn from(p: ForallPred) -> Self {
+        Pred::ForallPred(p)
+    }
+}
+
 impl Pred {
     pub fn name(&self) -> std::borrow::Cow<'static, str> {
         match self {
@@ -1231,6 +1358,7 @@ impl Pred {
             Pred::Var(p) => p.to_string().into(),
             Pred::Matcher(p) => p.name().into(),
             Pred::UserDefined(p) => p.to_string().into(),
+            Pred::ForallPred(p) => p.to_string().into(),
         }
     }
 
@@ -1240,6 +1368,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1249,6 +1378,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1258,6 +1388,7 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
         }
     }
 
@@ -1267,12 +1398,26 @@ impl Pred {
             Pred::Var(_) => false,
             Pred::Matcher(_) => false,
             Pred::UserDefined(_) => false,
+            Pred::ForallPred(_) => false,
+        }
+    }
+}
+
+impl TryFrom<Pred> for ForallPred {
+    type Error = String;
+    fn try_from(value: Pred) -> Result<Self, Self::Error> {
+        if let Pred::ForallPred(forall_pred) = value {
+            Ok(forall_pred)
+        } else {
+            Err(format!(
+                "expected the variant `Pred::ForallPred`, got {value:#?}."
+            ))
         }
     }
 }
 
 /// An atom is a predicate applied to a list of terms.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Atom<V = TermVarIdx> {
     /// With `guard`, this represents `guard => pred(args)`.
     ///
@@ -1416,7 +1561,7 @@ impl<V> Atom<V> {
 /// While it allows arbitrary [`Atom`] in its `Atom` variant, we only expect atoms with known
 /// predicates (i.e., predicates other than `Pred::Var`) to appear in formulas. It is our TODO to
 /// enforce this restriction statically. Also see the definition of [`Body`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Formula<V = TermVarIdx> {
     Atom(Atom<V>),
     Not(Box<Formula<V>>),
@@ -1738,7 +1883,7 @@ impl<V> Formula<V> {
 }
 
 /// The body part of a clause, consisting of atoms and a formula.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Body<V = TermVarIdx> {
     pub atoms: Vec<Atom<V>>,
     /// NOTE: This doesn't contain predicate variables. Also see [`Formula`].
@@ -2012,6 +2157,45 @@ pub struct UserDefinedPredDef {
     symbol: UserDefinedPred,
     sig: UserDefinedPredSig,
     body: String,
+    /// `ForallPred`s referenced from `body`. Populated just before dependency
+    /// analysis by `System::populate_user_defined_pred_dependencies`.
+    pub dependencies: HashSet<ForallPred>,
+}
+
+pub fn compute_transitive_closure<T>(direct_deps: &HashMap<T, HashSet<T>>) -> HashMap<T, HashSet<T>>
+where
+    T: Clone + Eq + Hash,
+{
+    let mut closure = HashMap::new();
+
+    for start_id in direct_deps.keys() {
+        let mut visited = HashSet::new();
+        let mut stack = vec![start_id.clone()];
+
+        // Search by DFS
+        while let Some(current_id) = stack.pop() {
+            if let Some(deps) = direct_deps.get(&current_id) {
+                for next_id in deps {
+                    if visited.insert(next_id.clone()) {
+                        stack.push(next_id.clone());
+                    }
+                }
+            }
+        }
+
+        closure.insert(start_id.clone(), visited);
+    }
+
+    closure
+}
+
+/// A thing that can be referenced from a clause body and contribute to the
+/// transitive dependency closure: a predicate variable, or a user-defined
+/// predicate whose body may call `ForallPred`s.
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub enum ExistsDep {
+    PredVar(PredVarId),
+    UserDefined(UserDefinedPred),
 }
 
 /// A CHC system.
@@ -2022,11 +2206,34 @@ pub struct System {
     pub user_defined_pred_defs: Vec<UserDefinedPredDef>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
+    pub forall_sorts: Vec<ForallSortIdx>,
+    pub num_forall_sort_idx: ForallSortIdx,
+    /// Reverse map from [`ForallSortIdx`] to the local index of the type
+    /// parameter it was issued for, populated by the analyzer. Used during
+    /// datatype monomorphization to substitute `Sort::Forall` placeholders
+    /// in ADT field types with the corresponding generic argument.
+    ///
+    /// Only entries for `analyze::TypeParam::GenericType` are recorded.
+    /// `analyze::TypeParam::AssocType` forall sorts are intentionally omitted
+    /// and remain as opaque forall sorts in the SMT output.
+    pub type_params_reverse: HashMap<ForallSortIdx, u32>,
+    forall_pred_vars: HashSet<ForallPred>,
 }
 
 impl System {
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
+    }
+
+    pub fn register_forall_pred(&mut self, pred: ForallPred) {
+        self.forall_pred_vars.insert(pred);
+    }
+
+    pub fn new_forall_sort(&mut self) -> ForallSortIdx {
+        let new_idx = self.num_forall_sort_idx;
+        self.num_forall_sort_idx += 1;
+        self.forall_sorts.push(new_idx);
+        new_idx
     }
 
     pub fn push_raw_command(&mut self, raw_command: RawCommand) {
@@ -2039,8 +2246,50 @@ impl System {
         sig: UserDefinedPredSig,
         body: String,
     ) {
-        self.user_defined_pred_defs
-            .push(UserDefinedPredDef { symbol, sig, body })
+        self.push_pred_define_with_deps(symbol, sig, body, HashSet::new())
+    }
+
+    pub fn push_pred_define_with_deps(
+        &mut self,
+        symbol: UserDefinedPred,
+        sig: UserDefinedPredSig,
+        body: String,
+        dependencies: HashSet<ForallPred>,
+    ) {
+        self.user_defined_pred_defs.push(UserDefinedPredDef {
+            symbol,
+            sig,
+            body,
+            dependencies,
+        })
+    }
+
+    /// Scans every [`UserDefinedPredDef`]'s body for references to registered
+    /// [`ForallPred`]s and records the matches in `dependencies`.
+    ///
+    /// The user-supplied SMT-LIB2 body of a `#[thrust_macros::predicate]` is a
+    /// raw string and therefore opaque to the analyzer. To still let dependency
+    /// analysis see transitive `ForallPred` uses, we look for the SMT-LIB2
+    /// representation of every registered `ForallPred` as a substring of each
+    /// body. Must be called after every `ForallPred` has been registered
+    /// (i.e. after `crate::refine::template` and trait/closure pre/post
+    /// construction finish) and before [`System::compute_dependency`].
+    pub fn populate_user_defined_pred_dependencies(&mut self) {
+        use crate::chc::format_context::format_forall_pred_name;
+
+        let forall_names: Vec<(ForallPred, String)> = self
+            .forall_pred_vars
+            .iter()
+            .map(|pred| (pred.clone(), format_forall_pred_name(pred)))
+            .collect();
+
+        for udpd in &mut self.user_defined_pred_defs {
+            for (pred, name) in &forall_names {
+                if udpd.body.contains(name.as_str()) {
+                    udpd.dependencies.insert(pred.clone());
+                }
+            }
+        }
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
@@ -2049,6 +2298,99 @@ impl System {
         }
         tracing::debug!(clause = %clause.display(), id = ?self.clauses.next_index(), "push_clause");
         Some(self.clauses.push(clause))
+    }
+
+    fn compute_forall_dependency(clause: &Clause) -> HashSet<ForallPred> {
+        clause
+            .body
+            .iter_atoms()
+            .filter_map(|atom| atom.pred.clone().try_into().ok())
+            .collect()
+    }
+
+    fn compute_exists_dependency(clause: &Clause) -> HashSet<ExistsDep> {
+        clause
+            .body
+            .iter_atoms()
+            .filter_map(|atom| match &atom.pred {
+                Pred::Var(id) => Some(ExistsDep::PredVar(*id)),
+                Pred::UserDefined(p) => Some(ExistsDep::UserDefined(p.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn compute_dependency(&self) -> HashMap<PredVarId, HashSet<ForallPred>> {
+        let mut exists_deps: HashMap<ExistsDep, HashSet<ExistsDep>> = HashMap::new();
+        let mut forall_deps: HashMap<ExistsDep, HashSet<ForallPred>> = HashMap::new();
+
+        for (clause_idx, clause) in self.clauses.iter_enumerated() {
+            let Pred::Var(head_id) = clause.head.pred else {
+                continue;
+            };
+
+            let exists = Self::compute_exists_dependency(clause);
+            let forall = Self::compute_forall_dependency(clause);
+
+            tracing::debug!(
+                "exists deps for {:?} at {:?}: {:?}",
+                head_id,
+                clause_idx,
+                exists
+            );
+
+            let head_dep = ExistsDep::PredVar(head_id);
+            exists_deps
+                .entry(head_dep.clone())
+                .or_default()
+                .extend(exists);
+            forall_deps.entry(head_dep).or_default().extend(forall);
+        }
+        // Each `UserDefinedPred`'s body may call `ForallPred`s. We populate
+        // these lazily via `populate_user_defined_pred_dependencies`; thread
+        // them into the forall map so transitive propagation sees them.
+        for udpd in &self.user_defined_pred_defs {
+            if !udpd.dependencies.is_empty() {
+                forall_deps
+                    .entry(ExistsDep::UserDefined(udpd.symbol.clone()))
+                    .or_default()
+                    .extend(udpd.dependencies.iter().cloned());
+            }
+        }
+        tracing::debug!("direct forall dependencies: {:#?}", forall_deps);
+        tracing::debug!("direct exists dependencies: {:#?}", exists_deps);
+
+        let transitive_exists_deps = compute_transitive_closure(&exists_deps);
+        tracing::debug!("transitive exists dependencies: {:#?}", exists_deps);
+
+        let mut propagated_forall_deps = HashMap::new();
+
+        for (dep, reachable) in transitive_exists_deps {
+            let ExistsDep::PredVar(pred) = dep else {
+                // Only `PredVar` heads appear as `dep` keys here: a clause
+                // head is always `Pred::Var` (see the loop above). Other
+                // variants would only be reachable successors.
+                continue;
+            };
+
+            // Direct ForallPred deps of the head predicate variable (those
+            // `ForallPred` atoms that appear directly in the clause body of
+            // `pred`). The transitive-closure result excludes the start node
+            // itself, so we add this here explicitly.
+            let mut deps = forall_deps.get(&dep).cloned().unwrap_or_default();
+
+            // ForallPred deps contributed by each reachable successor
+            // (`PredVar` or `UserDefinedPred`).
+            for r in &reachable {
+                if let Some(foralls) = forall_deps.get(r) {
+                    deps.extend(foralls.iter().cloned());
+                }
+            }
+
+            propagated_forall_deps.insert(pred, deps);
+        }
+
+        propagated_forall_deps
     }
 
     pub fn smtlib2(&self) -> smtlib2::System<'_> {
@@ -2063,7 +2405,8 @@ impl System {
     /// variables
     /// (see <https://github.com/coord-e/thrust?tab=readme-ov-file#configuration>).
     pub fn solve(&self) -> Result<(), CheckSatError> {
-        let system = unbox(self.clone());
+        let mut system = unbox(self.clone());
+        system.populate_user_defined_pred_dependencies();
         if let Ok(file) = std::env::var("THRUST_PRETTY_OUTPUT") {
             let mut f = std::fs::File::create(file).unwrap();
             for (idx, c) in system.clauses.iter_enumerated() {

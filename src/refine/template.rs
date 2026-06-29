@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Mutability};
@@ -6,7 +8,7 @@ use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
 use super::basic_block::BasicBlockType;
-use crate::analyze::DefIdCache;
+use crate::analyze::{DefIdCache, TypeParam, TypeParamMap};
 use crate::chc;
 use crate::refine;
 use crate::rty;
@@ -71,17 +73,28 @@ where
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
     def_ids: DefIdCache<'tcx>,
+    owner_fn_id: DefId,
     typing_env: mir_ty::TypingEnv<'tcx>,
     /// Maps index in [`mir_ty::ParamTy`] to [`rty::TypeParamIdx`].
     /// These indices may differ because we skip lifetime parameters and they always need to be
     /// mapped when we translate a [`mir_ty::ParamTy`] to [`rty::ParamType`].
     /// See [`rty::TypeParamIdx`] for more details.
     param_idx_mapping: HashMap<u32, rty::TypeParamIdx>,
+    type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+    closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
+    system: Rc<RefCell<chc::System>>,
 }
 
 impl<'tcx> TypeBuilder<'tcx> {
-    pub fn new(tcx: mir_ty::TyCtxt<'tcx>, def_ids: DefIdCache<'tcx>, def_id: DefId) -> Self {
-        let generics = tcx.generics_of(def_id);
+    pub fn new(
+        tcx: mir_ty::TyCtxt<'tcx>,
+        def_ids: DefIdCache<'tcx>,
+        owner_fn_id: DefId,
+        type_params: Rc<RefCell<TypeParamMap<'tcx>>>,
+        closure_type_params: Rc<RefCell<HashMap<TypeParam, rty::FunctionType>>>,
+        system: Rc<RefCell<chc::System>>,
+    ) -> Self {
+        let generics = tcx.generics_of(owner_fn_id);
         let mut param_idx_mapping: HashMap<u32, rty::TypeParamIdx> = Default::default();
         for i in 0..generics.count() {
             let generic_param = generics.param_at(i, tcx);
@@ -93,21 +106,131 @@ impl<'tcx> TypeBuilder<'tcx> {
                 mir_ty::GenericParamDefKind::Const { .. } => {}
             }
         }
-        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, def_id);
+
+        tracing::debug!("TypeBuilder is created for {owner_fn_id:?} with param_idx_mapping {param_idx_mapping:#?}.");
+        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, owner_fn_id);
         Self {
             tcx,
             def_ids,
+            owner_fn_id,
             typing_env,
             param_idx_mapping,
+            type_params,
+            closure_type_params,
+            system,
         }
     }
 
-    fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
-        let index = *self
+    pub fn owner_fn_id(&self) -> DefId {
+        self.owner_fn_id
+    }
+
+    /// Returns the def_id of the declaration site of the given type parameter.
+    ///
+    /// For impl methods, an inherited parameter (e.g. the impl's `I`) reports
+    /// the def_id of the parameter declared on the impl block, so all uses
+    /// of that parameter across the impl's methods share a single cache key.
+    pub fn param_def_id(&self, ty: &mir_ty::ParamTy) -> DefId {
+        let generics = self.tcx.generics_of(self.owner_fn_id);
+        generics.param_at(ty.index as usize, self.tcx).def_id
+    }
+
+    /// Returns the local index of a type parameter within the declaring item,
+    /// skipping lifetime and const parameters. This is the position used for
+    /// monomorphization of generic arguments.
+    pub fn param_local_idx(&self, ty: &mir_ty::ParamTy) -> u32 {
+        let idx = self
             .param_idx_mapping
             .get(&ty.index)
             .expect("unknown type param idx");
-        rty::ParamType::new(index).into()
+        u32::from(*idx)
+    }
+
+    fn translate_param_type(&self, ty: &mir_ty::ParamTy) -> rty::Type<rty::Closed> {
+        // FIXME:
+        // `__ThrustSelf` is currently treated as a distinct `ParamTy` from `Self`,
+        // which can lead to cache/key mismatches (e.g. in `TypeParamMap`).
+        //
+        // We currently normalize it here as a workaround, but this should be done
+        // earlier during type translation/analysis so that all internal
+        // representations consistently use the canonical `Self` parameter.
+        if ty.name.as_str() == "__ThrustSelf" {
+            let parent_def_id = self.tcx.parent(self.owner_fn_id);
+            let self_ty_def = self
+                .tcx
+                .generics_of(parent_def_id)
+                .own_params
+                .iter()
+                .find(|ty| ty.name.as_str() == "Self")
+                .expect("Type parameter `Self` is not found.");
+
+            let self_ty = mir_ty::ParamTy::new(self_ty_def.index, self_ty_def.name);
+            tracing::debug!("replace {ty:?} with {self_ty:?}.");
+            return self.translate_param_type(&self_ty);
+        }
+        let param_local_idx = self.param_local_idx(ty);
+
+        let param_def_id = self.param_def_id(ty);
+        tracing::debug!("translating ParamTy {ty:?} (decl={param_def_id:?})...");
+
+        let mut type_params = self.type_params.borrow_mut();
+        let forall_sort_idx = type_params
+            .entry(TypeParam::GenericType {
+                param_def_id,
+                local_idx: param_local_idx,
+            })
+            .or_insert_with(|| {
+                let idx = self.system.borrow_mut().new_forall_sort();
+                tracing::debug!(
+                    "issue the new ForallSortIdx {} for ParamTy {:?} (decl={:?}).",
+                    idx,
+                    ty,
+                    param_def_id
+                );
+                idx
+            });
+        rty::ParamType::new(rty::TypeParamIdx::from(param_local_idx), *forall_sort_idx).into()
+    }
+
+    fn translate_alias_type(&self, ty: &mir_ty::AliasTy<'tcx>) -> rty::Type<rty::Closed> {
+        let projection = mir_ty::Ty::new_projection(self.tcx, ty.def_id, ty.args);
+        if let Ok(normalized) = self
+            .tcx
+            .try_normalize_erasing_regions(self.typing_env, projection)
+        {
+            if normalized != projection {
+                tracing::debug!(
+                    "alias projection {:#?} normalized to {:#?}",
+                    projection,
+                    normalized
+                );
+                return self.build(normalized);
+            }
+        }
+
+        let args: Vec<rty::Type<rty::Closed>> = ty.args.types().map(|t| self.build(t)).collect();
+        let mut type_params = self.type_params.borrow_mut();
+        tracing::debug!(?type_params);
+        let index = type_params
+            .entry(TypeParam::AssocType(ty.def_id, args.clone()))
+            .or_insert_with(|| {
+                let idx = self.system.borrow_mut().new_forall_sort();
+                tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?} with (def_id = {:?}, args = {:?}).", idx, ty, ty.def_id, args);
+                idx
+            });
+
+        rty::AliasType::new(*index, args).into()
+    }
+
+    pub(crate) fn register_closure_type_param(
+        &self,
+        type_param: TypeParam,
+        fun_type: rty::FunctionType,
+    ) {
+        tracing::info!(?type_param, ?fun_type, "register_closure_type_param");
+        self.closure_type_params
+            .borrow_mut()
+            .insert(type_param, fun_type);
     }
 
     /// Replaces {closure} types with thrust_models::Closure<{closure}>.
@@ -152,19 +275,36 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     fn resolve_model_ty(&self, orig_ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        tracing::debug!("attempting to resolve the type {:#?}.", orig_ty);
         let ty = self.replace_closure_model(orig_ty);
 
         let Some(model_ty_def_id) = self.def_ids.model_ty() else {
             return ty;
         };
         let args = self.tcx.mk_args(&[ty.into()]);
+        tracing::debug!("generic args are {:#?}.", args);
         let projection_ty = mir_ty::Ty::new_projection(self.tcx, model_ty_def_id, args);
         if let Ok(normalized_ty) = self
             .tcx
             .try_normalize_erasing_regions(self.typing_env, projection_ty)
         {
-            return normalized_ty;
+            tracing::debug!(
+                "the type {:#?} is normalized as the type {:#?}.",
+                orig_ty,
+                normalized_ty
+            );
+            let contains_model_ty_alias = normalized_ty.walk().any(|arg| {
+                if let mir_ty::GenericArgKind::Type(t) = arg.kind() {
+                    matches!(t.kind(), mir_ty::TyKind::Alias(_, alias_ty) if alias_ty.def_id == model_ty_def_id)
+                } else {
+                    false
+                }
+            });
+            if !contains_model_ty_alias {
+                return normalized_ty;
+            }
         }
+        tracing::debug!("the type {:#?} is replaced as the {:#?}.", orig_ty, ty);
         ty
     }
 
@@ -212,6 +352,10 @@ impl<'tcx> TypeBuilder<'tcx> {
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
             }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                rty::PointerType::mut_to(elem_ty).into()
+            }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
                 let elems = ts
@@ -237,6 +381,23 @@ impl<'tcx> TypeBuilder<'tcx> {
                 if let Some(model_ty) = self.model_adt(def, params) {
                     return model_ty;
                 }
+                // Treat Box and Vec as opaque types to avoid traversing internal structure
+                if Some(def.did()) == self.def_ids.box_() {
+                    let elem_ty = self.build(params.type_at(0));
+                    return rty::PointerType::own(elem_ty).into();
+                }
+                if Some(def.did()) == self.def_ids.vec() {
+                    let elem_ty = self.build(params.type_at(0));
+                    // Vec is represented as a tuple of (Array<Int, T>, Int) in the model
+                    let idx_ty = rty::Type::int();
+                    let array_ty = rty::ArrayType::new(idx_ty, elem_ty.clone());
+                    let len_ty = rty::Type::int();
+                    return rty::TupleType::new(vec![
+                        rty::PointerType::own(rty::Type::Array(array_ty)).into(),
+                        rty::PointerType::own(len_ty).into(),
+                    ])
+                    .into();
+                }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx, def.did());
                     let args: IndexVec<_, _> = params
@@ -257,6 +418,25 @@ impl<'tcx> TypeBuilder<'tcx> {
                 } else {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
+            }
+            mir_ty::TyKind::Alias(mir_ty::AliasTyKind::Projection, ty) => {
+                if let Some(model_ty_def_id) = self.def_ids.model_ty() {
+                    let arg_ty = ty.args.type_at(0);
+
+                    if ty.def_id == model_ty_def_id
+                        && (matches!(
+                            arg_ty.kind(),
+                            mir_ty::TyKind::Param(_) | mir_ty::TyKind::Alias(..)
+                        ))
+                    {
+                        tracing::debug!(
+                            "expanding projection to thrust_models::Model::Ty for {arg_ty:?}."
+                        );
+                        return self.build(arg_ty);
+                    }
+                }
+
+                self.translate_alias_type(ty)
             }
             kind => unimplemented!("unrefined_ty: {:?}", kind),
         }
@@ -324,6 +504,166 @@ impl<'tcx> TypeBuilder<'tcx> {
             ret_rty: None,
             abi,
         }
+    }
+
+    /// Extracts the parameter list for a `Fn` / `FnMut` / `FnOnce` trait predicate
+    /// whose `Self` type matches `param_ty`. Returns `None` otherwise.
+    ///
+    /// The first parameter is the closure value (wrapped in a `&` / `&mut` pointer
+    /// for `Fn` / `FnMut`, or owned for `FnOnce`), followed by the logical arguments
+    /// as a single tuple matching the call-site shape produced by
+    /// `<F as Fn<(A,)>>::call(...)`.
+    #[tracing::instrument(skip(self))]
+    fn closure_trait_args(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        pred: mir_ty::TraitPredicate<'tcx>,
+    ) -> Option<IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>> {
+        let trait_ref = pred.trait_ref;
+        if trait_ref.self_ty() != param_ty.to_ty(self.tcx) {
+            return None;
+        }
+        tracing::debug!(?trait_ref.args);
+
+        let receiver_type = self.build(trait_ref.args.type_at(0));
+
+        use mir_ty::ClosureKind::*;
+        let receiver_type = match self.tcx.fn_trait_kind_from_def_id(trait_ref.def_id)? {
+            Fn => rty::PointerType::immut_to(receiver_type).into(),
+            FnMut => rty::PointerType::mut_to(receiver_type).into(),
+            FnOnce => receiver_type,
+        };
+
+        let mir_ty::Tuple(other_params) = trait_ref.args.type_at(1).kind() else {
+            panic!("Closure should have at least one argument.")
+        };
+
+        let other_params = other_params.iter().map(|ty| self.build(ty).vacuous());
+        let params = std::iter::once(receiver_type.vacuous())
+            .chain(other_params)
+            .map(rty::RefinedType::unrefined)
+            .collect();
+
+        tracing::debug!("found the signature for closure trait: {params:#?}");
+        Some(params)
+    }
+
+    /// Extracts the return type refinement for `<F as FnOnce>::Output` projection
+    /// where `F = param_ty`. Returns `None` otherwise.
+    #[tracing::instrument(skip(self))]
+    fn closure_trait_ret(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        pred: mir_ty::ProjectionPredicate<'tcx>,
+    ) -> Option<rty::RefinedType<rty::FunctionParamIdx>> {
+        let projection = pred.projection_term;
+        if projection.def_id != self.tcx.lang_items().fn_once_output()?
+            || projection.args.type_at(0) != param_ty.to_ty(self.tcx)
+        {
+            return None;
+        }
+
+        let ret_ty = self.build(pred.term.expect_type()).vacuous();
+        tracing::debug!(?ret_ty);
+        Some(rty::RefinedType::unrefined(ret_ty))
+    }
+
+    /// Builds the [`rty::FunctionType`] for a type parameter `param_ty` declared
+    /// on the function identified by `local_def_id`, when `param_ty` is bounded
+    /// by `Fn` / `FnMut` / `FnOnce`.
+    ///
+    /// `generic_args` are the generic arguments of the enclosing function
+    /// (the function whose body is being type-checked). When the enclosing
+    /// function is itself generic, `predicates_of(local_def_id)` is the raw
+    /// predicate list which is then instantiated with `generic_args`. When
+    /// `generic_args` is empty, predicates are used un-instantiated.
+    ///
+    /// Returns `None` if `param_ty` has no `Fn` / `FnMut` / `FnOnce` trait bound.
+    /// As a side effect, the closure pre/post forall predicates are registered
+    /// with the [`chc::System`].
+    pub fn build_closure_type_for_param(
+        &self,
+        param_ty: mir_ty::ParamTy,
+        local_def_id: rustc_hir::def_id::LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Option<rty::FunctionType> {
+        let param_ty = if !generic_args.is_empty() {
+            mir_ty::EarlyBinder::bind(param_ty).instantiate(self.tcx, generic_args)
+        } else {
+            param_ty
+        };
+        let mut predicates = self
+            .tcx
+            .predicates_of(local_def_id.to_def_id())
+            .predicates
+            .iter()
+            .map(|(clause, _)| {
+                if !generic_args.is_empty() {
+                    mir_ty::EarlyBinder::bind(*clause).instantiate(self.tcx, generic_args)
+                } else {
+                    *clause
+                }
+            });
+
+        let mut params = predicates.clone().find_map(|clause| {
+            self.closure_trait_args(param_ty, clause.as_trait_clause()?.skip_binder())
+        })?;
+        let mut ret = predicates.find_map(|clause| {
+            self.closure_trait_ret(param_ty, clause.as_projection_clause()?.skip_binder())
+        })?;
+
+        let free = |idx| chc::Term::var(rty::RefinedTypeVar::Free(idx));
+        let value = chc::Term::var(rty::RefinedTypeVar::Value);
+
+        let args: Vec<_> = params
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| free(rty::FunctionParamIdx::from_usize(idx)))
+            .collect();
+
+        let type_params = vec![self.build(param_ty.to_ty(self.tcx)).to_sort()];
+        let mut params_sort: Vec<chc::Sort> = params.iter().map(|rty| rty.ty.to_sort()).collect();
+        let ret_sort = ret.ty.to_sort();
+
+        let pre_pred = refine::closure_pre_forall_pred(
+            self.tcx,
+            self.owner_fn_id,
+            type_params.clone(),
+            params_sort.clone(),
+        );
+        self.system
+            .borrow_mut()
+            .register_forall_pred(pre_pred.clone());
+        params_sort.push(ret_sort);
+        let post_pred =
+            refine::closure_post_forall_pred(self.tcx, self.owner_fn_id, type_params, params_sort);
+        self.system
+            .borrow_mut()
+            .register_forall_pred(post_pred.clone());
+
+        params
+            .iter_mut()
+            .last()
+            .expect("Closure should have at least one argument.")
+            .extend_refinement({
+                let (args_front, _args_last) = args.split_at(args.len() - 1);
+                chc::Atom::new(
+                    pre_pred.into(),
+                    [args_front, std::slice::from_ref(&value.clone())].concat(),
+                )
+                .into()
+            });
+
+        ret.extend_refinement(
+            chc::Atom::new(post_pred.into(), [args, vec![value.clone()]].concat()).into(),
+        );
+        let ret = Box::new(ret);
+
+        Some(rty::FunctionType {
+            params,
+            ret,
+            abi: rty::FunctionAbi::RustCall,
+        })
     }
 }
 
@@ -398,6 +738,10 @@ where
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
             }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                rty::PointerType::mut_to(elem_ty).into()
+            }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
                 let elems = ts
@@ -418,6 +762,23 @@ where
                 if let Some(model_ty) = self.model_adt(def, params) {
                     return model_ty;
                 }
+                // Treat Box and Vec as opaque types to avoid traversing internal structure
+                if Some(def.did()) == self.inner.def_ids.box_() {
+                    let elem_ty = self.build(params.type_at(0));
+                    return rty::PointerType::own(elem_ty).into();
+                }
+                if Some(def.did()) == self.inner.def_ids.vec() {
+                    let elem_ty = self.build(params.type_at(0));
+                    // Vec is represented as a tuple of (Array<Int, T>, Int) in the model
+                    let idx_ty = rty::Type::int();
+                    let array_ty = rty::ArrayType::new(idx_ty, elem_ty.clone());
+                    let len_ty = rty::Type::int();
+                    return rty::TupleType::new(vec![
+                        rty::PointerType::own(rty::Type::Array(array_ty)).into(),
+                        rty::PointerType::own(len_ty).into(),
+                    ])
+                    .into();
+                }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.inner.tcx, def.did());
                     let args: IndexVec<_, _> =
@@ -436,6 +797,25 @@ where
                 } else {
                     unimplemented!("unsupported ADT: {:?}", ty);
                 }
+            }
+            mir_ty::TyKind::Alias(mir_ty::AliasTyKind::Projection, ty) => {
+                if let Some(model_ty_def_id) = self.inner.def_ids.model_ty() {
+                    let arg_ty = ty.args.type_at(0);
+
+                    if ty.def_id == model_ty_def_id
+                        && (matches!(
+                            arg_ty.kind(),
+                            mir_ty::TyKind::Param(_) | mir_ty::TyKind::Alias(..)
+                        ))
+                    {
+                        tracing::debug!(
+                            "expanding projection to thrust_models::Model::Ty for {arg_ty:?}."
+                        );
+                        return self.build(arg_ty);
+                    }
+                }
+
+                self.inner.translate_alias_type(ty).vacuous()
             }
             kind => unimplemented!("ty: {:?}", kind),
         }
