@@ -479,6 +479,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::CopyForDeref(place) => self.env.place_type(self.elaborate_place(&place)),
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
@@ -649,6 +650,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!(),
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
+            }
+            Rvalue::Cast(
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::Unsize, _),
+                operand,
+                ty,
+            ) => {
+                // Only treat unsizing as identity when both sides resolve to the same model.
+                let mut op_pty = self.operand_type(operand);
+                let expected_ty = self.type_builder.build(ty).vacuous();
+                if op_pty.ty.to_sort() != expected_ty.to_sort() {
+                    unimplemented!("unsize cast: {:?} -> {:?}", op_pty.ty, expected_ty);
+                }
+                op_pty.ty = expected_ty;
+                op_pty
             }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
