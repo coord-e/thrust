@@ -368,6 +368,11 @@ mod thrust_models {
         type Ty = model::Seq<<T as Model>::Ty>;
     }
 
+    // NOTE: basic_block::Analyzer depends on the structure of array model
+    impl<T: Model, const N: usize> Model for [T; N] {
+        type Ty = model::Seq<<T as Model>::Ty>;
+    }
+
     impl<T> Model for Option<T> where T: Model {
         type Ty = Option<<T as Model>::Ty>;
     }
