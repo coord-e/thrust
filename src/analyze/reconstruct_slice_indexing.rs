@@ -269,7 +269,7 @@ fn reconstruct_access<'tcx>(
         result_local,
     );
     let receiver = receiver_operand(tcx, body, &bounds_check, &access, region);
-    remove_bounds_check_setup(body, &bounds_check);
+    remove_bounds_check_setup(body, &bounds_check, access.receiver.local);
 
     let (lang_item, method_name) = if access.mutable {
         (LangItem::IndexMut, sym::index_mut)
@@ -358,7 +358,11 @@ fn receiver_operand<'tcx>(
 }
 
 /// Removes the MIR temporaries that only supported the now-replaced bounds check.
-fn remove_bounds_check_setup<'tcx>(body: &mut Body<'tcx>, bounds_check: &BoundsCheck<'tcx>) {
+fn remove_bounds_check_setup<'tcx>(
+    body: &mut Body<'tcx>,
+    bounds_check: &BoundsCheck<'tcx>,
+    receiver_local: Local,
+) {
     let mut lowered_locals: Vec<_> = bounds_check.condition_local.into_iter().collect();
     if let Some(len_place) = bounds_check
         .len
@@ -373,7 +377,13 @@ fn remove_bounds_check_setup<'tcx>(body: &mut Body<'tcx>, bounds_check: &BoundsC
                 continue;
             };
             if lhs.local == len_place.local {
-                if let Some(raw_place) = operand.place().filter(|place| place.projection.is_empty())
+                // Only include the PtrMetadata operand if it is a distinct temporary — i.e.
+                // not the receiver that the reconstructed Index::index call will use.
+                // When PtrMetadata is applied directly to the slice reference (the receiver),
+                // that local must not be NOP'd: its assignment may be in this same block.
+                if let Some(raw_place) = operand
+                    .place()
+                    .filter(|place| place.projection.is_empty() && place.local != receiver_local)
                 {
                     lowered_locals.push(raw_place.local);
                 }

@@ -454,7 +454,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .unwrap();
                 self.const_value_ty(&val, ty)
             }
-            _ => unimplemented!("const: {:?}", const_),
+            mir::Const::Ty(ty, _) => {
+                let scalar_int = const_
+                    .try_to_scalar_int()
+                    .expect("type-level const must be a primitive scalar");
+                let val = mir::ConstValue::Scalar(mir::interpret::Scalar::Int(scalar_int));
+                self.const_value_ty(&val, ty)
+            }
         }
     }
 
@@ -473,6 +479,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::CopyForDeref(place) => self.env.place_type(self.elaborate_place(&place)),
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
@@ -535,15 +542,41 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 builder.build(rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
             }
             Rvalue::Aggregate(kind, fields) => {
-                // elaboration: all fields are boxed
-                let field_tys: Vec<_> = fields
-                    .into_iter()
-                    .map(|operand| self.operand_type(operand).boxed())
-                    .collect();
                 match *kind {
+                    mir::AggregateKind::Array(mir_elem_ty) => {
+                        // Build Seq<T> = (Box<Array<Int,T>>, Box<Int>) from array literal elements,
+                        // pinning each element at its index via store folds.
+                        //
+                        // TODO: Stop embedding knowledge of `<[T; N] as Model>::Ty` in the analyzer
+                        let mut builder = PlaceTypeBuilder::default();
+                        let elem_ty = self.type_builder.build(mir_elem_ty).vacuous();
+                        let mut arr_term =
+                            chc::Term::array_empty(chc::Sort::int(), elem_ty.to_sort());
+                        for (i, field) in fields.iter().enumerate() {
+                            let pty = self.operand_type(field.clone());
+                            let (_, elem_term) = builder.subsume(pty);
+                            arr_term = arr_term.store(chc::Term::int(i as i64), elem_term);
+                        }
+                        let arr_pty = builder.build(
+                            rty::ArrayType::new(rty::Type::int(), elem_ty).into(),
+                            arr_term,
+                        );
+                        let size = fields.len();
+                        let size_pty = PlaceType::with_ty_and_term(
+                            rty::Type::int(),
+                            chc::Term::int(size as i64),
+                        );
+                        PlaceType::tuple(vec![arr_pty.boxed(), size_pty.boxed()])
+                    }
                     mir::AggregateKind::Adt(did, variant_idx, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
                     {
+                        // elaboration: all fields are boxed
+                        let field_tys: Vec<_> = fields
+                            .into_iter()
+                            .map(|operand| self.operand_type(operand).boxed())
+                            .collect();
+
                         let enum_def = self.ctx.get_or_register_enum_def(did);
                         let variant_def = &enum_def.variants[variant_idx];
                         let variant_rtys = variant_def
@@ -591,7 +624,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             ),
                         )
                     }
-                    _ => PlaceType::tuple(field_tys),
+                    mir::AggregateKind::Adt { .. }
+                    | mir::AggregateKind::Tuple
+                    | mir::AggregateKind::Closure { .. } => {
+                        // elaboration: all fields are boxed
+                        let field_tys: Vec<_> = fields
+                            .into_iter()
+                            .map(|operand| self.operand_type(operand).boxed())
+                            .collect();
+                        PlaceType::tuple(field_tys)
+                    }
+                    _ => unimplemented!("aggregate kind: {:?}", kind),
                 }
             }
             Rvalue::Cast(
@@ -607,6 +650,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!(),
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
+            }
+            Rvalue::Cast(
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::Unsize, _),
+                operand,
+                ty,
+            ) => {
+                // Only treat unsizing as identity when both sides resolve to the same model.
+                let mut op_pty = self.operand_type(operand);
+                let expected_ty = self.type_builder.build(ty).vacuous();
+                if op_pty.ty.to_sort() != expected_ty.to_sort() {
+                    unimplemented!("unsize cast: {:?} -> {:?}", op_pty.ty, expected_ty);
+                }
+                op_pty.ty = expected_ty;
+                op_pty
             }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
