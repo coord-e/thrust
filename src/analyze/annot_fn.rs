@@ -621,6 +621,22 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 let terms = exprs.iter().map(|e| self.to_term(e)).collect();
                 FormulaOrTerm::Term(chc::Term::tuple(terms))
             }
+            ExprKind::Struct(_qpath, fields, _tail) => {
+                let adt = self
+                    .expr_ty(hir)
+                    .ty_adt_def()
+                    .expect("struct literal on a non-ADT type");
+                let mut terms = Vec::new();
+                let variant = adt.non_enum_variant();
+                for variant_field in &variant.fields {
+                    let field = fields
+                        .iter()
+                        .find(|f| f.ident.name == variant_field.name)
+                        .unwrap();
+                    terms.push(self.to_term(field.expr));
+                }
+                FormulaOrTerm::Term(chc::Term::tuple(terms))
+            }
             ExprKind::Field(expr, field) => {
                 // Tuples use numeric field names (`.0`); structs (represented as
                 // tuples in the logic) use named fields resolved to their position.
