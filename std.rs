@@ -972,6 +972,40 @@ fn _extern_spec_slice_last_mut<T>(slice: &mut [T]) -> Option<&mut T>
     <[T]>::last_mut(slice)
 }
 
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    ((*slice).length > 0
+        && result == Some((
+            &(*slice).array[(*slice).offset],
+            &(*slice).subsequence(1, (*slice).length),
+        ))
+    )
+    || ((*slice).length == 0 && result == None)
+)]
+fn _extern_spec_slice_split_first<T>(slice: &[T]) -> Option<(&T, &[T])>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::split_first(slice)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    ((*slice).length > 0
+        && result == Some((
+            &(*slice).array[(*slice).offset + (*slice).length - 1],
+            &(*slice).subsequence(0, (*slice).length - 1),
+        ))
+    )
+    || ((*slice).length == 0 && result == None)
+)]
+fn _extern_spec_slice_split_last<T>(slice: &[T]) -> Option<(&T, &[T])>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::split_last(slice)
+}
+
 // TODO: The following specs for Index/IndexMut methods are too specific; we should write specs for
 //       a generic index (I: SliceIndex) that isn't specific to usize, maybe once #83 is implemented.
 
