@@ -714,17 +714,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();
                         let t = self.to_term(receiver);
                         let other = self.to_term(&args[0]);
-                        let a_arr = t.clone().tuple_proj(0);
-                        let a_len = t.tuple_proj(1);
-                        let b_arr = other.clone().tuple_proj(0);
-                        let b_len = other.tuple_proj(1);
-                        let new_arr = chc::Term::array_concat(
-                            elem_sort,
-                            a_arr,
-                            a_len.clone(),
-                            b_arr,
-                            b_len.clone(),
-                        );
+                        let a_len = t.clone().tuple_proj(1);
+                        let b_len = other.clone().tuple_proj(1);
+                        let new_arr = chc::Term::seq_concat(elem_sort, t, other);
                         let new_len = a_len.add(b_len);
                         return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
                     }
