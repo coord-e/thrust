@@ -802,6 +802,33 @@ fn _extern_spec_vec_truncate<T>(vec: &mut Vec<T>, len: usize) where T: thrust_mo
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
+#[thrust_macros::ensures(*result == *vec)]
+fn _extern_spec_vec_as_slice<T>(vec: &Vec<T>) -> &[T]
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    Vec::as_slice(vec)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(*result == *vec)]
+fn _extern_spec_vec_deref<T>(vec: &Vec<T>) -> &[T]
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <Vec<T> as std::ops::Deref>::deref(vec)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(*result == *vec)]
+fn _extern_spec_vec_as_ref<T>(vec: &Vec<T>) -> &[T]
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <Vec<T> as AsRef<[T]>>::as_ref(vec)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
 #[thrust_macros::ensures(result == slice.1)]
 fn _extern_spec_slice_len<T>(slice: &[T]) -> usize
     where T: thrust_models::Model, T::Ty: PartialEq
