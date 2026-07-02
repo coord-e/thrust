@@ -1011,7 +1011,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .fn_sig(formula_def_id.to_def_id())
             .instantiate(self.tcx, generic_args);
 
-        let mut mapping: Vec<rty::FunctionParamIdx> = Vec::with_capacity(idents.len());
+        // Each invariant parameter `i` is substituted by a term over `bty`'s parameters. A
+        // `FnParam<T>` parameter denotes the argument's value at function entry (`OuterFnParam`);
+        // its current local at the loop header (`at_here()`) is a *separate* basic-block parameter.
+        // To expose both from a single invariant parameter without conflating them, variable `i`
+        // carries the entry value and variable `params.len() + i` carries the "here" value (see
+        // `AnnotFnTranslator::fn_param_at_here_term`). Ordinary parameters map to their loop-header
+        // local and have no distinct "here" value.
+        let free = |idx| chc::Term::var(rty::RefinedTypeVar::Free(idx));
+        let mut entry_mapping: Vec<chc::Term<rty::RefinedTypeVar<rty::FunctionParamIdx>>> =
+            Vec::with_capacity(idents.len());
+        let mut here_mapping: Vec<chc::Term<rty::RefinedTypeVar<rty::FunctionParamIdx>>> =
+            Vec::with_capacity(idents.len());
         for (ident_opt, input_ty) in idents.iter().zip(sig.skip_binder().inputs()) {
             let name = ident_opt.expect("invariant parameters must be named").name;
             let input_ty = {
@@ -1040,21 +1051,44 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     ))
                 });
                 let param_idx = crate::analyze::function_param_of_local(local);
-                mapping.push(bty.param_of_outer_fn_param(param_idx).unwrap());
+                let at_entry = free(bty.param_of_outer_fn_param(param_idx).unwrap());
+                // `at_here()` is the argument's current local at the loop header. It may have been
+                // moved or dropped (not live), in which case there is no distinct "here" value and
+                // we fall back to the entry value.
+                let at_here = bty
+                    .param_of_local(local)
+                    .map(free)
+                    .unwrap_or_else(|| at_entry.clone());
+                entry_mapping.push(at_entry);
+                here_mapping.push(at_here);
             } else {
+                // Referring to a function argument's local without `FnParam` is ambiguous about
+                // which view (entry vs. current) is meant, so it is rejected. The receiver `self`
+                // is exempt: it is loop-carried and always denotes its current value.
+                if name.as_str() != "self" && self.function_param_local_of_name(name).is_some() {
+                    self.tcx.dcx().fatal(format!(
+                        "loop invariant refers to function parameter `{name}` directly; \
+                         use `{name}: FnParam<..>` with `.at_entry()`/`.at_here()` to choose \
+                         between its value at function entry and its current value"
+                    ))
+                }
                 let local = self.local_of_name_in_bb(name, bty).unwrap_or_else(|| {
                     self.tcx.dcx().fatal(format!(
                         "loop invariant refers to `{name}`, which is not a live variable at the loop header"
                     ))
                 });
-                mapping.push(bty.param_of_local(local).unwrap());
+                let term = free(bty.param_of_local(local).unwrap());
+                // Ordinary parameters have no separate "here" value; the slot is never referenced.
+                entry_mapping.push(term.clone());
+                here_mapping.push(term);
             }
         }
 
+        let mapping: Vec<_> = entry_mapping.into_iter().chain(here_mapping).collect();
         formula_fn
             .formula()
             .clone()
-            .subst_var(|idx| chc::Term::var(rty::RefinedTypeVar::Free(mapping[idx.index()])))
+            .subst_var(|idx| mapping[idx.index()].clone())
             .into()
     }
 

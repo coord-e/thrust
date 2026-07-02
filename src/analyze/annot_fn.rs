@@ -264,6 +264,43 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .is_some_and(|def| Some(def.did()) == self.def_ids.fn_param_wrapper())
     }
 
+    /// A `FnParam<T>` invariant parameter denotes the function argument's value at function entry
+    /// (`OuterFnParam`); `at_entry()` is therefore the identity on the parameter.
+    fn fn_param_at_entry_term(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        self.to_term(receiver)
+    }
+
+    /// `at_here()` denotes the argument's *current* local at the loop header, which is a distinct
+    /// basic-block parameter from the entry value. The two are wired to separate parameters in
+    /// [`crate::analyze::local_def::Analyzer::build_invariant_precondition`]: each invariant
+    /// parameter `i` has its entry value at variable `i` and its "here" value at variable
+    /// `params.len() + i`.
+    fn fn_param_at_here_term(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        let chc::Term::Var(idx) = self.to_term(receiver) else {
+            panic!("FnParam::at_here receiver must be a function-parameter binding");
+        };
+        chc::Term::var(rty::FunctionParamIdx::from(
+            self.body.params.len() + idx.index(),
+        ))
+    }
+
+    fn fn_param_is_not_changed(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> FormulaOrTerm<rty::FunctionParamIdx> {
+        FormulaOrTerm::BinOp(
+            self.fn_param_at_entry_term(receiver),
+            AmbiguousBinOp::Eq,
+            self.fn_param_at_here_term(receiver),
+        )
+    }
+
     fn build_env_from_pat(
         &mut self,
         param: chc::Term<rty::FunctionParamIdx>,
@@ -691,8 +728,21 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             args.is_empty(),
                             "FnParam::at_entry does not take any arguments"
                         );
-                        let t = self.to_term(receiver);
-                        return FormulaOrTerm::Term(t);
+                        return FormulaOrTerm::Term(self.fn_param_at_entry_term(receiver));
+                    }
+                    if Some(def_id) == self.def_ids.fn_param_at_here() {
+                        assert!(
+                            args.is_empty(),
+                            "FnParam::at_here does not take any arguments"
+                        );
+                        return FormulaOrTerm::Term(self.fn_param_at_here_term(receiver));
+                    }
+                    if Some(def_id) == self.def_ids.fn_param_is_not_changed() {
+                        assert!(
+                            args.is_empty(),
+                            "FnParam::is_not_changed does not take any arguments"
+                        );
+                        return self.fn_param_is_not_changed(receiver);
                     }
                     if Some(def_id) == self.def_ids.seq_len() {
                         assert!(args.is_empty(), "Seq::len does not take any arguments");
@@ -773,8 +823,19 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         }
                         if Some(def_id) == self.def_ids.fn_param_at_entry() {
                             assert_eq!(args.len(), 1, "FnParam::at_entry takes exactly 1 argument");
-                            let t = self.to_term(&args[0]);
-                            return FormulaOrTerm::Term(t);
+                            return FormulaOrTerm::Term(self.fn_param_at_entry_term(&args[0]));
+                        }
+                        if Some(def_id) == self.def_ids.fn_param_at_here() {
+                            assert_eq!(args.len(), 1, "FnParam::at_here takes exactly 1 argument");
+                            return FormulaOrTerm::Term(self.fn_param_at_here_term(&args[0]));
+                        }
+                        if Some(def_id) == self.def_ids.fn_param_is_not_changed() {
+                            assert_eq!(
+                                args.len(),
+                                1,
+                                "FnParam::is_not_changed takes exactly 1 argument"
+                            );
+                            return self.fn_param_is_not_changed(&args[0]);
                         }
                         if Some(def_id) == self.def_ids.implies() {
                             let [lhs, rhs] = args else {
