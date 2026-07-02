@@ -188,7 +188,10 @@ mod thrust_models {
         }
 
         #[thrust::def::seq_model]
-        pub struct Seq<T: ?Sized>(pub Array<Int, T>, pub Int);
+        pub struct Seq<T: ?Sized> {
+            pub array: Array<Int, T>,
+            pub length: Int,
+        }
 
         impl<T, U> PartialEq<U> for Seq<T> where U: super::Model<Ty = Self> {
             #[thrust::ignored]
@@ -716,14 +719,14 @@ fn _extern_spec_i32_is_negative(x: i32) -> bool {
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result.1 == 0)]
+#[thrust_macros::ensures(result.length == 0)]
 fn _extern_spec_vec_new<T>() -> Vec<T> where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::<T>::new()
 }
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(!vec == thrust_models::model::Seq((*vec).0.store((*vec).1, elem), (*vec).1 + 1))]
+#[thrust_macros::ensures(!vec == thrust_models::model::Seq { array: (*vec).array.store((*vec).length, elem), length: (*vec).length + 1 })]
 fn _extern_spec_vec_push<T>(vec: &mut Vec<T>, elem: T)
     where T: thrust_models::Model, T::Ty: PartialEq
 {
@@ -732,24 +735,24 @@ fn _extern_spec_vec_push<T>(vec: &mut Vec<T>, elem: T)
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result == vec.1)]
+#[thrust_macros::ensures(result == (*vec).length)]
 fn _extern_spec_vec_len<T>(vec: &Vec<T>) -> usize where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::len(vec)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust_macros::requires(index < vec.1)]
-#[thrust_macros::ensures(*result == vec.0[index])]
+#[thrust_macros::requires(index < (*vec).length)]
+#[thrust_macros::ensures(*result == (*vec).array[index])]
 fn _extern_spec_vec_index<T>(vec: &Vec<T>, index: usize) -> &T where T: thrust_models::Model, T::Ty: PartialEq {
     <Vec<T> as std::ops::Index<usize>>::index(vec, index)
 }
 
 #[thrust::extern_spec_fn]
-#[thrust_macros::requires(index < (*vec).1)]
+#[thrust_macros::requires(index < (*vec).length)]
 #[thrust_macros::ensures(
-    *result == (*vec).0[index] &&
-    !result == (!vec).0[index] &&
-    !vec == thrust_models::model::Seq((*vec).0.store(index, !result), (*vec).1)
+    *result == (*vec).array[index] &&
+    !result == (!vec).array[index] &&
+    !vec == thrust_models::model::Seq { array: (*vec).array.store(index, !result), length: (*vec).length }
 )]
 fn _extern_spec_vec_index_mut<T>(vec: &mut Vec<T>, index: usize) -> &mut T
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -759,7 +762,7 @@ fn _extern_spec_vec_index_mut<T>(vec: &mut Vec<T>, index: usize) -> &mut T
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures((!vec).1 == 0)]
+#[thrust_macros::ensures((!vec).length == 0)]
 fn _extern_spec_vec_clear<T>(vec: &mut Vec<T>) where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::clear(vec)
 }
@@ -767,14 +770,14 @@ fn _extern_spec_vec_clear<T>(vec: &mut Vec<T>) where T: thrust_models::Model, T:
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    (!vec).0 == (*vec).0 && (
+    (!vec).array == (*vec).array && (
         (
-            (*vec).1 > 0 &&
-            (!vec).1 == (*vec).1 - 1 &&
-            result == Some((*vec).0[(*vec).1 - 1])
+            (*vec).length > 0 &&
+            (!vec).length == (*vec).length - 1 &&
+            result == Some((*vec).array[(*vec).length - 1])
         ) || (
-            (*vec).1 == 0 &&
-            (!vec).1 == 0 &&
+            (*vec).length == 0 &&
+            (!vec).length == 0 &&
             result == None
         )
     )
@@ -785,7 +788,7 @@ fn _extern_spec_vec_pop<T>(vec: &mut Vec<T>) -> Option<T> where T: thrust_models
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result == ((*vec).1 == 0))]
+#[thrust_macros::ensures(result == ((*vec).length == 0))]
 fn _extern_spec_vec_is_empty<T>(vec: &Vec<T>) -> bool where T: thrust_models::Model, T::Ty: PartialEq {
     Vec::is_empty(vec)
 }
@@ -794,10 +797,10 @@ fn _extern_spec_vec_is_empty<T>(vec: &Vec<T>) -> bool where T: thrust_models::Mo
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
     (
-        (*vec).1 > len &&
-        !vec == thrust_models::model::Seq((*vec).0, len)
+        (*vec).length > len &&
+        !vec == thrust_models::model::Seq { array: (*vec).array, length: len }
     ) || (
-        (*vec).1 <= len &&
+        (*vec).length <= len &&
         !vec == *vec
     )
 )]
@@ -834,7 +837,7 @@ fn _extern_spec_vec_as_ref<T>(vec: &Vec<T>) -> &[T]
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result == slice.1)]
+#[thrust_macros::ensures(result == (*slice).length)]
 fn _extern_spec_slice_len<T>(slice: &[T]) -> usize
     where T: thrust_models::Model, T::Ty: PartialEq
 {
@@ -843,7 +846,7 @@ fn _extern_spec_slice_len<T>(slice: &[T]) -> usize
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result == (slice.1 == 0))]
+#[thrust_macros::ensures(result == ((*slice).length == 0))]
 fn _extern_spec_slice_is_empty<T>(slice: &[T]) -> bool
     where T: thrust_models::Model, T::Ty: PartialEq
 {
@@ -853,8 +856,8 @@ fn _extern_spec_slice_is_empty<T>(slice: &[T]) -> bool
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    (index < slice.1 && result == Some(&slice.0[index]))
-    || (slice.1 <= index && result == None)
+    (index < (*slice).length && result == Some(&(*slice).array[index]))
+    || ((*slice).length <= index && result == None)
 )]
 fn _extern_spec_slice_get<T>(slice: &[T], index: usize) -> Option<&T>
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -865,17 +868,17 @@ fn _extern_spec_slice_get<T>(slice: &[T], index: usize) -> Option<&T>
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    (index < (*slice).1
+    (index < (*slice).length
         && result == Some(thrust_models::model::Mut::new(
-            (*slice).0[index],
-            (!slice).0[index],
+            (*slice).array[index],
+            (!slice).array[index],
         ))
-        && !slice == thrust_models::model::Seq(
-            (*slice).0.store(index, (!slice).0[index]),
-            (*slice).1,
-        )
+        && !slice == thrust_models::model::Seq {
+            array: (*slice).array.store(index, (!slice).array[index]),
+            length: (*slice).length,
+        }
     )
-    || ((*slice).1 <= index && result == None && !slice == *slice)
+    || ((*slice).length <= index && result == None && !slice == *slice)
 )]
 fn _extern_spec_slice_get_mut<T>(slice: &mut [T], index: usize) -> Option<&mut T>
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -886,8 +889,8 @@ fn _extern_spec_slice_get_mut<T>(slice: &mut [T], index: usize) -> Option<&mut T
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    (slice.1 > 0 && result == Some(&slice.0[0]))
-    || (slice.1 == 0 && result == None)
+    ((*slice).length > 0 && result == Some(&(*slice).array[0]))
+    || ((*slice).length == 0 && result == None)
 )]
 fn _extern_spec_slice_first<T>(slice: &[T]) -> Option<&T>
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -898,17 +901,17 @@ fn _extern_spec_slice_first<T>(slice: &[T]) -> Option<&T>
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    ((*slice).1 > 0
+    ((*slice).length > 0
         && result == Some(thrust_models::model::Mut::new(
-            (*slice).0[0],
-            (!slice).0[0],
+            (*slice).array[0],
+            (!slice).array[0],
         ))
-        && !slice == thrust_models::model::Seq(
-            (*slice).0.store(0, (!slice).0[0]),
-            (*slice).1,
-        )
+        && !slice == thrust_models::model::Seq {
+            array: (*slice).array.store(0, (!slice).array[0]),
+            length: (*slice).length,
+        }
     )
-    || ((*slice).1 == 0 && result == None && !slice == *slice)
+    || ((*slice).length == 0 && result == None && !slice == *slice)
 )]
 fn _extern_spec_slice_first_mut<T>(slice: &mut [T]) -> Option<&mut T>
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -919,8 +922,8 @@ fn _extern_spec_slice_first_mut<T>(slice: &mut [T]) -> Option<&mut T>
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    (slice.1 > 0 && result == Some(&slice.0[slice.1 - 1]))
-    || (slice.1 == 0 && result == None)
+    ((*slice).length > 0 && result == Some(&(*slice).array[(*slice).length - 1]))
+    || ((*slice).length == 0 && result == None)
 )]
 fn _extern_spec_slice_last<T>(slice: &[T]) -> Option<&T>
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -931,20 +934,20 @@ fn _extern_spec_slice_last<T>(slice: &[T]) -> Option<&T>
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    ((*slice).1 > 0
+    ((*slice).length > 0
         && result == Some(thrust_models::model::Mut::new(
-            (*slice).0[(*slice).1 - 1],
-            (!slice).0[(*slice).1 - 1],
+            (*slice).array[(*slice).length - 1],
+            (!slice).array[(*slice).length - 1],
         ))
-        && !slice == thrust_models::model::Seq(
-            (*slice).0.store(
-                (*slice).1 - 1,
-                (!slice).0[(*slice).1 - 1],
+        && !slice == thrust_models::model::Seq {
+            array: (*slice).array.store(
+                (*slice).length - 1,
+                (!slice).array[(*slice).length - 1],
             ),
-            (*slice).1,
-        )
+            length: (*slice).length,
+        }
     )
-    || ((*slice).1 == 0 && result == None && !slice == *slice)
+    || ((*slice).length == 0 && result == None && !slice == *slice)
 )]
 fn _extern_spec_slice_last_mut<T>(slice: &mut [T]) -> Option<&mut T>
     where T: thrust_models::Model, T::Ty: PartialEq
@@ -956,8 +959,8 @@ fn _extern_spec_slice_last_mut<T>(slice: &mut [T]) -> Option<&mut T>
 //       a generic index (I: SliceIndex) that isn't specific to usize, maybe once #83 is implemented.
 
 #[thrust::extern_spec_fn]
-#[thrust_macros::requires(index < slice.1)]
-#[thrust_macros::ensures(*result == slice.0[index])]
+#[thrust_macros::requires(index < (*slice).length)]
+#[thrust_macros::ensures(*result == (*slice).array[index])]
 fn _extern_spec_slice_index<T>(slice: &[T], index: usize) -> &T
     where T: thrust_models::Model, T::Ty: PartialEq
 {
@@ -965,14 +968,14 @@ fn _extern_spec_slice_index<T>(slice: &[T], index: usize) -> &T
 }
 
 #[thrust::extern_spec_fn]
-#[thrust_macros::requires(index < (*slice).1)]
+#[thrust_macros::requires(index < (*slice).length)]
 #[thrust_macros::ensures(
-    *result == (*slice).0[index] &&
-    !result == (!slice).0[index] &&
-    !slice == thrust_models::model::Seq(
-        (*slice).0.store(index, !result),
-        (*slice).1,
-    )
+    *result == (*slice).array[index] &&
+    !result == (!slice).array[index] &&
+    !slice == thrust_models::model::Seq {
+        array: (*slice).array.store(index, !result),
+        length: (*slice).length,
+    }
 )]
 fn _extern_spec_slice_index_mut<T>(slice: &mut [T], index: usize) -> &mut T
     where T: thrust_models::Model, T::Ty: PartialEq
