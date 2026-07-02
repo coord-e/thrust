@@ -715,6 +715,21 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             new_arr, offset, new_len,
                         ]));
                     }
+                    if Some(def_id) == self.def_ids.seq_subsequence() {
+                        assert_eq!(args.len(), 2, "Seq::subsequence takes exactly 2 arguments");
+                        let t = self.to_term(receiver);
+                        let start = self.to_term(&args[0]);
+                        let end = self.to_term(&args[1]);
+                        let arr = t.clone().tuple_proj(0);
+                        let offset = t.tuple_proj(1);
+                        // A subsequence shares the underlying array, advances the offset by
+                        // `start`, and sets the length to `end - start`.
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![
+                            arr,
+                            offset.add(start.clone()),
+                            end.sub(start),
+                        ]));
+                    }
                     if Some(def_id) == self.def_ids.seq_concat() {
                         assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
                         let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();
