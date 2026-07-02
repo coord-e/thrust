@@ -614,9 +614,34 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R>
 where
     R: TemplateRegistry,
 {
+    fn unsigned_type_invariant<V>(
+        mir_ty: mir_ty::Ty<'tcx>,
+        value: chc::Term<rty::RefinedTypeVar<V>>,
+    ) -> Option<rty::Refinement<V>> {
+        matches!(mir_ty.kind(), mir_ty::TyKind::Uint(_)).then(|| {
+            chc::Atom::new(
+                chc::KnownPred::GREATER_THAN_OR_EQUAL.into(),
+                vec![value, chc::Term::int(0)],
+            )
+            .into()
+        })
+    }
+
+    fn add_type_invariant(
+        mir_ty: mir_ty::Ty<'tcx>,
+        rty: &mut rty::RefinedType<rty::FunctionParamIdx>,
+    ) {
+        if let Some(invariant) =
+            Self::unsigned_type_invariant(mir_ty, chc::Term::var(rty::RefinedTypeVar::Value))
+        {
+            rty.refinement.push_conj(invariant);
+        }
+    }
+
     pub fn build(&mut self) -> rty::FunctionType {
         let mut builder = rty::TemplateBuilder::default();
         let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
+        let mut param_type_invariants = rty::Refinement::top();
         for (idx, param_ty) in self.param_tys.iter().enumerate() {
             let param_rty = self
                 .param_rtys
@@ -644,6 +669,13 @@ where
                         )
                     }
                 });
+            let mut value = chc::Term::var(rty::RefinedTypeVar::Free(idx.into()));
+            if param_ty.mutbl.is_mut() {
+                value = value.box_current();
+            }
+            if let Some(invariant) = Self::unsigned_type_invariant(param_ty.ty, value) {
+                param_type_invariants.push_conj(invariant);
+            }
             let param_rty = if param_ty.mutbl.is_mut() {
                 // elaboration: treat mutabully declared variables as own
                 param_rty.boxed()
@@ -669,12 +701,25 @@ where
             param_rtys.push(param_rty);
         }
 
-        let ret_rty = self.ret_rty.clone().unwrap_or_else(|| {
+        let last_param_idx = param_rtys.last_index().unwrap();
+        let type_invariants = param_type_invariants.map_var(|v| match v {
+            rty::RefinedTypeVar::Free(idx) if idx == last_param_idx => rty::RefinedTypeVar::Value,
+            v => v,
+        });
+        param_rtys
+            .raw
+            .last_mut()
+            .unwrap()
+            .refinement
+            .push_conj(type_invariants);
+
+        let mut ret_rty = self.ret_rty.clone().unwrap_or_else(|| {
             self.inner
                 .for_template(self.registry)
                 .with_scope(&builder)
                 .build_refined(self.ret_ty)
         });
+        Self::add_type_invariant(self.ret_ty, &mut ret_rty);
         rty::FunctionType::new(param_rtys, ret_rty).with_abi(self.abi)
     }
 }
