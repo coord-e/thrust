@@ -322,6 +322,7 @@ impl<'tcx> TypeBuilder<'tcx> {
             param_rtys: Default::default(),
             param_refinement: None,
             ret_rty: None,
+            aggregate_param_type_invariants: false,
             abi,
         }
     }
@@ -484,6 +485,7 @@ where
             ret_rty: Some(rty::RefinedType::unrefined(
                 self.inner.build(ret_ty).vacuous(),
             )),
+            aggregate_param_type_invariants: true,
             abi: Default::default(),
         }
         .build();
@@ -521,6 +523,7 @@ pub struct FunctionTemplateTypeBuilder<'tcx, 'a, R> {
     param_refinement: Option<rty::Refinement<rty::FunctionParamIdx>>,
     param_rtys: HashMap<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
     ret_rty: Option<rty::RefinedType<rty::FunctionParamIdx>>,
+    aggregate_param_type_invariants: bool,
     abi: rty::FunctionAbi,
 }
 
@@ -614,9 +617,27 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R>
 where
     R: TemplateRegistry,
 {
+    fn add_type_invariant(
+        mir_ty: mir_ty::Ty<'tcx>,
+        rty: &mut rty::RefinedType<rty::FunctionParamIdx>,
+    ) {
+        if matches!(mir_ty.kind(), mir_ty::TyKind::Uint(_)) {
+            let nonnegative = chc::Atom::new(
+                chc::KnownPred::GREATER_THAN_OR_EQUAL.into(),
+                vec![
+                    chc::Term::var(rty::RefinedTypeVar::Value),
+                    chc::Term::int(0),
+                ],
+            )
+            .into();
+            rty.refinement.push_conj(nonnegative);
+        }
+    }
+
     pub fn build(&mut self) -> rty::FunctionType {
         let mut builder = rty::TemplateBuilder::default();
         let mut param_rtys = IndexVec::<rty::FunctionParamIdx, _>::new();
+        let mut param_type_invariants = rty::Refinement::top();
         for (idx, param_ty) in self.param_tys.iter().enumerate() {
             let param_rty = self
                 .param_rtys
@@ -644,6 +665,23 @@ where
                         )
                     }
                 });
+            let mut param_rty = param_rty;
+            if self.aggregate_param_type_invariants {
+                if matches!(param_ty.ty.kind(), mir_ty::TyKind::Uint(_)) {
+                    let mut value = chc::Term::var(rty::RefinedTypeVar::Free(idx.into()));
+                    if param_ty.mutbl.is_mut() {
+                        value = value.box_current();
+                    }
+                    let nonnegative = chc::Atom::new(
+                        chc::KnownPred::GREATER_THAN_OR_EQUAL.into(),
+                        vec![value, chc::Term::int(0)],
+                    )
+                    .into();
+                    param_type_invariants.push_conj(nonnegative);
+                }
+            } else {
+                Self::add_type_invariant(param_ty.ty, &mut param_rty);
+            }
             let param_rty = if param_ty.mutbl.is_mut() {
                 // elaboration: treat mutabully declared variables as own
                 param_rty.boxed()
@@ -669,12 +707,29 @@ where
             param_rtys.push(param_rty);
         }
 
-        let ret_rty = self.ret_rty.clone().unwrap_or_else(|| {
+        if self.aggregate_param_type_invariants {
+            let last_param_idx = param_rtys.last_index().unwrap();
+            let type_invariants = param_type_invariants.map_var(|v| match v {
+                rty::RefinedTypeVar::Free(idx) if idx == last_param_idx => {
+                    rty::RefinedTypeVar::Value
+                }
+                v => v,
+            });
+            param_rtys
+                .raw
+                .last_mut()
+                .unwrap()
+                .refinement
+                .push_conj(type_invariants);
+        }
+
+        let mut ret_rty = self.ret_rty.clone().unwrap_or_else(|| {
             self.inner
                 .for_template(self.registry)
                 .with_scope(&builder)
                 .build_refined(self.ret_ty)
         });
+        Self::add_type_invariant(self.ret_ty, &mut ret_rty);
         rty::FunctionType::new(param_rtys, ret_rty).with_abi(self.abi)
     }
 }

@@ -139,13 +139,20 @@ impl BasicBlockType {
 
     pub fn set_precondition(&mut self, refinement: rty::Refinement<rty::FunctionParamIdx>) {
         let last_param_idx = self.ty.params.last_index().unwrap();
-        self.ty.params.raw.last_mut().unwrap().refinement = refinement.map_var(|v| {
+        let refinement = refinement.map_var(|v| {
             if v == rty::RefinedTypeVar::Free(last_param_idx) {
                 rty::RefinedTypeVar::Value
             } else {
                 v
             }
         });
+        self.ty
+            .params
+            .raw
+            .last_mut()
+            .unwrap()
+            .refinement
+            .push_conj(refinement);
     }
 
     /// Inner function type of BasicBlockType contains extra parameters that carry original
