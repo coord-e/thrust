@@ -641,8 +641,7 @@ impl<'a> std::fmt::Display for System<'a> {
         for elem in self.ctx.int_array_elem_sorts() {
             let name = self.ctx.seq_concat(elem);
             let elem_ty = self.ctx.fmt_sort(elem);
-            // The sequences are passed as `(array, length)` tuples; project their fields
-            // instead of taking the array and length as separate parameters.
+            // The sequences are passed as `(array, length)` tuples
             let seq_fields = [
                 chc::Sort::array(chc::Sort::int(), elem.clone()),
                 chc::Sort::int(),

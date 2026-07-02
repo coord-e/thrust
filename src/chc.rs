@@ -438,9 +438,7 @@ impl Function {
 
 #[derive(Debug, Clone)]
 pub struct SeqConcatTerm<V = TermVarIdx> {
-    /// The first sequence, as a `(array, length)` tuple term.
     pub seq1: Term<V>,
-    /// The second sequence, as a `(array, length)` tuple term.
     pub seq2: Term<V>,
 }
 
