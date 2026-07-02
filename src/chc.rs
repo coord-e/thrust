@@ -495,6 +495,15 @@ pub enum Term<V = TermVarIdx> {
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
     ArrayEmpty(Sort, Sort),
+    /// A view of an array shifted down by an offset: the array `λi. select(array, shift + i)`.
+    ///
+    /// This is emitted as an SMT-LIB `lambda` over the underlying array and is how sequence
+    /// subsequencing is modeled: the sub-view gets a *fresh* array whose element at logical index
+    /// `i` reads the backing array at `shift + i`. Because it is a fresh function rather than the
+    /// shared backing array, equating two shifted views (as happens when a subsequence-typed
+    /// mutable reference is resolved) only constrains the elements *inside* the view's range,
+    /// leaving the elements before `shift` unconstrained.
+    ArrayShift(Box<Term<V>>, Box<Term<V>>),
     SeqConcat(Sort, Box<SeqConcatTerm<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
@@ -548,6 +557,14 @@ where
                 }
             }
             Term::ArrayEmpty(_, _) => allocator.text("[]"),
+            Term::ArrayShift(arr, shift) => allocator
+                .text("shift")
+                .append(allocator.line())
+                .append(arr.pretty_atom(allocator))
+                .append(allocator.text(","))
+                .append(allocator.line())
+                .append(shift.pretty_atom(allocator))
+                .parens(),
             Term::SeqConcat(_, t) => t.pretty(allocator),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
@@ -613,6 +630,10 @@ impl<V> Term<V> {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
             Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(s1, s2),
+            Term::ArrayShift(arr, shift) => Term::ArrayShift(
+                Box::new(arr.subst_var(&mut f)),
+                Box::new(shift.subst_var(f)),
+            ),
             Term::SeqConcat(s, t) => Term::SeqConcat(s, Box::new(t.subst_var(f))),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
@@ -661,6 +682,8 @@ impl<V> Term<V> {
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
             Term::ArrayEmpty(index, elem) => Sort::array(index.clone(), elem.clone()),
+            // A shifted view has the same sort as the array it shifts.
+            Term::ArrayShift(arr, _) => arr.sort(var_sort),
             Term::SeqConcat(elem, _) => Sort::array(Sort::int(), elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
@@ -689,6 +712,7 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.fv_impl(),
             Term::MutFinal(t) => t.fv_impl(),
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::ArrayShift(arr, shift) => Box::new(arr.fv_impl().chain(shift.fv_impl())),
             Term::SeqConcat(_, t) => Box::new(t.iter_args().flat_map(|t| t.fv_impl())),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
@@ -758,6 +782,11 @@ impl<V> Term<V> {
 
     pub fn seq_concat(elem_sort: Sort, seq1: Term<V>, seq2: Term<V>) -> Self {
         Term::SeqConcat(elem_sort, Box::new(SeqConcatTerm { seq1, seq2 }))
+    }
+
+    /// The array `λi. select(array, shift + i)` (see [`Term::ArrayShift`]).
+    pub fn array_shift(array: Term<V>, shift: Term<V>) -> Self {
+        Term::ArrayShift(Box::new(array), Box::new(shift))
     }
 
     pub fn boxed(self) -> Self {
@@ -879,6 +908,13 @@ impl<V> Term<V> {
             let then_ = seq1.tuple_proj(0).select(index.clone());
             let else_ = seq2.tuple_proj(0).select(index.sub(len1));
             return Term::ite(cond, then_, else_);
+        }
+        // Peephole 3: beta-reduce a select of a shifted view. Reading a subsequence at index `i`
+        // is exactly reading the backing array at `shift + i`, so the lambda never has to be
+        // emitted for reads. It survives only where a shifted view is compared as a whole (array
+        // equality), which is precisely where the lambda semantics are needed.
+        if let Term::ArrayShift(arr, shift) = self {
+            return (*arr).select((*shift).add(index));
         }
         Term::App(Function::SELECT, vec![self, index])
     }

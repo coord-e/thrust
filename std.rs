@@ -239,6 +239,17 @@ mod thrust_models {
             }
 
             #[allow(dead_code)]
+            #[thrust::def::seq_subsequence]
+            #[thrust::ignored]
+            pub fn subsequence<U, V>(self, _start: U, _end: V) -> Self
+            where
+                U: super::Model<Ty = Int>,
+                V: super::Model<Ty = Int>,
+            {
+                unimplemented!()
+            }
+
+            #[allow(dead_code)]
             #[thrust::def::seq_concat]
             #[thrust::ignored]
             pub fn concat(self, _other: Self) -> Self {
@@ -953,6 +964,91 @@ fn _extern_spec_slice_last_mut<T>(slice: &mut [T]) -> Option<&mut T>
     where T: thrust_models::Model, T::Ty: PartialEq
 {
     <[T]>::last_mut(slice)
+}
+
+// `split_first`/`split_last`(`_mut`) return the boundary element together with a view of the rest.
+// The "rest" view is modeled with `Seq::subsequence`, which is backed by a shifted-array lambda
+// (`Term::ArrayShift`) rather than by sharing the backing array. This is what keeps the mutable
+// variants sound: resolving the returned tail view only equates the elements inside the tail's
+// range, so it cannot spuriously constrain the boundary element that was split off.
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    ((*slice).length > 0
+        && result == Some((
+            &(*slice).array[0],
+            &(*slice).subsequence(1, (*slice).length),
+        ))
+    )
+    || ((*slice).length == 0 && result == None)
+)]
+fn _extern_spec_slice_split_first<T>(slice: &[T]) -> Option<(&T, &[T])>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::split_first(slice)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    ((*slice).length > 0
+        && result == Some((
+            &(*slice).array[(*slice).length - 1],
+            &(*slice).subsequence(0, (*slice).length - 1),
+        ))
+    )
+    || ((*slice).length == 0 && result == None)
+)]
+fn _extern_spec_slice_split_last<T>(slice: &[T]) -> Option<(&T, &[T])>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::split_last(slice)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    ((*slice).length > 0
+        && (!slice).length == (*slice).length
+        && result == Some((
+            thrust_models::model::Mut::new((*slice).array[0], (!slice).array[0]),
+            thrust_models::model::Mut::new(
+                (*slice).subsequence(1, (*slice).length),
+                (!slice).subsequence(1, (!slice).length),
+            ),
+        ))
+    )
+    || ((*slice).length == 0 && result == None && !slice == *slice)
+)]
+fn _extern_spec_slice_split_first_mut<T>(slice: &mut [T]) -> Option<(&mut T, &mut [T])>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::split_first_mut(slice)
+}
+
+#[thrust::extern_spec_fn]
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(
+    ((*slice).length > 0
+        && (!slice).length == (*slice).length
+        && result == Some((
+            thrust_models::model::Mut::new(
+                (*slice).array[(*slice).length - 1],
+                (!slice).array[(!slice).length - 1],
+            ),
+            thrust_models::model::Mut::new(
+                (*slice).subsequence(0, (*slice).length - 1),
+                (!slice).subsequence(0, (!slice).length - 1),
+            ),
+        ))
+    )
+    || ((*slice).length == 0 && result == None && !slice == *slice)
+)]
+fn _extern_spec_slice_split_last_mut<T>(slice: &mut [T]) -> Option<(&mut T, &mut [T])>
+    where T: thrust_models::Model, T::Ty: PartialEq
+{
+    <[T]>::split_last_mut(slice)
 }
 
 // TODO: The following specs for Index/IndexMut methods are too specific; we should write specs for

@@ -709,6 +709,21 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let new_len = len.add(chc::Term::int(1));
                         return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
                     }
+                    if Some(def_id) == self.def_ids.seq_subsequence() {
+                        assert_eq!(args.len(), 2, "Seq::subsequence takes exactly 2 arguments");
+                        let t = self.to_term(receiver);
+                        let start = self.to_term(&args[0]);
+                        let end = self.to_term(&args[1]);
+                        let arr = t.tuple_proj(0);
+                        // A subsequence `s.subsequence(start, end)` is a fresh view over `s`'s
+                        // array shifted down by `start`, with length `end - start`. Modeling the
+                        // array as a shifted *lambda* (rather than sharing `s`'s array) keeps the
+                        // elements before `start` out of the view's model, which is what makes
+                        // equating two subsequence views sound.
+                        let new_arr = chc::Term::array_shift(arr, start.clone());
+                        let new_len = end.sub(start);
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                    }
                     if Some(def_id) == self.def_ids.seq_concat() {
                         assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
                         let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();

@@ -169,6 +169,17 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, &default)
                 )
             }
+            chc::Term::ArrayShift(arr, shift) => {
+                // A shifted array view `λi. select(arr, shift + i)`, emitted as an SMT-LIB
+                // `lambda`. The bound variable name cannot collide with the clause's variables,
+                // which are always printed as `v<n>`.
+                write!(
+                    f,
+                    "(lambda ((shift!idx Int)) (select {} (+ {} shift!idx)))",
+                    Term::new(self.ctx, self.clause, arr),
+                    Term::new(self.ctx, self.clause, shift),
+                )
+            }
             chc::Term::SeqConcat(elem, t) => {
                 let name = self.ctx.seq_concat(elem);
                 write!(
