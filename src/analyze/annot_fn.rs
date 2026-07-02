@@ -621,7 +621,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 let terms = exprs.iter().map(|e| self.to_term(e)).collect();
                 FormulaOrTerm::Term(chc::Term::tuple(terms))
             }
-            ExprKind::Struct(_qpath, fields, _tail) => {
+            ExprKind::Struct(_qpath, fields, tail) => {
+                if !matches!(tail, rustc_hir::StructTailExpr::None) {
+                    unimplemented!("struct update syntax is not supported in formulas");
+                }
                 let adt = self
                     .expr_ty(hir)
                     .ty_adt_def()
@@ -629,10 +632,13 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 let mut terms = Vec::new();
                 let variant = adt.non_enum_variant();
                 for variant_field in &variant.fields {
-                    let field = fields
-                        .iter()
-                        .find(|f| f.ident.name == variant_field.name)
-                        .unwrap();
+                    let Some(field) = fields.iter().find(|f| f.ident.name == variant_field.name)
+                    else {
+                        self.tcx.dcx().span_fatal(
+                            hir.span,
+                            format!("missing field `{}` in struct literal", variant_field.name),
+                        );
+                    };
                     terms.push(self.to_term(field.expr));
                 }
                 FormulaOrTerm::Term(chc::Term::tuple(terms))
