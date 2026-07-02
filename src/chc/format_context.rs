@@ -283,11 +283,13 @@ impl FormatContext {
                 _ => None,
             })
             .collect();
-        // The `seq_concat` definitions operate on `(array, length)` sequence tuples, so
-        // make sure that tuple datatype is declared for every element sort we emit one for
+        // The `seq_concat` definitions operate on `(array, offset, length)` sequence
+        // tuples, so make sure that tuple datatype is declared for every element sort we emit one
+        // for, even when no sequence value of that element sort otherwise appears in the system.
         for elem in &int_array_elem_sorts {
             sorts.insert(chc::Sort::tuple(vec![
                 chc::Sort::array(chc::Sort::int(), elem.clone()),
+                chc::Sort::int(),
                 chc::Sort::int(),
             ]));
         }
