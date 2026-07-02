@@ -136,7 +136,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
 
     local_def_id: LocalDefId,
-    drop_points: DropPoints,
+    drop_points: DropPoints<'tcx>,
     basic_block: BasicBlock,
     body: Cow<'tcx, Body<'tcx>>,
 
@@ -1008,14 +1008,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn drop_local(&mut self, local: Local) {
-        self.env.drop_local(local);
+    fn drop_places(&mut self, set: drop_point::DropSet<'tcx>) {
+        let except: Vec<mir::Place<'tcx>> = set.except.into_iter().collect();
+        for place in set.drops {
+            tracing::info!(?place, ?except, "implicitly dropped");
+            self.env.drop_place(place, &except);
+        }
     }
 
-    /// Schedules `local` to be implicitly dropped after this block's terminator,
+    /// Schedules `place` to be implicitly dropped after this block's terminator,
     /// in addition to the liveness-derived drop points.
-    fn drop_after_terminator(&mut self, local: Local) {
-        self.drop_points.insert_after_terminator(local);
+    fn drop_after_terminator(&mut self, place: mir::Place<'tcx>) {
+        self.drop_points.insert_after_terminator(place);
     }
 
     fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'tcx>) {
@@ -1152,10 +1156,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn analyze_statements(&mut self) {
-        for local in self.drop_points.before_statements.clone() {
-            tracing::info!(?local, "implicitly dropped before statements");
-            self.drop_local(local);
-        }
+        let before_statements = self.drop_points.before_statements.clone();
+        self.drop_places(before_statements);
         let statements = self.body.basic_blocks[self.basic_block].statements.clone();
         for (stmt_idx, mut stmt) in statements.iter().cloned().enumerate() {
             if stmt_idx == statements.len() - 1 && self.terminator_is_drop_call().is_some() {
@@ -1174,10 +1176,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 | StatementKind::StorageDead(_) => {}
                 _ => unimplemented!("stmt={:?}", stmt.kind),
             }
-            for local in self.drop_points.after_statement(stmt_idx).iter() {
-                tracing::info!(?local, ?stmt_idx, "implicitly dropped after statement");
-                self.drop_local(local);
-            }
+            let after_statement = self.drop_points.after_statement(stmt_idx);
+            self.drop_places(after_statement);
         }
     }
 
@@ -1257,27 +1257,21 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     targets.clone(),
                     outer_fn_param_vars,
                     |a, target| {
-                        for local in a.drop_points.after_terminator(&target) {
-                            tracing::info!(?local, ?target, "implicitly dropped for target");
-                            a.drop_local(local);
-                        }
+                        let set = a.drop_points.after_terminator(&target);
+                        a.drop_places(set);
                     },
                 );
             }
             TerminatorKind::Call { target, .. } => {
                 if let Some(target) = target {
-                    for local in self.drop_points.after_terminator(target) {
-                        tracing::info!(?local, "implicitly dropped after call");
-                        self.drop_local(local);
-                    }
+                    let set = self.drop_points.after_terminator(target);
+                    self.drop_places(set);
                     self.type_goto(*target, outer_fn_param_vars);
                 }
             }
             TerminatorKind::Drop { target, .. } => {
-                for local in self.drop_points.after_terminator(target) {
-                    tracing::info!(?local, "dropped");
-                    self.drop_local(local);
-                }
+                let set = self.drop_points.after_terminator(target);
+                self.drop_places(set);
                 self.type_goto(*target, outer_fn_param_vars);
             }
             TerminatorKind::Assert {
@@ -1286,10 +1280,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 target,
                 ..
             } => {
-                for local in self.drop_points.after_terminator(target) {
-                    tracing::info!(?local, "dropped");
-                    self.drop_local(local);
-                }
+                let set = self.drop_points.after_terminator(target);
+                self.drop_places(set);
                 self.type_operand(
                     cond.clone(),
                     &rty::RefinedType::refined_with_term(
@@ -1470,7 +1462,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    pub fn drop_points(&mut self, drop_points: DropPoints) -> &mut Self {
+    pub fn drop_points(&mut self, drop_points: DropPoints<'tcx>) -> &mut Self {
         self.drop_points = drop_points;
         self
     }

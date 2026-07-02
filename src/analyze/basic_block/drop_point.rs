@@ -1,117 +1,134 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{HashMap, HashSet};
 
 use rustc_index::bit_set::DenseBitSet;
-use rustc_middle::mir::{self, BasicBlock, Body, Local};
+use rustc_middle::mir::{self, BasicBlock, Body, Local, Location};
+use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::{impls::MaybeLiveLocals, ResultsCursor};
 
+/// A set of implicit-drop targets: `drops` are places to drop; `except` are
+/// moved-out sub-places to skip when a drop walks into them.
 #[derive(Debug, Clone, Default)]
-pub struct DropPoints {
-    // TODO: ad-hoc
-    pub before_statements: Vec<Local>,
-    after_statements: Vec<DenseBitSet<Local>>,
-    after_terminator: HashMap<BasicBlock, DenseBitSet<Local>>,
-    /// Locals dropped after the terminator regardless of the target, in
-    /// addition to the liveness-derived sets above. A set, since the same local
-    /// must not be dropped twice; ordered by index to keep drops deterministic.
-    after_terminator_extra: BTreeSet<Local>,
+pub struct DropSet<'tcx> {
+    pub drops: HashSet<mir::Place<'tcx>>,
+    pub except: HashSet<mir::Place<'tcx>>,
 }
 
-impl DropPoints {
-    pub fn builder<'mir, 'tcx>(body: &'mir Body<'tcx>) -> DropPointsBuilder<'mir, 'tcx> {
+impl<'tcx> DropSet<'tcx> {
+    pub fn insert(&mut self, place: mir::Place<'tcx>) {
+        self.drops.insert(place);
+    }
+
+    fn extend(&mut self, other: &DropSet<'tcx>) {
+        self.drops.extend(other.drops.iter().copied());
+        self.except.extend(other.except.iter().copied());
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DropPoints<'tcx> {
+    pub before_statements: DropSet<'tcx>,
+    after_statements: Vec<DropSet<'tcx>>,
+    after_terminator: HashMap<BasicBlock, DropSet<'tcx>>,
+    after_terminator_extra: DropSet<'tcx>,
+}
+
+impl DropPoints<'_> {
+    pub fn builder<'mir, 'tcx>(
+        tcx: TyCtxt<'tcx>,
+        body: &'mir Body<'tcx>,
+    ) -> DropPointsBuilder<'mir, 'tcx> {
         DropPointsBuilder {
             body,
             bb_ins_cache: HashMap::new(),
+            moves: Moves::collect(tcx, body),
         }
     }
+}
 
-    pub fn position(&self, local: Local) -> Option<usize> {
-        self.after_statements
-            .iter()
-            .position(|s| s.contains(local))
-            .or_else(|| {
-                self.is_after_terminator(local)
-                    .then_some(self.after_statements.len())
-            })
-    }
-
-    fn is_after_terminator(&self, local: Local) -> bool {
-        self.after_terminator.values().any(|s| s.contains(local))
-            || self.after_terminator_extra.contains(&local)
-    }
-
-    pub fn remove_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
-        self.after_statements[statement_index].remove(local)
-    }
-
-    pub fn insert_after_statement(&mut self, statement_index: usize, local: Local) -> bool {
-        self.after_statements[statement_index].insert(local)
-    }
-
-    pub fn after_statement(&self, statement_index: usize) -> DenseBitSet<Local> {
+impl<'tcx> DropPoints<'tcx> {
+    pub fn after_statement(&self, statement_index: usize) -> DropSet<'tcx> {
         self.after_statements[statement_index].clone()
     }
 
-    pub fn insert_after_terminator(&mut self, local: Local) {
-        self.after_terminator_extra.insert(local);
+    pub fn insert_after_terminator(&mut self, place: mir::Place<'tcx>) {
+        self.after_terminator_extra.insert(place);
     }
 
-    pub fn after_terminator(&self, target: &BasicBlock) -> Vec<Local> {
-        let mut t = self.after_terminator[target].clone();
-        t.union(self.after_statements.last().unwrap());
-        t.iter()
-            .chain(self.after_terminator_extra.iter().copied())
-            .collect()
+    pub fn after_terminator(&self, target: &BasicBlock) -> DropSet<'tcx> {
+        let mut set = self.after_terminator[target].clone();
+        set.extend(self.after_statements.last().unwrap());
+        set.extend(&self.after_terminator_extra);
+        set
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DropPointsBuilder<'mir, 'tcx> {
     body: &'mir Body<'tcx>,
     bb_ins_cache: HashMap<BasicBlock, DenseBitSet<Local>>,
+    moves: Moves<'tcx>,
 }
 
-/// Locals whose ownership is fully transferred away by the statement (or
-/// terminator) at `statement_index`. Such a local is left uninitialized, so its
-/// drop obligation (including resolving any mutable-borrow prophecies it owns)
-/// moves to the destination and it must not be dropped at the move site.
+/// The `move`d operands of a body, excluding reference-typed places.
 ///
-/// Only owned (non-reference) operands are reported: `move`d references are
-/// turned into reborrows by `ReborrowVisitor`/`RustCallVisitor`, so the source
-/// local remains live and must still be dropped.
-fn moved_locals<'tcx>(
-    body: &Body<'tcx>,
-    bb: BasicBlock,
-    statement_index: usize,
-) -> DenseBitSet<Local> {
-    struct Visitor<'a, 'tcx> {
-        body: &'a Body<'tcx>,
-        locals: DenseBitSet<Local>,
-    }
-    impl<'tcx> mir::visit::Visitor<'tcx> for Visitor<'_, 'tcx> {
-        fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, _location: mir::Location) {
-            if let mir::Operand::Move(place) = operand {
-                if place.projection.is_empty() && !self.body.local_decls[place.local].ty.is_ref() {
-                    self.locals.insert(place.local);
+/// `move`d references are turned into reborrows by
+/// `ReborrowVisitor`/`RustCallVisitor`, so the source still owns its prophecy
+/// and must be dropped normally; they are therefore not recorded here.
+///
+/// A whole-local move leaves the local uninitialized, transferring its entire
+/// drop obligation (including resolving any mutable-borrow prophecies it owns)
+/// to the destination, so it must not be dropped at the move site — where the
+/// local also becomes dead, hence the per-location keying. A partial (projected)
+/// field move transfers only a sub-place, but the parent stays live until its
+/// remaining parts die later; dropping it wholesale at that point would walk
+/// into the moved-out sub-place and resolve its `&mut` prophecy a second time,
+/// so a partially-moved local is excluded from dropping entirely.
+#[derive(Clone, Default)]
+struct Moves<'tcx> {
+    /// Whole-local moves, keyed by the location performing the move.
+    whole: HashMap<Location, DenseBitSet<Local>>,
+    /// Partial field moves, keyed by the parent local.
+    partial: HashMap<Local, Vec<mir::Place<'tcx>>>,
+}
+
+impl<'tcx> Moves<'tcx> {
+    fn collect(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> Moves<'tcx> {
+        struct Visitor<'a, 'tcx> {
+            tcx: TyCtxt<'tcx>,
+            body: &'a Body<'tcx>,
+            moves: Moves<'tcx>,
+        }
+        impl<'tcx> mir::visit::Visitor<'tcx> for Visitor<'_, 'tcx> {
+            fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, location: Location) {
+                let mir::Operand::Move(place) = operand else {
+                    return;
+                };
+                if place.ty(&self.body.local_decls, self.tcx).ty.is_ref() {
+                    return;
+                }
+                if place.projection.is_empty() {
+                    self.moves
+                        .whole
+                        .entry(location)
+                        .or_insert_with(|| DenseBitSet::new_empty(self.body.local_decls.len()))
+                        .insert(place.local);
+                } else {
+                    let entry = self.moves.partial.entry(place.local).or_default();
+                    if !entry.contains(place) {
+                        entry.push(*place);
+                    }
                 }
             }
         }
+        let mut visitor = Visitor {
+            tcx,
+            body,
+            moves: Moves::default(),
+        };
+        use mir::visit::Visitor as _;
+        visitor.visit_body(body);
+        visitor.moves
     }
-    let mut visitor = Visitor {
-        body,
-        locals: DenseBitSet::new_empty(body.local_decls.len()),
-    };
-    let loc = mir::Location {
-        statement_index,
-        block: bb,
-    };
-    let data = &body.basic_blocks[bb];
-    use mir::visit::Visitor as _;
-    if statement_index < data.statements.len() {
-        visitor.visit_statement(&data.statements[statement_index], loc);
-    } else if let Some(tmnt) = &data.terminator {
-        visitor.visit_terminator(tmnt, loc);
-    }
-    visitor.locals
 }
 
 fn def_local<'tcx>(data: &mir::BasicBlockData<'tcx>, statement_index: usize) -> Option<Local> {
@@ -143,16 +160,31 @@ fn def_local<'tcx>(data: &mir::BasicBlockData<'tcx>, statement_index: usize) -> 
 }
 
 impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
+    /// Turn a set of locals that become dead into the drop targets. A local with
+    /// a partial field move is excluded: dropping it wholesale would resolve the
+    /// moved-out sub-place's `&mut` prophecy a second time (it is resolved at the
+    /// move destination instead).
+    fn drop_set(&self, locals: DenseBitSet<Local>) -> DropSet<'tcx> {
+        let mut set = DropSet::default();
+        for local in locals.iter() {
+            set.drops.insert(local.into());
+            if let Some(moved) = self.moves.partial.get(&local) {
+                set.except.extend(moved.iter().copied());
+            }
+        }
+        set
+    }
+
     pub fn build(
         &mut self,
         results: &mut ResultsCursor<'mir, 'tcx, MaybeLiveLocals>,
         bb: BasicBlock,
-    ) -> DropPoints {
+    ) -> DropPoints<'tcx> {
         let data = &self.body.basic_blocks[bb];
 
         let mut after_terminator = HashMap::new();
         let mut after_statements = Vec::new();
-        after_statements.resize_with(data.statements.len() + 1, || DenseBitSet::new_empty(0));
+        after_statements.resize_with(data.statements.len() + 1, DropSet::default);
 
         results.seek_to_block_end(bb);
         let live_locals_after_terminator = results.get().clone();
@@ -169,7 +201,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
                 t.subtract(&self.bb_ins_cache[&succ_bb]);
                 t
             };
-            after_terminator.insert(succ_bb, edge_drops);
+            after_terminator.insert(succ_bb, self.drop_set(edge_drops));
             ins.union(&self.bb_ins_cache[&succ_bb]);
         }
 
@@ -192,8 +224,10 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
                     t.insert(def);
                 }
                 t.subtract(&last_live_locals);
-                t.subtract(&moved_locals(self.body, bb, statement_index));
-                t
+                if let Some(moved) = self.moves.whole.get(&loc) {
+                    t.subtract(moved);
+                }
+                self.drop_set(t)
             };
             last_live_locals = live_locals;
         }
@@ -207,10 +241,10 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
             "analyzed implicit drop points"
         );
         DropPoints {
-            before_statements: Default::default(),
+            before_statements: DropSet::default(),
             after_statements,
             after_terminator,
-            after_terminator_extra: Default::default(),
+            after_terminator_extra: DropSet::default(),
         }
     }
 }
