@@ -1087,6 +1087,26 @@ impl Path {
     fn tuple_proj(self, idx: usize) -> Self {
         Path::TupleProj(Box::new(self), idx)
     }
+
+    /// Structural place equality for the drop walk's except-skip. `Deref` is
+    /// treated as transparent on both sides: the drop walk inserts a `Deref`
+    /// for every `own`-box the type elaboration introduces (mut locals, and
+    /// every tuple field), whereas the moved-out places this is compared against
+    /// come straight from MIR and carry no such derefs. Moved-out places never
+    /// contain a real deref (reference moves are excluded upstream), so peeling
+    /// derefs cannot conflate distinct owned places here.
+    fn same_place(&self, other: &Path) -> bool {
+        match (self, other) {
+            (Path::Deref(a), _) => a.same_place(other),
+            (_, Path::Deref(b)) => self.same_place(b),
+            (Path::Local(a), Path::Local(b)) => a == b,
+            (Path::TupleProj(a, i), Path::TupleProj(b, j)) => i == j && a.same_place(b),
+            (Path::Downcast(a, va, fa), Path::Downcast(b, vb, fb)) => {
+                va == vb && fa == fb && a.same_place(b)
+            }
+            _ => false,
+        }
+    }
 }
 
 impl<T> Env<T>
@@ -1110,7 +1130,10 @@ where
         self.path_type(&place.into())
     }
 
-    fn dropping_assumption(&mut self, path: &Path) -> Assumption {
+    fn dropping_assumption(&mut self, path: &Path, except: &[Path]) -> Assumption {
+        if except.iter().any(|e| e.same_place(path)) {
+            return Assumption::default();
+        }
         let ty = self.path_type(path);
         if ty.ty.is_mut() {
             let mut builder = PlaceTypeBuilder::default();
@@ -1118,10 +1141,10 @@ where
             builder.push_formula(term.clone().mut_final().equal_to(term.mut_current()));
             builder.build_assumption()
         } else if ty.ty.is_own() {
-            self.dropping_assumption(&path.clone().deref())
+            self.dropping_assumption(&path.clone().deref(), except)
         } else if let Some(tty) = ty.ty.as_tuple() {
             (0..tty.elems.len())
-                .map(|i| self.dropping_assumption(&path.clone().tuple_proj(i)))
+                .map(|i| self.dropping_assumption(&path.clone().tuple_proj(i), except))
                 .collect()
         } else if let Some(ety) = ty.ty.as_enum() {
             let enum_def = self.enum_defs.enum_def(&ety.symbol);
@@ -1174,7 +1197,7 @@ where
                 let Assumption {
                     existentials: assumption_existentials,
                     body: assumption_body,
-                } = self.dropping_assumption(&Path::PlaceTy(Box::new(field_pty)));
+                } = self.dropping_assumption(&Path::PlaceTy(Box::new(field_pty)), except);
                 // dropping assumption should not generate any existential
                 assert!(assumption_existentials.is_empty());
                 formula.push_conj(assumption_body);
@@ -1189,14 +1212,11 @@ where
         }
     }
 
-    pub fn drop_place(&mut self, place: Place<'_>) {
-        let assumption = self.dropping_assumption(&place.into());
+    pub fn drop_place(&mut self, place: Place<'_>, except: &[Place<'_>]) {
+        let except: Vec<Path> = except.iter().map(|p| Path::from(*p)).collect();
+        let assumption = self.dropping_assumption(&place.into(), &except);
         if !assumption.is_top() {
             self.assume(assumption);
         }
-    }
-
-    pub fn drop_local(&mut self, local: Local) {
-        self.drop_place(local.into());
     }
 }

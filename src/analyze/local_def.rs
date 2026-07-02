@@ -1065,7 +1065,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iterate_to_fixpoint(self.tcx, &self.body, None)
             .into_results_cursor(&self.body);
 
-        let mut builder = analyze::basic_block::DropPoints::builder(&self.body);
+        let mut builder = analyze::basic_block::DropPoints::builder(self.tcx, &self.body);
         for (bb, _data) in mir::traversal::postorder(&self.body) {
             let span = tracing::info_span!("refine_basic_block", ?bb);
             let _guard = span.enter();

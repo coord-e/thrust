@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use rustc_hir::def::DefKind;
 use rustc_index::IndexVec;
@@ -1008,10 +1008,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    fn drop_places(&mut self, places: HashSet<mir::Place<'tcx>>) {
-        for place in places {
-            tracing::info!(?place, "implicitly dropped");
-            self.env.drop_place(place);
+    fn drop_places(&mut self, set: drop_point::DropSet<'tcx>) {
+        let except: Vec<mir::Place<'tcx>> = set.except.into_iter().collect();
+        for place in set.drops {
+            tracing::info!(?place, ?except, "implicitly dropped");
+            self.env.drop_place(place, &except);
         }
     }
 
