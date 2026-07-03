@@ -1050,7 +1050,6 @@ where
 
 #[derive(Debug, Clone)]
 enum Path {
-    PlaceTy(Box<PlaceType>),
     Local(Local),
     Deref(Box<Path>),
     TupleProj(Box<Path>, usize),
@@ -1079,23 +1078,12 @@ impl<'tcx> From<Place<'tcx>> for Path {
     }
 }
 
-impl Path {
-    fn deref(self) -> Self {
-        Path::Deref(Box::new(self))
-    }
-
-    fn tuple_proj(self, idx: usize) -> Self {
-        Path::TupleProj(Box::new(self), idx)
-    }
-}
-
 impl<T> Env<T>
 where
     T: EnumDefProvider,
 {
     fn path_type(&self, path: &Path) -> PlaceType {
         match path {
-            Path::PlaceTy(pty) => *pty.clone(),
             Path::Local(local) => self.local_type(*local),
             Path::Deref(path) => self.path_type(path).deref(),
             Path::TupleProj(path, idx) => self.path_type(path).tuple_proj(*idx),
@@ -1111,38 +1099,58 @@ where
     }
 
     fn dropping_assumption(&mut self, path: &Path) -> Assumption {
-        let ty = self.path_type(path);
-        if ty.ty.is_mut() {
-            let mut builder = PlaceTypeBuilder::default();
-            let (_, term) = builder.subsume(ty);
-            builder.push_formula(term.clone().mut_final().equal_to(term.mut_current()));
-            builder.build_assumption()
-        } else if ty.ty.is_own() {
-            self.dropping_assumption(&path.clone().deref())
-        } else if let Some(tty) = ty.ty.as_tuple() {
-            (0..tty.elems.len())
-                .map(|i| self.dropping_assumption(&path.clone().tuple_proj(i)))
-                .collect()
-        } else if let Some(ety) = ty.ty.as_enum() {
+        let PlaceType {
+            ty,
+            mut existentials,
+            term,
+            mut formula,
+        } = self.path_type(path);
+        self.drop_prophecy(&mut existentials, &mut formula, &ty, term);
+        Assumption::new(existentials, formula)
+    }
+
+    /// Accumulate the "prophecy resolves to identity" constraints for dropping a value of type
+    /// `ty` denoted by `term`, pushing them into `body` and allocating any needed existentials into
+    /// the shared `existentials` namespace.
+    ///
+    /// Tuple elements and box/deref targets are threaded as term *expressions* over `term`, so a
+    /// nested sub-value stays shared across all the mutable references it contains. Only enum
+    /// fields allocate fresh existentials -- an enum's fields cannot be projected without a
+    /// selector, so they are named by existentials and tied back to `term` with a matcher
+    /// predicate. Keeping every existential in one namespace is what lets a field that is itself an
+    /// aggregate of mutable references (e.g. the `(&mut T, &mut [T])` payload of the `Option`
+    /// returned by `split_first_mut`) be dropped correctly.
+    fn drop_prophecy(
+        &self,
+        existentials: &mut IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+        body: &mut chc::Body<PlaceTypeVar>,
+        ty: &rty::Type<Var>,
+        term: chc::Term<PlaceTypeVar>,
+    ) {
+        if ty.is_mut() {
+            body.push_conj(term.clone().mut_final().equal_to(term.mut_current()));
+        } else if ty.is_own() {
+            let inner = &ty.as_pointer().unwrap().elem.ty;
+            self.drop_prophecy(existentials, body, inner, term.box_current());
+        } else if let Some(tty) = ty.as_tuple() {
+            for (i, elem) in tty.elems.iter().enumerate() {
+                self.drop_prophecy(existentials, body, &elem.ty, term.clone().tuple_proj(i));
+            }
+        } else if let Some(ety) = ty.as_enum() {
             let enum_def = self.enum_defs.enum_def(&ety.symbol);
             let matcher_pred = chc::MatcherPred::new(ety.symbol.clone(), ety.arg_sorts());
-
-            let PlaceType {
-                ty: _,
-                mut existentials,
-                term,
-                mut formula,
-            } = ty;
 
             let mut pred_args = vec![];
             for field_ty in enum_def.field_tys() {
                 let mut field_rty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
                 field_rty.instantiate_ty_params(ety.args.clone());
+                let field_type = field_rty.ty;
 
-                let ev = existentials.push(field_rty.ty.to_sort());
-                pred_args.push(chc::Term::var(ev.into()));
+                let ev = existentials.push(field_type.to_sort());
+                let field_term = chc::Term::var(ev.into());
+                pred_args.push(field_term.clone());
 
-                if let Some(p) = field_rty.ty.as_pointer() {
+                if let Some(p) = field_type.as_pointer() {
                     if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
                         // TODO: we need recursively defined drop_pred for the recursive ADTs!
                         tracing::warn!("skipping recursive variant");
@@ -1150,42 +1158,11 @@ where
                     }
                 }
 
-                let field_pty = {
-                    let rty::RefinedType {
-                        ty: field_ty,
-                        refinement,
-                    } = field_rty;
-                    let rty::Refinement { body, existentials } = refinement;
-                    PlaceType {
-                        ty: field_ty,
-                        existentials,
-                        term: chc::Term::var(ev.into()),
-                        formula: body.map_var(|v| match v {
-                            rty::RefinedTypeVar::Value => PlaceTypeVar::Existential(ev),
-                            rty::RefinedTypeVar::Free(v) => PlaceTypeVar::Var(v),
-                            // TODO: (but otherwise we can't distinguish field existentials from them...)
-                            rty::RefinedTypeVar::Existential(_) => {
-                                panic!("cannot handle existentials in field_rty")
-                            }
-                        }),
-                    }
-                };
-
-                let Assumption {
-                    existentials: assumption_existentials,
-                    body: assumption_body,
-                } = self.dropping_assumption(&Path::PlaceTy(Box::new(field_pty)));
-                // dropping assumption should not generate any existential
-                assert!(assumption_existentials.is_empty());
-                formula.push_conj(assumption_body);
+                self.drop_prophecy(existentials, body, &field_type, field_term);
             }
 
             pred_args.push(term);
-            formula.push_conj(chc::Atom::new(matcher_pred.into(), pred_args));
-
-            Assumption::new(existentials, formula)
-        } else {
-            Assumption::default()
+            body.push_conj(chc::Atom::new(matcher_pred.into(), pred_args));
         }
     }
 

@@ -69,9 +69,10 @@ plain Z3 after eliminating the predicate variables (see below).
 | ------------------------------ | ------------------------------- | ----- |
 | `needs_chc_recursive_nth.rs`   | `needs_chc_recursive_nth.smt2`  | a **recursive summary that indexes the array**: `nth(s, n) == s.array[n]` |
 | `needs_chc_loop_index.rs`      | `needs_chc_loop_index.smt2`     | a **loop invariant that is a lambda**: `s == slice.subsequence(i, len)` |
+| `needs_chc_mut_walk.rs`        | `needs_chc_mut_walk.smt2`       | a **loop invariant over a mutable subsequence**: the prophecy of a lambda-backed `Mut<Seq>` |
 
-Both are safe, so a lambda-capable CHC solver should return `sat`; Spacer returns
-`unknown`.
+All three are safe, so a lambda-capable CHC solver should return `sat`; Spacer
+returns `unknown`.
 
 The point of these two (versus a naive `mylen(s) == s.len()` / `count == len`
 counter) is that the synthesized invariant/summary must constrain the **array**
@@ -86,12 +87,13 @@ counter) is that the synthesized invariant/summary must constrain the **array**
   `s == slice.subsequence(i, len)`, whose array component is a guarded
   subsequence lambda whose *shift is the loop counter* `i`. The invariant itself
   contains a lambda.
-
-Note: the most direct way to make a lambda load-bearing is a *mutable*
-subsequence walk (a loop/recursion over `split_first_mut`), where the invariant
-must track the array through the tail prophecy. Thrust does not support that yet
-(it panics in `refine/env.rs` on the prophecy existentials), so these two use
-immutable reads whose summary/invariant nonetheless has to talk about the array.
+- `mut_walk`: a *mutable* walk that zeroes the slice via `split_first_mut`. The
+  loop-carried `s` is a `&mut` subsequence — a lambda-backed `Mut<Seq>` — so the
+  invariant must track the array through the tail prophecy, the most direct way
+  for a lambda to be load-bearing. (This case depends on the enum-drop fix in
+  `refine/env.rs`; without it, dropping the `Option<(&mut i32, &mut [i32])>` on
+  the loop's exit edge panicked. `tests/ui/{pass,fail}/enum_tuple_mut_drop.rs`
+  are the lambda-free regression tests for that fix.)
 
 ## Validation
 
