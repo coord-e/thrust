@@ -1,8 +1,8 @@
 // A read-only use of `<[T]>::split_first_mut`: split the slice, then observe the
 // boundary element and the tail view. Verifying this program is safe.
 //
-// The tail is modeled with `Seq::subsequence`, which is backed by a shifted-array
-// lambda (`Term::ArrayShift`). This program is what produces `split_first_mut.smt2`.
+// The tail is modeled with `Seq::subsequence`, which is backed by a normalized
+// sub-array lambda (`Term::Subarray`). This program produces `split_first_mut.smt2`.
 //
 // It cannot be checked by the default Spacer solver because the generated CHC uses
 // SMT-LIB `lambda`s over arrays, which no CHC solver we target supports yet. It is a

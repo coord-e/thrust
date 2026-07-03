@@ -169,15 +169,30 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, &default)
                 )
             }
-            chc::Term::ArrayShift(arr, shift) => {
-                // A shifted array view `λi. select(arr, shift + i)`, emitted as an SMT-LIB
-                // `lambda`. The bound variable name cannot collide with the clause's variables,
-                // which are always printed as `v<n>`.
+            chc::Term::Subarray(arr, start, length) => {
+                // A normalized sub-array view, emitted as an SMT-LIB `lambda`:
+                //   λk. ite(0 <= k && k < length, select(arr, start + k), default)
+                // Out-of-range positions are pinned to the element sort's canonical value so that
+                // full array equality of two views coincides with element-wise equality over
+                // `[0, length)` only. The bound variable name cannot collide with the clause's
+                // variables, which are always printed as `v<n>`.
+                let elem = self
+                    .clause
+                    .term_sort(arr)
+                    .as_array_elem()
+                    .expect("Subarray applied to a non-array term")
+                    .clone();
+                let default = chc::Term::default_for(&elem);
                 write!(
                     f,
-                    "(lambda ((shift!idx Int)) (select {} (+ {} shift!idx)))",
-                    Term::new(self.ctx, self.clause, arr),
-                    Term::new(self.ctx, self.clause, shift),
+                    "(lambda ((sub!idx Int)) \
+                       (ite (and (<= 0 sub!idx) (< sub!idx {len})) \
+                            (select {arr} (+ {start} sub!idx)) \
+                            {default}))",
+                    len = Term::new(self.ctx, self.clause, length),
+                    arr = Term::new(self.ctx, self.clause, arr),
+                    start = Term::new(self.ctx, self.clause, start),
+                    default = Term::new(self.ctx, self.clause, &default),
                 )
             }
             chc::Term::SeqConcat(elem, t) => {

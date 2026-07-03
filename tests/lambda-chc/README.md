@@ -1,9 +1,9 @@
 # Lambda-backed subsequence CHC fixtures
 
-These are hand-off test cases for developing CHC solver support for **array
-`lambda`s**. They are *not* run by `cargo test`: the `ui_test` harness only
-scans `tests/ui/`, and the generated constraints cannot be discharged by the
-default Spacer (`z3` HORN) solver, which does not support `lambda`.
+Hand-off test cases for developing CHC solver support for **array `lambda`s**.
+They are *not* run by `cargo test`: the `ui_test` harness only scans `tests/ui/`,
+and these constraints cannot be discharged by the default Spacer (`z3` HORN)
+solver, which does not support `lambda`.
 
 ## Why lambdas?
 
@@ -11,60 +11,106 @@ Thrust models a slice/`Vec` as a `Seq` tuple `(array, length)`. A *subsequence*
 view — the tail returned by `split_first`/`split_last` and friends — is built
 with `Seq::subsequence(start, end)`. Instead of sharing the backing array and
 tracking a separate offset (the approach explored in #163/#164), the subsequence
-is modeled as a **fresh, shifted array view**:
-
-```
-s.subsequence(start, end)  ==  (λi. s.array[start + i],  end - start)
-```
-
-The shifted array is emitted to SMT-LIB as a `lambda`:
+is modeled as a **fresh, normalized sub-array view** (`Term::Subarray`), emitted
+as an SMT-LIB `lambda`:
 
 ```smt2
-(lambda ((shift!idx Int)) (select <array> (+ <start> shift!idx)))
+(lambda ((k Int))
+  (ite (and (<= 0 k) (< k <length>))
+       (select <array> (+ <start> k))
+       <default>))
 ```
 
-(see `Term::ArrayShift` in `src/chc.rs` and its emission in
-`src/chc/smtlib2.rs`).
+Logical index `k` reads the backing array at `start + k` while `k` is in range,
+and is pinned to the element sort's canonical `default` otherwise. See
+`Term::Subarray` in `src/chc.rs` and its emission in `src/chc/smtlib2.rs`. Reads
+of a subsequence are beta-reduced back to `select(array, start + k)` by a `select`
+peephole (slice indexing always carries an `index < length` precondition), so the
+lambda survives only where a view is compared as a whole array — which is exactly
+where its semantics matter.
 
-## Why this is the sound model
+## Why the range guard is required for soundness
 
 The offset-sharing model is unsound for the *mutable* split. When an unmutated
-tail view is dropped, its prophecy is resolved with model equality
-`final == current`. Under offset-sharing, the two subsequence triples still carry
-the **whole** backing array, so that equality forces
-`(!slice).array == (*slice).array` at *every* index — including index 0, which
-belongs to the `first` element that was split off. Combined with `first`'s
-resolved final value and the slice's initial state, the path constraints become
-contradictory and *every* assertion after the split is discharged vacuously
-(even `assert!(false)`).
+tail view is dropped, its prophecy is resolved with `final == current`. Under
+offset-sharing the two subsequence triples still carry the **whole** backing
+array, so that equality forces `(!slice).array == (*slice).array` at *every*
+index — including index 0, which belongs to the `first` element that was split
+off. Combined with `first`'s resolved final value and the slice's initial state,
+the path becomes contradictory and *every* assertion after the split is
+discharged vacuously (even `assert!(false)`).
 
-With the lambda model, the tail's `final == current` equates
-
-```smt2
-(lambda ((i Int)) (select (!slice).array (+ 1 i)))
-  == (lambda ((i Int)) (select (*slice).array (+ 1 i)))
-```
-
-which, by array extensionality, only constrains indices `>= 1`. Index 0 stays
-free, so mutating `first` is consistent, the path is not vacuous, and false
-claims about `slice[0]` are correctly refuted.
+A naive lambda fix — an *unguarded* shift `λk. select(arr, start + k)` — does
+**not** help: array indices range over all of ℤ, so the shift is a bijection and
+equating two shifted views is still equivalent to full array equality (take
+`k = -1` to reach index 0). The **range guard** is what makes the difference:
+pinning out-of-range positions to a shared `default` makes full array equality of
+two normalized views coincide with element-wise equality over `[0, length)` only.
+Resolving a tail view (`start = 1`) then constrains indices `>= 1` and leaves the
+split-off index 0 free, so mutating `first` stays consistent and false claims
+about `slice[0]` are correctly refuted.
 
 ## Files
 
-| Rust program                       | Generated CHC                        | Expected result |
-| ---------------------------------- | ------------------------------------ | --------------- |
-| `split_first_mut.rs`               | `split_first_mut.smt2`               | `sat` (safe)    |
-| `split_first_mut_mutation.rs`      | `split_first_mut_mutation.smt2`      | `unsat` (rejected — the false `slice[0] == 12` claim must fail) |
+### Non-recursive `split_first_mut` (does not really need CHC)
 
-The lambda appears in the clause that encodes the `split_first_mut`
-postcondition: the tail's current and final arrays are each a `(lambda ...)`
-shifted by 1. Search the `.smt2` for `lambda` to find it.
+| Rust program                  | Generated CHC                  | Expected |
+| ----------------------------- | ------------------------------ | -------- |
+| `split_first_mut.rs`          | `split_first_mut.smt2`         | `sat` (safe)   |
+| `split_first_mut_mutation.rs` | `split_first_mut_mutation.smt2`| `unsat` (rejected — the false `slice[0] == 12` claim must fail) |
 
-## Regenerating
+These programs are straight-line: their CHC predicates are just acyclic state
+relations, so no invariant synthesis is needed and they can be validated with
+plain Z3 after eliminating the predicate variables (see below).
+
+### Programs that genuinely need CHC
+
+| Rust program                   | Generated CHC                   | Needs |
+| ------------------------------ | ------------------------------- | ----- |
+| `needs_chc_recursive_len.rs`   | `needs_chc_recursive_len.smt2`  | a **recursive function summary** (`mylen(s) == s.len()`) |
+| `needs_chc_loop_count.rs`      | `needs_chc_loop_count.smt2`     | a **loop invariant** (`count + s.len() == slice.len()`) |
+
+Both are safe, so a lambda-capable CHC solver should return `sat`; Spacer returns
+`unknown`. The subsequence lambda is carried in the loop-invariant / recursive
+summary state, so a solver must reason about `lambda`s to synthesize it.
+
+## Validation
+
+Requires `z3` on `PATH` and the `z3` Python module (`pip install z3-solver`).
+
+### `check_nonrec.py` — predicate elimination + plain Z3
+
+```console
+$ python3 check_nonrec.py split_first_mut.smt2
+$ python3 check_nonrec.py split_first_mut_mutation.smt2
+```
+
+Unfolds the acyclic predicates into every goal (`… => false`) clause and checks
+the residual lambda/array formula. `all goals unsat` ⇒ safe; `some goal sat` ⇒
+rejected. This validates `split_first_mut.smt2` as **safe** outright. For
+`split_first_mut_mutation.smt2` it proves the other goals `unsat` but returns
+`unknown` on the counterexample goal: Z3 cannot *model-find* through the guarded
+lambda (this is the very gap the fixtures target). That goal is covered by:
+
+### `soundness_check.py` — decidable store-chain distillation
+
+```console
+$ python3 soundness_check.py
+```
+
+For a *concrete* length `n`, the guarded subarray lambda is provably equal to a
+store-chain over a constant-`default` array (the script checks this equivalence,
+then relies on it). Z3's array theory decides store-chain equalities completely,
+so this verifies the exact soundness property with **no `unknown`s**: the
+post-mutation path is satisfiable (non-vacuous, so the bad `slice[0] == 12` claim
+is genuinely rejected), the tail resolution leaves index 0 free but still pins the
+in-range elements, and the old whole-array model makes the same path vacuous.
+
+## Regenerating the `.smt2`
 
 ```console
 $ THRUST_OUTPUT_DIR=<dir> \
-    cargo run -- -Adead_code -C debug-assertions=false tests/lambda-chc/<name>.rs
+    cargo run -- -Adead_code -C debug-assertions=off tests/lambda-chc/<name>.rs
 $ cp <dir>/thrust_output.smt2 tests/lambda-chc/<name>.smt2
 ```
 

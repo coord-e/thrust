@@ -19,9 +19,11 @@ fn unbox_term(term: Term) -> Term {
         Term::MutFinal(t) => Term::MutFinal(Box::new(unbox_term(*t))),
         Term::App(fun, args) => Term::App(fun, args.into_iter().map(unbox_term).collect()),
         Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(unbox_sort(s1), unbox_sort(s2)),
-        Term::ArrayShift(arr, shift) => {
-            Term::ArrayShift(Box::new(unbox_term(*arr)), Box::new(unbox_term(*shift)))
-        }
+        Term::Subarray(arr, start, length) => Term::Subarray(
+            Box::new(unbox_term(*arr)),
+            Box::new(unbox_term(*start)),
+            Box::new(unbox_term(*length)),
+        ),
         Term::SeqConcat(s, t) => {
             Term::SeqConcat(unbox_sort(s), Box::new(unbox_seq_concat_term(*t)))
         }

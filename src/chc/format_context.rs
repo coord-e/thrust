@@ -47,9 +47,10 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
             }
         }
         chc::Term::ArrayEmpty(_, _) => {}
-        chc::Term::ArrayShift(arr, shift) => {
+        chc::Term::Subarray(arr, start, length) => {
             term_sorts(clause, arr, sorts);
-            term_sorts(clause, shift, sorts);
+            term_sorts(clause, start, sorts);
+            term_sorts(clause, length, sorts);
         }
         chc::Term::SeqConcat(_, t) => {
             for arg in t.iter_args() {

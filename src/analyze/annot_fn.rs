@@ -715,13 +715,14 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let start = self.to_term(&args[0]);
                         let end = self.to_term(&args[1]);
                         let arr = t.tuple_proj(0);
-                        // A subsequence `s.subsequence(start, end)` is a fresh view over `s`'s
-                        // array shifted down by `start`, with length `end - start`. Modeling the
-                        // array as a shifted *lambda* (rather than sharing `s`'s array) keeps the
-                        // elements before `start` out of the view's model, which is what makes
-                        // equating two subsequence views sound.
-                        let new_arr = chc::Term::array_shift(arr, start.clone());
-                        let new_len = end.sub(start);
+                        // A subsequence `s.subsequence(start, end)` is a fresh, normalized view
+                        // over `s`'s array: logical index `k` reads `s.array[start + k]` for
+                        // `0 <= k < end - start`, and is pinned to a canonical default otherwise
+                        // (see `Term::Subarray`). Normalizing the out-of-range positions is what
+                        // makes equating two subsequence views constrain only the elements inside
+                        // the view's range, keeping the model sound.
+                        let new_len = end.sub(start.clone());
+                        let new_arr = chc::Term::subarray(arr, start, new_len.clone());
                         return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
                     }
                     if Some(def_id) == self.def_ids.seq_concat() {
