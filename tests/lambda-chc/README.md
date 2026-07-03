@@ -63,16 +63,35 @@ These programs are straight-line: their CHC predicates are just acyclic state
 relations, so no invariant synthesis is needed and they can be validated with
 plain Z3 after eliminating the predicate variables (see below).
 
-### Programs that genuinely need CHC
+### Programs that genuinely need CHC — with a *load-bearing* lambda
 
 | Rust program                   | Generated CHC                   | Needs |
 | ------------------------------ | ------------------------------- | ----- |
-| `needs_chc_recursive_len.rs`   | `needs_chc_recursive_len.smt2`  | a **recursive function summary** (`mylen(s) == s.len()`) |
-| `needs_chc_loop_count.rs`      | `needs_chc_loop_count.smt2`     | a **loop invariant** (`count + s.len() == slice.len()`) |
+| `needs_chc_recursive_nth.rs`   | `needs_chc_recursive_nth.smt2`  | a **recursive summary that indexes the array**: `nth(s, n) == s.array[n]` |
+| `needs_chc_loop_index.rs`      | `needs_chc_loop_index.smt2`     | a **loop invariant that is a lambda**: `s == slice.subsequence(i, len)` |
 
 Both are safe, so a lambda-capable CHC solver should return `sat`; Spacer returns
-`unknown`. The subsequence lambda is carried in the loop-invariant / recursive
-summary state, so a solver must reason about `lambda`s to synthesize it.
+`unknown`.
+
+The point of these two (versus a naive `mylen(s) == s.len()` / `count == len`
+counter) is that the synthesized invariant/summary must constrain the **array**
+(the lambda), not just the `length` field:
+
+- `recursive_nth`: proving `nth(s, 1) == s[1]` needs the summary `nth(s, n) ==
+  s.array[n]`. Closing the recursion requires the solver to show
+  `select(subsequence(s,1,len).array, n-1) == select(s.array, n)` — i.e. to
+  `select` through the guarded subsequence lambda. A length-only summary is
+  useless here.
+- `loop_index`: proving the in-loop `*first == slice[i]` needs the invariant
+  `s == slice.subsequence(i, len)`, whose array component is a guarded
+  subsequence lambda whose *shift is the loop counter* `i`. The invariant itself
+  contains a lambda.
+
+Note: the most direct way to make a lambda load-bearing is a *mutable*
+subsequence walk (a loop/recursion over `split_first_mut`), where the invariant
+must track the array through the tail prophecy. Thrust does not support that yet
+(it panics in `refine/env.rs` on the prophecy existentials), so these two use
+immutable reads whose summary/invariant nonetheless has to talk about the array.
 
 ## Validation
 
