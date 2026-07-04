@@ -929,14 +929,18 @@ impl<V> Term<V> {
             let else_ = seq2.tuple_proj(0).select(index.sub(len1));
             return Term::ite(cond, then_, else_);
         }
-        // Peephole 3: beta-reduce a select of a sub-array view. Thrust only ever reads a
-        // subsequence at an in-range index (slice indexing carries an `index < length`
-        // precondition), where the view's value is exactly `select(array, start + index)`. Reducing
-        // to that keeps the guarded lambda out of read contexts; it survives only where a view is
-        // compared as a whole (array equality), which is precisely where its normalization matters.
-        if let Term::Subarray(arr, start, _length) = self {
-            return (*arr).select((*start).add(index));
-        }
+        // Peephole 3 (intentionally disabled): beta-reduce a select of a sub-array view. Thrust
+        // only ever reads a subsequence at an in-range index (slice indexing carries an
+        // `index < length` precondition), where the view's value is exactly
+        // `select(array, start + index)`, so this rewrite would keep the guarded lambda out of
+        // read contexts. We leave it off on purpose: emitting `(select (lambda ...) i)` exposes the
+        // lambda in read positions too, which is what we want out of these CHC test cases (a
+        // lambda-capable solver beta-reduces it). Re-enable it if the lambda in reads becomes a
+        // problem for a downstream consumer.
+        //
+        // if let Term::Subarray(arr, start, _length) = self {
+        //     return (*arr).select((*start).add(index));
+        // }
         Term::App(Function::SELECT, vec![self, index])
     }
 
