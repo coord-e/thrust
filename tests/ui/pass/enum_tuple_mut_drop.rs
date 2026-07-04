@@ -1,11 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
 
-// Regression test: dropping an enum whose variant field is a *tuple of mutable
-// references* used to panic in `refine/env.rs` (`assert!(assumption_existentials
-// .is_empty())`) because the drop assumption for the aggregate field introduced
-// existentials the enum-drop path did not expect. Dropping such a value must
-// resolve every packed prophecy to identity.
 #[allow(dead_code)]
 enum Pair<'a> {
     Two((&'a mut i32, &'a mut i32)),
