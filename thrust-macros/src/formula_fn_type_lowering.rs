@@ -192,13 +192,8 @@ impl<'a> FormulaFnTypeLowering<'a> {
                     .collect();
                 syn::Type::Tuple(tt)
             }
-            // Rewrite closure type params nested in generic arguments (or a qualified
-            // self), e.g. `FnParam<F>` -> `FnParam<Closure<F>>`.
             syn::Type::Path(tp) => {
                 let mut tp = tp.clone();
-                if let Some(qself) = &mut tp.qself {
-                    qself.ty = Box::new(self.lower_closure_type_params_in_ty(&qself.ty));
-                }
                 for segment in &mut tp.path.segments {
                     if let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments {
                         for arg in &mut args.args {
