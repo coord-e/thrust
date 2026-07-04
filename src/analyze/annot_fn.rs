@@ -213,8 +213,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         for (idx, param) in self.body.params.iter().enumerate() {
             let param_idx = rty::FunctionParamIdx::from(idx);
             let mir_ty = self.pat_ty(param.pat);
-            let ty = self.type_builder.build(mir_ty);
-            let term = if !self.is_fn_param_wrapper_ty(mir_ty) && ty.to_sort().is_singleton() {
+            // `at_entry()` yields the `Inner` of a `FnParam<Inner>`; classify by it so
+            // a singleton wrapped argument collapses like any other singleton below.
+            let repr_ty = self.fn_param_wrapper_inner_ty(mir_ty).unwrap_or(mir_ty);
+            let ty = self.type_builder.build(repr_ty);
+            let term = if ty.to_sort().is_singleton() {
                 // the analyzer don't expect params with singleton sorts to be used in formula...
                 // FIXME: fix the analyzer side to uniformly accept all params
                 Self::singleton_term_for_ty(&ty).unwrap()
@@ -259,9 +262,16 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
-    fn is_fn_param_wrapper_ty(&self, ty: mir_ty::Ty<'tcx>) -> bool {
-        ty.ty_adt_def()
-            .is_some_and(|def| Some(def.did()) == self.def_ids.fn_param_wrapper())
+    /// The `Inner` of a `thrust_models::FnParam<Inner>` wrapper type, if `ty` is one.
+    fn fn_param_wrapper_inner_ty(&self, ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
+        match ty.kind() {
+            mir_ty::TyKind::Adt(def, args)
+                if Some(def.did()) == self.def_ids.fn_param_wrapper() =>
+            {
+                Some(args.type_at(0))
+            }
+            _ => None,
+        }
     }
 
     fn build_env_from_pat(
