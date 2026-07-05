@@ -705,14 +705,14 @@ fn _extern_spec_i32_signum(x: i32) -> i32 {
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures((x < 0 && result == false) || (x >= 0 && result == true))]
+#[thrust_macros::ensures((x <= 0 && result == false) || (x > 0 && result == true))]
 fn _extern_spec_i32_is_positive(x: i32) -> bool {
     i32::is_positive(x)
 }
 
 #[thrust::extern_spec_fn]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures((x <= 0 && result == true) || (x > 0 && result == false))]
+#[thrust_macros::ensures((x < 0 && result == true) || (x >= 0 && result == false))]
 fn _extern_spec_i32_is_negative(x: i32) -> bool {
     i32::is_negative(x)
 }
