@@ -498,14 +498,12 @@ impl Function {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ArrayConcatTerm<V = TermVarIdx> {
-    pub array1: Term<V>,
-    pub len1: Term<V>,
-    pub array2: Term<V>,
-    pub len2: Term<V>,
+pub struct SeqConcatTerm<V = TermVarIdx> {
+    pub seq1: Term<V>,
+    pub seq2: Term<V>,
 }
 
-impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &ArrayConcatTerm<V>
+impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &SeqConcatTerm<V>
 where
     V: Var,
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
@@ -515,44 +513,30 @@ where
         allocator
             .text("concat")
             .append(allocator.line())
-            .append(self.array1.pretty_atom(allocator))
+            .append(self.seq1.pretty_atom(allocator))
             .append(allocator.text(","))
             .append(allocator.line())
-            .append(self.len1.pretty_atom(allocator))
-            .append(allocator.text(","))
-            .append(allocator.line())
-            .append(self.array2.pretty_atom(allocator))
-            .append(allocator.text(","))
-            .append(allocator.line())
-            .append(self.len2.pretty_atom(allocator))
+            .append(self.seq2.pretty_atom(allocator))
             .parens()
     }
 }
 
-impl<V> ArrayConcatTerm<V> {
+impl<V> SeqConcatTerm<V> {
     pub fn iter_args(&self) -> impl Iterator<Item = &Term<V>> {
-        std::iter::once(&self.array1)
-            .chain(std::iter::once(&self.len1))
-            .chain(std::iter::once(&self.array2))
-            .chain(std::iter::once(&self.len2))
+        std::iter::once(&self.seq1).chain(std::iter::once(&self.seq2))
     }
 
     pub fn iter_args_mut(&mut self) -> impl Iterator<Item = &mut Term<V>> {
-        std::iter::once(&mut self.array1)
-            .chain(std::iter::once(&mut self.len1))
-            .chain(std::iter::once(&mut self.array2))
-            .chain(std::iter::once(&mut self.len2))
+        std::iter::once(&mut self.seq1).chain(std::iter::once(&mut self.seq2))
     }
 
-    pub fn subst_var<F, W>(self, mut f: F) -> ArrayConcatTerm<W>
+    pub fn subst_var<F, W>(self, mut f: F) -> SeqConcatTerm<W>
     where
         F: FnMut(V) -> Term<W>,
     {
-        ArrayConcatTerm {
-            array1: self.array1.subst_var(&mut f),
-            len1: self.len1.subst_var(&mut f),
-            array2: self.array2.subst_var(&mut f),
-            len2: self.len2.subst_var(f),
+        SeqConcatTerm {
+            seq1: self.seq1.subst_var(&mut f),
+            seq2: self.seq2.subst_var(f),
         }
     }
 }
@@ -572,7 +556,7 @@ pub enum Term<V = TermVarIdx> {
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
     ArrayEmpty(Sort, Sort),
-    ArrayConcat(Sort, Box<ArrayConcatTerm<V>>),
+    SeqConcat(Sort, Box<SeqConcatTerm<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
@@ -625,7 +609,7 @@ where
                 }
             }
             Term::ArrayEmpty(_, _) => allocator.text("[]"),
-            Term::ArrayConcat(_, t) => t.pretty(allocator),
+            Term::SeqConcat(_, t) => t.pretty(allocator),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ts.len() == 1 {
@@ -690,7 +674,7 @@ impl<V> Term<V> {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
             Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(s1, s2),
-            Term::ArrayConcat(s, t) => Term::ArrayConcat(s, Box::new(t.subst_var(f))),
+            Term::SeqConcat(s, t) => Term::SeqConcat(s, Box::new(t.subst_var(f))),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
             Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
@@ -738,7 +722,7 @@ impl<V> Term<V> {
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
             Term::ArrayEmpty(index, elem) => Sort::array(index.clone(), elem.clone()),
-            Term::ArrayConcat(elem, _) => Sort::array(Sort::int(), elem.clone()),
+            Term::SeqConcat(elem, _) => Sort::array(Sort::int(), elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -766,7 +750,7 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.fv_impl(),
             Term::MutFinal(t) => t.fv_impl(),
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
-            Term::ArrayConcat(_, t) => Box::new(t.iter_args().flat_map(|t| t.fv_impl())),
+            Term::SeqConcat(_, t) => Box::new(t.iter_args().flat_map(|t| t.fv_impl())),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
@@ -833,22 +817,8 @@ impl<V> Term<V> {
         Term::ArrayEmpty(index, elem)
     }
 
-    pub fn array_concat(
-        elem_sort: Sort,
-        array1: Term<V>,
-        len1: Term<V>,
-        array2: Term<V>,
-        len2: Term<V>,
-    ) -> Self {
-        Term::ArrayConcat(
-            elem_sort,
-            Box::new(ArrayConcatTerm {
-                array1,
-                len1,
-                array2,
-                len2,
-            }),
-        )
+    pub fn seq_concat(elem_sort: Sort, seq1: Term<V>, seq2: Term<V>) -> Self {
+        Term::SeqConcat(elem_sort, Box::new(SeqConcatTerm { seq1, seq2 }))
     }
 
     pub fn boxed(self) -> Self {
@@ -954,18 +924,21 @@ impl<V> Term<V> {
                 ],
             );
         }
-        // Peephole 2: inline one step of the `concat_int_array` recursive definitions to reduce
+        // Peephole 2: inline one step of the `seq_concat` recursive definitions to reduce
         // indexed access to terms over the underlying sequences. The SMT-defined functions are
         // still emitted (so the rewrites use exactly their unfolded form), but pcsat can prove
         // indexed properties against the inlined ITE for *any* recursion bound, where unfolding
         // through `define-fun-rec` would require an inductive invariant pcsat can't find.
         //
-        // `select(concat_int_array(sa, sn, ta, tn), i)
-        //   ↦ ite(i < sn, select(sa, i), select(ta, i - sn))`
-        if let Term::ArrayConcat(_, t) = self {
-            let cond = index.clone().lt(t.len1.clone());
-            let then_ = t.array1.select(index.clone());
-            let else_ = t.array2.select(index.sub(t.len1));
+        // `select(seq_concat(s, t), i)
+        //   ↦ ite(i < len(s), select(array(s), i), select(array(t), i - len(s)))`
+        // where `s`/`t` are `(array, length)` tuples.
+        if let Term::SeqConcat(_, t) = self {
+            let SeqConcatTerm { seq1, seq2 } = *t;
+            let len1 = seq1.clone().tuple_proj(1);
+            let cond = index.clone().lt(len1.clone());
+            let then_ = seq1.tuple_proj(0).select(index.clone());
+            let else_ = seq2.tuple_proj(0).select(index.sub(len1));
             return Term::ite(cond, then_, else_);
         }
         Term::App(Function::SELECT, vec![self, index])

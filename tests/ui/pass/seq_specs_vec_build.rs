@@ -6,10 +6,10 @@ use thrust_models::model::Seq;
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    result.1 == Seq::empty().push(10).push(20).push(30).len()
-        && result.0[0] == Seq::empty().push(10).push(20).push(30)[0]
-        && result.0[1] == Seq::empty().push(10).push(20).push(30)[1]
-        && result.0[2] == Seq::empty().push(10).push(20).push(30)[2]
+    result.length == Seq::empty().push(10).push(20).push(30).len()
+        && result.array[0] == Seq::empty().push(10).push(20).push(30)[0]
+        && result.array[1] == Seq::empty().push(10).push(20).push(30)[1]
+        && result.array[2] == Seq::empty().push(10).push(20).push(30)[2]
 )]
 fn build_three() -> Vec<i64> {
     let mut v = Vec::new();

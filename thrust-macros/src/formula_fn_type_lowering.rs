@@ -192,6 +192,19 @@ impl<'a> FormulaFnTypeLowering<'a> {
                     .collect();
                 syn::Type::Tuple(tt)
             }
+            syn::Type::Path(tp) => {
+                let mut tp = tp.clone();
+                for segment in &mut tp.path.segments {
+                    if let syn::PathArguments::AngleBracketed(args) = &mut segment.arguments {
+                        for arg in &mut args.args {
+                            if let syn::GenericArgument::Type(elem) = arg {
+                                *elem = self.lower_closure_type_params_in_ty(elem);
+                            }
+                        }
+                    }
+                }
+                syn::Type::Path(tp)
+            }
             // TODO: support more types including ADT
             _ => ty.clone(),
         }

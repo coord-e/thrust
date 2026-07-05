@@ -219,8 +219,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         for (idx, param) in self.body.params.iter().enumerate() {
             let param_idx = rty::FunctionParamIdx::from(idx);
             let mir_ty = self.pat_ty(param.pat);
-            let ty = self.type_builder.build(mir_ty);
-            let term = if !self.is_fn_param_wrapper_ty(mir_ty) && ty.to_sort().is_singleton() {
+            // `at_entry()` yields the `Inner` of a `FnParam<Inner>`; classify by it so
+            // a singleton wrapped argument collapses like any other singleton below.
+            let repr_ty = self.fn_param_wrapper_inner_ty(mir_ty).unwrap_or(mir_ty);
+            let ty = self.type_builder.build(repr_ty);
+            let term = if ty.to_sort().is_singleton() {
                 // the analyzer don't expect params with singleton sorts to be used in formula...
                 // FIXME: fix the analyzer side to uniformly accept all params
                 Self::singleton_term_for_ty(&ty).unwrap()
@@ -265,9 +268,16 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
-    fn is_fn_param_wrapper_ty(&self, ty: mir_ty::Ty<'tcx>) -> bool {
-        ty.ty_adt_def()
-            .is_some_and(|def| Some(def.did()) == self.def_ids.fn_param_wrapper())
+    /// The `Inner` of a `thrust_models::FnParam<Inner>` wrapper type, if `ty` is one.
+    fn fn_param_wrapper_inner_ty(&self, ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
+        match ty.kind() {
+            mir_ty::TyKind::Adt(def, args)
+                if Some(def.did()) == self.def_ids.fn_param_wrapper() =>
+            {
+                Some(args.type_at(0))
+            }
+            _ => None,
+        }
     }
 
     fn build_env_from_pat(
@@ -724,6 +734,28 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 let terms = exprs.iter().map(|e| self.to_term(e)).collect();
                 FormulaOrTerm::Term(chc::Term::tuple(terms))
             }
+            ExprKind::Struct(_qpath, fields, tail) => {
+                if !matches!(tail, rustc_hir::StructTailExpr::None) {
+                    unimplemented!("struct update syntax is not supported in formulas");
+                }
+                let adt = self
+                    .expr_ty(hir)
+                    .ty_adt_def()
+                    .expect("struct literal on a non-ADT type");
+                let mut terms = Vec::new();
+                let variant = adt.non_enum_variant();
+                for variant_field in &variant.fields {
+                    let Some(field) = fields.iter().find(|f| f.ident.name == variant_field.name)
+                    else {
+                        self.tcx.dcx().span_fatal(
+                            hir.span,
+                            format!("missing field `{}` in struct literal", variant_field.name),
+                        );
+                    };
+                    terms.push(self.to_term(field.expr));
+                }
+                FormulaOrTerm::Term(chc::Term::tuple(terms))
+            }
             ExprKind::Field(expr, field) => {
                 // Tuples use numeric field names (`.0`); structs (represented as
                 // tuples in the logic) use named fields resolved to their position.
@@ -795,17 +827,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();
                         let t = self.to_term(receiver);
                         let other = self.to_term(&args[0]);
-                        let a_arr = t.clone().tuple_proj(0);
-                        let a_len = t.tuple_proj(1);
-                        let b_arr = other.clone().tuple_proj(0);
-                        let b_len = other.tuple_proj(1);
-                        let new_arr = chc::Term::array_concat(
-                            elem_sort,
-                            a_arr,
-                            a_len.clone(),
-                            b_arr,
-                            b_len.clone(),
-                        );
+                        let a_len = t.clone().tuple_proj(1);
+                        let b_len = other.clone().tuple_proj(1);
+                        let new_arr = chc::Term::seq_concat(elem_sort, t, other);
                         let new_len = a_len.add(b_len);
                         return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
                     }

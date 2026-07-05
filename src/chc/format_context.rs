@@ -47,7 +47,7 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
             }
         }
         chc::Term::ArrayEmpty(_, _) => {}
-        chc::Term::ArrayConcat(_, t) => {
+        chc::Term::SeqConcat(_, t) => {
             for arg in t.iter_args() {
                 term_sorts(clause, arg, sorts);
             }
@@ -282,7 +282,7 @@ impl FormatContext {
     pub fn from_system(system: &chc::System) -> Self {
         let type_params_reverse = system.type_params_reverse.clone();
         let resolver = |idx: chc::ForallSortIdx| type_params_reverse.get(&idx).map(|&i| i as usize);
-        let sorts = collect_sorts(system);
+        let mut sorts = collect_sorts(system);
         let mut datatypes = system.datatypes.clone();
         for sort in sorts.iter().flat_map(|s| s.as_datatype()) {
             if let Some(mono_datatype) = monomorphize_datatype(sort, &datatypes, &resolver) {
@@ -296,6 +296,14 @@ impl FormatContext {
                 _ => None,
             })
             .collect();
+        // The `seq_concat` definitions operate on `(array, length)` sequence tuples, so
+        // make sure that tuple datatype is declared for every element sort we emit one for
+        for elem in &int_array_elem_sorts {
+            sorts.insert(chc::Sort::tuple(vec![
+                chc::Sort::array(chc::Sort::int(), elem.clone()),
+                chc::Sort::int(),
+            ]));
+        }
         let datatypes: Vec<_> = sorts
             .into_iter()
             .flat_map(builtin_sort_datatype)
@@ -386,9 +394,9 @@ impl FormatContext {
         format_forall_pred_name(p)
     }
 
-    pub fn concat_int_array(&self, elem: &chc::Sort) -> impl std::fmt::Display {
+    pub fn seq_concat(&self, elem: &chc::Sort) -> impl std::fmt::Display {
         let elem = SortSymbol::new(elem);
-        format!("concat_int_array<{}>", elem)
+        format!("seq_concat<{}>", elem)
     }
 
     fn fmt_sort_impl(&self, sort: &chc::Sort) -> Box<dyn std::fmt::Display> {

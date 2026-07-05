@@ -459,7 +459,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .unwrap();
                 self.const_value_ty(&val, ty)
             }
-            _ => unimplemented!("const: {:?}", const_),
+            mir::Const::Ty(ty, _) => {
+                let scalar_int = const_
+                    .try_to_scalar_int()
+                    .expect("type-level const must be a primitive scalar");
+                let val = mir::ConstValue::Scalar(mir::interpret::Scalar::Int(scalar_int));
+                self.const_value_ty(&val, ty)
+            }
         }
     }
 
@@ -478,6 +484,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
+            Rvalue::CopyForDeref(place) => self.env.place_type(self.elaborate_place(&place)),
             Rvalue::UnaryOp(op, operand) => {
                 let operand_ty = self.operand_type(operand);
 
@@ -540,15 +547,41 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 builder.build(rty::PointerType::immut_to(ty).into(), chc::Term::box_(term))
             }
             Rvalue::Aggregate(kind, fields) => {
-                // elaboration: all fields are boxed
-                let field_tys: Vec<_> = fields
-                    .into_iter()
-                    .map(|operand| self.operand_type(operand).boxed())
-                    .collect();
                 match *kind {
+                    mir::AggregateKind::Array(mir_elem_ty) => {
+                        // Build Seq<T> = (Box<Array<Int,T>>, Box<Int>) from array literal elements,
+                        // pinning each element at its index via store folds.
+                        //
+                        // TODO: Stop embedding knowledge of `<[T; N] as Model>::Ty` in the analyzer
+                        let mut builder = PlaceTypeBuilder::default();
+                        let elem_ty = self.type_builder.build(mir_elem_ty).vacuous();
+                        let mut arr_term =
+                            chc::Term::array_empty(chc::Sort::int(), elem_ty.to_sort());
+                        for (i, field) in fields.iter().enumerate() {
+                            let pty = self.operand_type(field.clone());
+                            let (_, elem_term) = builder.subsume(pty);
+                            arr_term = arr_term.store(chc::Term::int(i as i64), elem_term);
+                        }
+                        let arr_pty = builder.build(
+                            rty::ArrayType::new(rty::Type::int(), elem_ty).into(),
+                            arr_term,
+                        );
+                        let size = fields.len();
+                        let size_pty = PlaceType::with_ty_and_term(
+                            rty::Type::int(),
+                            chc::Term::int(size as i64),
+                        );
+                        PlaceType::tuple(vec![arr_pty.boxed(), size_pty.boxed()])
+                    }
                     mir::AggregateKind::Adt(did, variant_idx, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
                     {
+                        // elaboration: all fields are boxed
+                        let field_tys: Vec<_> = fields
+                            .into_iter()
+                            .map(|operand| self.operand_type(operand).boxed())
+                            .collect();
+
                         let enum_def = self.ctx.get_or_register_enum_def(did);
                         let variant_def = &enum_def.variants[variant_idx];
                         let variant_rtys = variant_def
@@ -596,7 +629,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             ),
                         )
                     }
-                    _ => PlaceType::tuple(field_tys),
+                    mir::AggregateKind::Adt { .. }
+                    | mir::AggregateKind::Tuple
+                    | mir::AggregateKind::Closure { .. } => {
+                        // elaboration: all fields are boxed
+                        let field_tys: Vec<_> = fields
+                            .into_iter()
+                            .map(|operand| self.operand_type(operand).boxed())
+                            .collect();
+                        PlaceType::tuple(field_tys)
+                    }
+                    _ => unimplemented!("aggregate kind: {:?}", kind),
                 }
             }
             Rvalue::Cast(
@@ -612,6 +655,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!(),
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
+            }
+            Rvalue::Cast(
+                mir::CastKind::PointerCoercion(mir_ty::adjustment::PointerCoercion::Unsize, _),
+                operand,
+                ty,
+            ) => {
+                // Only treat unsizing as identity when both sides resolve to the same model.
+                let mut op_pty = self.operand_type(operand);
+                let expected_ty = self.type_builder.build(ty).vacuous();
+                if op_pty.ty.to_sort() != expected_ty.to_sort() {
+                    unimplemented!("unsize cast: {:?} -> {:?}", op_pty.ty, expected_ty);
+                }
+                op_pty.ty = expected_ty;
+                op_pty
             }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
@@ -1037,6 +1094,51 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         // definition
         assert!(lhs.projection.is_empty());
+
+        if let Rvalue::UnaryOp(mir::UnOp::PtrMetadata, operand) = rvalue {
+            // Calls to `[T]::len` have already been lowered to this assignment in optimized MIR:
+            //
+            //     _len = PtrMetadata(copy _slice);
+            //
+            let operand_mir_ty = operand.ty(&self.local_decls, self.tcx);
+            let mir_ty::TyKind::Ref(_, slice_ty, mutability) = operand_mir_ty.kind() else {
+                unimplemented!("PtrMetadata for {operand_mir_ty:?}")
+            };
+            let mir_ty::TyKind::Slice(elem_ty) = slice_ty.kind() else {
+                unimplemented!("PtrMetadata for {operand_mir_ty:?}")
+            };
+            let slice_len = self
+                .tcx
+                .lang_items()
+                .slice_len_fn()
+                .expect("slice len lang item is unavailable");
+            let args = self.tcx.mk_args(&[(*elem_ty).into()]);
+            let func = analyze::fn_operand(self.tcx, slice_len, args, rustc_span::DUMMY_SP);
+            let operand = if mutability.is_mut() {
+                let place = operand
+                    .place()
+                    .expect("mutable slice metadata operand must be a place");
+                let region = mir_ty::Region::new_from_kind(self.tcx, mir_ty::RegionKind::ReErased);
+                let ty = mir_ty::Ty::new_ref(self.tcx, region, *slice_ty, mir_ty::Mutability::Not);
+                let local = self
+                    .local_decls
+                    .push(mir::LocalDecl::new(ty, rustc_span::DUMMY_SP).immutable());
+                let rty = self.immut_borrow_place(self.tcx.mk_place_deref(place));
+                self.bind_local(local, rty);
+                Operand::Copy(local.into())
+            } else {
+                operand.clone()
+            };
+            let decl = self.local_decls[lhs.local].clone();
+            let rty = self
+                .type_builder
+                .for_template(&mut self.ctx)
+                .with_scope(&self.env)
+                .build_refined(decl.ty);
+            self.type_call(func, [operand], &rty);
+            self.bind_local(lhs.local, rty);
+            return;
+        }
 
         if let Rvalue::Ref(_, mir::BorrowKind::Mut { .. }, referent) = rvalue {
             // mutable borrow

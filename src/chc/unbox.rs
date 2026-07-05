@@ -2,23 +2,11 @@
 
 use super::*;
 
-fn unbox_array_concat_term(t: ArrayConcatTerm) -> ArrayConcatTerm {
-    let ArrayConcatTerm {
-        array1,
-        len1,
-        array2,
-        len2,
-    } = t;
-    let array1 = unbox_term(array1);
-    let len1 = unbox_term(len1);
-    let array2 = unbox_term(array2);
-    let len2 = unbox_term(len2);
-    ArrayConcatTerm {
-        array1,
-        len1,
-        array2,
-        len2,
-    }
+fn unbox_seq_concat_term(t: SeqConcatTerm) -> SeqConcatTerm {
+    let SeqConcatTerm { seq1, seq2 } = t;
+    let seq1 = unbox_term(seq1);
+    let seq2 = unbox_term(seq2);
+    SeqConcatTerm { seq1, seq2 }
 }
 
 fn unbox_term(term: Term) -> Term {
@@ -31,8 +19,8 @@ fn unbox_term(term: Term) -> Term {
         Term::MutFinal(t) => Term::MutFinal(Box::new(unbox_term(*t))),
         Term::App(fun, args) => Term::App(fun, args.into_iter().map(unbox_term).collect()),
         Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(unbox_sort(s1), unbox_sort(s2)),
-        Term::ArrayConcat(s, t) => {
-            Term::ArrayConcat(unbox_sort(s), Box::new(unbox_array_concat_term(*t)))
+        Term::SeqConcat(s, t) => {
+            Term::SeqConcat(unbox_sort(s), Box::new(unbox_seq_concat_term(*t)))
         }
         Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(unbox_term).collect()),
         Term::TupleProj(t, i) => Term::TupleProj(Box::new(unbox_term(*t)), i),

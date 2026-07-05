@@ -171,8 +171,8 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, &default)
                 )
             }
-            chc::Term::ArrayConcat(elem, t) => {
-                let name = self.ctx.concat_int_array(elem);
+            chc::Term::SeqConcat(elem, t) => {
+                let name = self.ctx.seq_concat(elem);
                 write!(
                     f,
                     "({} {})",
@@ -712,17 +712,26 @@ impl<'a> std::fmt::Display for System<'a> {
         }
 
         for elem in self.ctx.int_array_elem_sorts() {
-            let name = self.ctx.concat_int_array(elem);
+            let name = self.ctx.seq_concat(elem);
             let elem_ty = self.ctx.fmt_sort(elem);
+            // The sequences are passed as `(array, length)` tuples
+            let seq_fields = [
+                chc::Sort::array(chc::Sort::int(), elem.clone()),
+                chc::Sort::int(),
+            ];
+            let seq_ty = self.ctx.fmt_sort(&chc::Sort::tuple(seq_fields.to_vec()));
+            let ctor = self.ctx.tuple_ctor(&seq_fields);
+            let array = self.ctx.tuple_proj(&seq_fields, 0);
+            let len = self.ctx.tuple_proj(&seq_fields, 1);
             writeln!(
                 f,
                 "(define-fun-rec {name} \
-                  ((sa (Array Int {elem_ty})) (sn Int) (ta (Array Int {elem_ty})) (tn Int)) \
+                  ((s {seq_ty}) (t {seq_ty})) \
                   (Array Int {elem_ty}) \
-                  (ite (<= tn 0) sa \
-                       (store ({name} sa sn ta (- tn 1)) \
-                              (+ sn (- tn 1)) \
-                              (select ta (- tn 1)))))\n",
+                  (ite (<= ({len} t) 0) ({array} s) \
+                       (store ({name} s ({ctor} ({array} t) (- ({len} t) 1))) \
+                              (+ ({len} s) (- ({len} t) 1)) \
+                              (select ({array} t) (- ({len} t) 1)))))\n",
             )?;
         }
 

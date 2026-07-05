@@ -753,13 +753,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
 
             fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, location: mir::Location) {
-                if let mir::Operand::Move(place) = operand {
-                    // to be reborrowed; see analyze::basic_block::visitor
-                    if place
-                        .ty(&self.body.local_decls, self.tcx)
-                        .ty
-                        .is_mutable_ptr()
-                    {
+                // to be reborrowed; see analyze::basic_block::visitor. A `&mut`
+                // field read out of an aggregate is `copy (_1.0)`, so match Copy
+                // too to mark the base local. Reference only: `is_mutable_ptr()`
+                // also covers `*mut`, which is Copy but never reborrowed.
+                if let mir::Operand::Move(place) | mir::Operand::Copy(place) = operand {
+                    if matches!(
+                        place.ty(&self.body.local_decls, self.tcx).ty.kind(),
+                        mir_ty::TyKind::Ref(_, _, m) if m.is_mut()
+                    ) {
                         self.locals.insert(place.local);
                     }
                 }
@@ -1461,6 +1463,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let _guard = span.enter();
 
         self.unelaborate_derefs();
+        analyze::reconstruct_slice_indexing::reconstruct(self.tcx, &mut self.body);
         self.reassign_local_mutabilities();
         self.refine_basic_blocks();
         self.analyze_basic_blocks(expected);
