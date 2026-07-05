@@ -94,6 +94,7 @@ impl<'a> std::fmt::Display for SortSymbol<'a> {
                 write!(f, "Array{}", SortSymbols::new(&[*s1.clone(), *s2.clone()]))
             }
             chc::Sort::Datatype(s) => write!(f, "{}{}", s.symbol, SortSymbols::new(&s.args)),
+            chc::Sort::Forall(i) => write!(f, "{}", i),
         }
     }
 }
@@ -138,6 +139,15 @@ impl<'a> SortSymbols<'a> {
     pub fn new(inner: &'a [chc::Sort]) -> Self {
         Self { inner }
     }
+}
+
+/// SMT-LIB2 representation of a [`chc::ForallPred`]'s identifier as it appears
+/// in atoms (e.g. `q_completed_8cab…<a0>`). Used by the SMT emitter and by
+/// [`chc::System::populate_user_defined_pred_dependencies`] to substring-match
+/// `ForallPred` references inside user-defined predicate bodies.
+pub fn format_forall_pred_name(p: &chc::ForallPred) -> String {
+    let ss = SortSymbols::new(&p.type_parameters);
+    format!("{}{}", p.inner, ss)
 }
 
 fn builtin_sort_datatype(s: chc::Sort) -> Option<chc::Datatype> {
@@ -234,6 +244,7 @@ fn collect_sorts(system: &chc::System) -> BTreeSet<chc::Sort> {
 fn monomorphize_datatype(
     sort: &chc::DatatypeSort,
     datatypes: &[chc::Datatype],
+    forall_sort_resolver: &impl Fn(chc::ForallSortIdx) -> Option<usize>,
 ) -> Option<chc::Datatype> {
     let datatype = datatypes.iter().find(|d| d.symbol == sort.symbol).unwrap();
     if datatype.params == 0 {
@@ -253,7 +264,7 @@ fn monomorphize_datatype(
                     .iter()
                     .map(|s| {
                         let mut sel_sort = s.sort.clone();
-                        sel_sort.instantiate_params(&sort.args);
+                        sel_sort.instantiate_params(&sort.args, forall_sort_resolver);
                         chc::DatatypeSelector {
                             symbol: chc::DatatypeSymbol::new(format!("{}{}", s.symbol, ss)),
                             sort: sel_sort,
@@ -269,10 +280,12 @@ fn monomorphize_datatype(
 
 impl FormatContext {
     pub fn from_system(system: &chc::System) -> Self {
+        let type_params_reverse = system.type_params_reverse.clone();
+        let resolver = |idx: chc::ForallSortIdx| type_params_reverse.get(&idx).map(|&i| i as usize);
         let mut sorts = collect_sorts(system);
         let mut datatypes = system.datatypes.clone();
         for sort in sorts.iter().flat_map(|s| s.as_datatype()) {
-            if let Some(mono_datatype) = monomorphize_datatype(sort, &datatypes) {
+            if let Some(mono_datatype) = monomorphize_datatype(sort, &datatypes, &resolver) {
                 datatypes.push(mono_datatype);
             }
         }
@@ -375,6 +388,10 @@ impl FormatContext {
 
     pub fn matcher_pred_def(&self, sym: &chc::DatatypeSymbol) -> impl std::fmt::Display {
         format!("matcher_pred<{}>", self.fmt_datatype_symbol(sym))
+    }
+
+    pub fn forall_pred(&self, p: &chc::ForallPred) -> impl std::fmt::Display {
+        format_forall_pred_name(p)
     }
 
     pub fn seq_concat(&self, elem: &chc::Sort) -> impl std::fmt::Display {

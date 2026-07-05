@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 
 use pretty::{termcolor, Pretty};
-use rustc_hir::{def_id::LocalDefId, HirId};
+use rustc_hir::{
+    def_id::{DefId, LocalDefId},
+    HirId,
+};
 use rustc_index::IndexVec;
-use rustc_middle::ty::{self as mir_ty, TyCtxt};
+use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeFoldable};
 
 use crate::analyze::{self, did_cache::DefIdCache};
 use crate::annot::AnnotFormula;
-use crate::chc;
+use crate::chc::{self};
 use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
@@ -178,12 +181,20 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         analyzer: &'a analyze::Analyzer<'tcx>,
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
     ) -> Self {
         let tcx = analyzer.tcx();
         let body = tcx.hir_body_owned_by(local_def_id);
         let typeck = tcx.typeck(local_def_id);
         let def_ids = analyzer.def_ids();
-        let type_builder = TypeBuilder::new(tcx, def_ids.clone(), local_def_id.to_def_id());
+        let type_builder = TypeBuilder::new(
+            tcx,
+            def_ids.clone(),
+            owner_fn_id,
+            analyzer.type_params.clone(),
+            analyzer.closure_type_params.clone(),
+            analyzer.system.clone(),
+        );
         let mut translator = Self {
             tcx,
             local_def_id,
@@ -201,11 +212,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
     pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>) -> Self {
         self.def_ids = def_ids;
-        self.type_builder = TypeBuilder::new(
-            self.tcx,
-            self.def_ids.clone(),
-            self.local_def_id.to_def_id(),
-        );
         self
     }
 
@@ -295,29 +301,52 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
+    fn instantiate_generics<T>(
+        &self,
+        ty: T,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Option<T>
+    where
+        T: TypeFoldable<TyCtxt<'tcx>>,
+    {
+        if !self.generic_args.is_empty() {
+            Some(mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, generic_args))
+        } else {
+            None
+        }
+    }
+
     fn expr_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.expr_ty(expr);
-        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
+        let instantiated = self
+            .instantiate_generics(ty, self.generic_args)
+            .unwrap_or(ty);
         let typing_env = mir_ty::TypingEnv::fully_monomorphized();
-        self.tcx.normalize_erasing_regions(typing_env, instantiated)
+        self.tcx
+            .try_normalize_erasing_regions(typing_env, instantiated)
+            .unwrap_or(instantiated)
     }
 
     fn pat_ty(&self, pat: &'tcx rustc_hir::Pat<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.pat_ty(pat);
-        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
+        let instantiated = self
+            .instantiate_generics(ty, self.generic_args)
+            .unwrap_or(ty);
         let typing_env = mir_ty::TypingEnv::fully_monomorphized();
-        self.tcx.normalize_erasing_regions(typing_env, instantiated)
+        self.tcx
+            .try_normalize_erasing_regions(typing_env, instantiated)
+            .unwrap_or(instantiated)
     }
 
     pub fn to_formula_fn(&self) -> FormulaFn<'tcx> {
         let formula = self.to_formula(self.body.value);
-        let params = self
-            .tcx
-            .fn_sig(self.local_def_id.to_def_id())
-            .instantiate(self.tcx, self.generic_args)
-            .skip_binder()
-            .inputs()
-            .to_vec();
+        let fn_sig = self.tcx.fn_sig(self.local_def_id.to_def_id());
+        let binder = if self.generic_args.is_empty() {
+            fn_sig.skip_binder()
+        } else {
+            fn_sig.instantiate(self.tcx, self.generic_args)
+        };
+        let params = binder.skip_binder().inputs().to_vec();
         FormulaFn {
             params: IndexVec::from_raw(params),
             formula,
@@ -359,10 +388,38 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     fn receiver_closure_fn_type(&self, receiver_ty: mir_ty::Ty<'tcx>) -> Option<rty::FunctionType> {
         let closure_ty = self.receiver_closure_ty(receiver_ty)?;
         let mir_ty::TyKind::Closure(def_id, args) = closure_ty.kind() else {
+            if let mir_ty::TyKind::Param(ty) = closure_ty.kind() {
+                tracing::debug!("ParamTy is found: {ty:?}");
+                let closure_fun_ty = self.type_builder.build_closure_type_for_param(
+                    *ty,
+                    self.local_def_id,
+                    self.generic_args,
+                );
+                tracing::debug!(
+                    "the obtained FunctionType for the closure {ty:?}: {closure_fun_ty:#?}"
+                );
+                if let Some(closure_fun_ty) = closure_fun_ty.clone() {
+                    self.type_builder.register_closure_type_param(
+                        analyze::TypeParam::GenericType {
+                            param_def_id: self.type_builder.param_def_id(ty),
+                            local_idx: self.type_builder.param_local_idx(ty),
+                        },
+                        closure_fun_ty,
+                    );
+                };
+                return closure_fun_ty;
+            }
             return None;
         };
         self.analyzer
             .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
+    }
+
+    fn register_forall_pred(&self, forall_pred: chc::ForallPred) {
+        self.analyzer
+            .system
+            .borrow_mut()
+            .register_forall_pred(forall_pred.clone());
     }
 
     /// Extracts the logical argument terms passed to `closure_precondition`/
@@ -375,6 +432,48 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         match arg.kind {
             rustc_hir::ExprKind::Tup(elems) => elems.iter().map(|e| self.to_term(e)).collect(),
             _ => vec![self.to_term(arg)],
+        }
+    }
+
+    /// Wraps a closure receiver term to match the closure's "self" type.
+    ///
+    /// For `FnOnce` the receiver is the closure value itself, so the term is returned
+    /// unchanged. For `Fn` the receiver is `&T` (sort `Box<T>`), and for `FnMut` it is
+    /// `&mut T` (sort `Mut<T>`); the term is wrapped accordingly so that it matches
+    /// the sort expected by the registered pre/post forall predicates.
+    ///
+    /// `Box` sorts are stripped by the `unbox` pass (`src/chc/unbox.rs`) before the
+    /// CHC reaches the solver, so this function does not need a special case for
+    /// `model::Box<T>` receivers. For `model::Mut<T>` (constructed by `Mut::new(..)`
+    /// in the annotation) the term is returned as-is, since its sort already matches
+    /// the env expected by the forall predicate; wrapping it again would produce a
+    /// `Mut<Mut<T>>` value and cause a sort mismatch at the call site.
+    fn wrap_closure_receiver(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+        receiver_ty: mir_ty::Ty<'tcx>,
+        fn_ty: &rty::FunctionType,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        let receiver_term = self.to_term(receiver);
+
+        if let mir_ty::TyKind::Adt(adt, _) = receiver_ty.kind() {
+            if Some(adt.did()) == self.def_ids.mut_model() {
+                return receiver_term;
+            }
+        }
+
+        let first_param = &fn_ty.params[rty::FunctionParamIdx::from_usize(0)];
+        match first_param.ty.as_pointer() {
+            Some(p) if p.is_mut() => chc::Term::mut_(receiver_term.clone(), receiver_term),
+            Some(p)
+                if matches!(
+                    p.kind,
+                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut)
+                ) =>
+            {
+                chc::Term::box_(receiver_term)
+            }
+            _ => receiver_term,
         }
     }
 
@@ -403,9 +502,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure precondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.to_term(receiver))
-            .chain(logical_args)
-            .collect();
+        let param_args: Vec<_> =
+            std::iter::once(self.wrap_closure_receiver(receiver, receiver_ty, &fn_ty))
+                .chain(logical_args)
+                .collect();
         FormulaOrTerm::Formula(fn_ty.precondition_formula(&param_args))
     }
 
@@ -433,17 +533,20 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure postcondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.to_term(receiver))
-            .chain(logical_args)
-            .collect();
+        let param_args: Vec<_> =
+            std::iter::once(self.wrap_closure_receiver(receiver, receiver_ty, &fn_ty))
+                .chain(logical_args)
+                .collect();
         let result = self.to_term(result);
         FormulaOrTerm::Formula(fn_ty.postcondition_formula(&param_args, result))
     }
 
     fn node_arg_type_at(&self, hir_id: HirId, idx: usize) -> rty::Type<rty::Closed> {
-        let generic_args = self.typeck.node_args(hir_id);
-        let generic_args =
-            mir_ty::EarlyBinder::bind(generic_args).instantiate(self.tcx, self.generic_args);
+        let mut generic_args = self.typeck.node_args(hir_id);
+        if !self.generic_args.is_empty() {
+            generic_args =
+                mir_ty::EarlyBinder::bind(generic_args).instantiate(self.tcx, self.generic_args);
+        }
         let elem_ty = generic_args.type_at(idx);
         self.type_builder.build(elem_ty)
     }
@@ -845,7 +948,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             .next()
                             .is_some()
                         {
-                            let typing_env = mir_ty::TypingEnv::fully_monomorphized();
+                            let typing_env = mir_ty::TypingEnv::post_analysis(
+                                self.tcx,
+                                self.type_builder.owner_fn_id(),
+                            );
                             let generic_args = self.typeck.node_args(func_expr.hir_id);
                             tracing::debug!(
                                 lhs = ?def_id,
@@ -854,8 +960,12 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 outer_generic_args = ?self.generic_args,
                                 "resolving predicate call in formula"
                             );
-                            let generic_args = mir_ty::EarlyBinder::bind(generic_args)
-                                .instantiate(self.tcx, self.generic_args);
+                            let (mut is_unresolved_args, generic_args) =
+                                match self.instantiate_generics(generic_args, self.generic_args) {
+                                    Some(args) => (false, args),
+                                    None => (true, generic_args),
+                                };
+
                             let instance = mir_ty::Instance::try_resolve(
                                 self.tcx,
                                 typing_env,
@@ -866,11 +976,38 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             let pred_def_id = if let Some(instance) = instance {
                                 instance.def_id()
                             } else {
+                                is_unresolved_args = true;
                                 def_id
                             };
-                            let pred = refine::user_defined_pred(self.tcx, pred_def_id);
+
+                            let pred = if is_unresolved_args {
+                                tracing::debug!(?self.local_def_id, ?generic_args, "owner_fn_id={:?}", self.type_builder.owner_fn_id());
+                                let type_params = generic_args
+                                    .types()
+                                    .map(|ty| self.type_builder.build(ty).to_sort())
+                                    .collect();
+
+                                let params = args
+                                    .iter()
+                                    .map(|expr| {
+                                        self.type_builder.build(self.expr_ty(expr)).to_sort()
+                                    })
+                                    .collect();
+
+                                let pred = refine::trait_forall_pred(
+                                    self.tcx,
+                                    pred_def_id,
+                                    type_params,
+                                    params,
+                                );
+                                self.register_forall_pred(pred.clone());
+                                pred.into()
+                            } else {
+                                refine::user_defined_pred(self.tcx, pred_def_id).into()
+                            };
+                            tracing::debug!("resolved predicate call in formula: {:?}", pred);
                             let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
-                            let atom = chc::Atom::new(pred.into(), arg_terms);
+                            let atom = chc::Atom::new(pred, arg_terms);
                             return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
                         }
                     }

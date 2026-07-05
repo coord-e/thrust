@@ -36,6 +36,82 @@ fn stmt_str_literal(stmt: &rustc_hir::Stmt) -> Option<String> {
     }
 }
 
+fn is_annotated_as_extern_spec_fn_impl(tcx: &TyCtxt, local_def_id: &LocalDefId) -> bool {
+    tcx.get_attrs_by_path(
+        local_def_id.to_def_id(),
+        &analyze::annot::extern_spec_fn_path(),
+    )
+    .next()
+    .is_some()
+}
+
+/// Extract the target DefId from `#[thrust::extern_spec_fn]` function.
+///
+/// The target is identified as the tail call expression (last expression without
+/// semicolon) in the function body block.
+fn extern_spec_fn_target_def_id_impl<'tcx>(
+    tcx: &TyCtxt<'tcx>,
+    local_def_id: &LocalDefId,
+    mir_body: &Body<'tcx>,
+) -> DefId {
+    let hir_node = tcx.hir_node_by_def_id(*local_def_id);
+    let hir_body_id = match hir_node {
+        rustc_hir::Node::Item(item) => {
+            let rustc_hir::ItemKind::Fn { body: body_id, .. } = item.kind else {
+                panic!("extern_spec_fn must be a function");
+            };
+            body_id
+        }
+        rustc_hir::Node::ImplItem(impl_item) => {
+            let rustc_hir::ImplItemKind::Fn(_, body_id) = impl_item.kind else {
+                panic!("extern_spec_fn must be a function");
+            };
+            body_id
+        }
+        rustc_hir::Node::TraitItem(trait_item) => {
+            let rustc_hir::TraitItemKind::Fn(_, rustc_hir::TraitFn::Provided(body_id)) =
+                trait_item.kind
+            else {
+                panic!("extern_spec_fn must be a function with a body");
+            };
+            body_id
+        }
+        _ => panic!("extern_spec_fn must be a function item or impl item"),
+    };
+
+    let hir_body = tcx.hir_body(hir_body_id);
+
+    // The body is a block; the tail expression is the function call to the target.
+    let rustc_hir::ExprKind::Block(block, _) = &hir_body.value.kind else {
+        panic!("extern_spec_fn body must be a block");
+    };
+    let tail_expr = block
+        .expr
+        .expect("extern_spec_fn block must end with a tail call expression");
+
+    let rustc_hir::ExprKind::Call(func_expr, _) = &tail_expr.kind else {
+        panic!("extern_spec_fn tail expression must be a function call");
+    };
+    let rustc_hir::ExprKind::Path(qpath) = &func_expr.kind else {
+        panic!("extern_spec_fn call must be a path expression");
+    };
+
+    let typeck_result = tcx.typeck(local_def_id);
+    let hir_id = func_expr.hir_id;
+    let rustc_hir::def::Res::Def(_, def_id) = typeck_result.qpath_res(qpath, hir_id) else {
+        panic!("extern_spec_fn call must resolve to a definition");
+    };
+
+    let args = typeck_result.node_args(hir_id);
+    let typing_env = mir_body.typing_env(*tcx);
+    let instance = mir_ty::Instance::try_resolve(*tcx, typing_env, def_id, args).unwrap();
+    if let Some(instance) = instance {
+        instance.def_id()
+    } else {
+        def_id
+    }
+}
+
 /// An implementation of the typing of local definitions.
 ///
 /// The current implementation only applies to function definitions. The entry point is
@@ -45,6 +121,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
 
     local_def_id: LocalDefId,
+    pub owner_fn_id: DefId,
 
     body: Body<'tcx>,
     /// to substitute HIR types during translation in [`crate::analyze::annot_fn`]
@@ -200,13 +277,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     pub fn is_annotated_as_extern_spec_fn(&self) -> bool {
-        self.tcx
-            .get_attrs_by_path(
-                self.local_def_id.to_def_id(),
-                &analyze::annot::extern_spec_fn_path(),
-            )
-            .next()
-            .is_some()
+        is_annotated_as_extern_spec_fn_impl(&self.tcx, &self.local_def_id)
     }
 
     pub fn is_annotated_as_predicate(&self) -> bool {
@@ -317,7 +388,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .associated_item(self.local_def_id.to_def_id())
             .trait_item_def_id
             .unwrap();
-        self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
+        self.ctx
+            .def_ty_with_args(trait_item_did, trait_ref.args, impl_did)
     }
 
     // TODO: Remove this eager precompute together with
@@ -325,11 +397,41 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     // `def_ty_with_args` directly.
     fn precompute_callable_param_contracts(&mut self, sig: &mir_ty::FnSig<'tcx>) {
         for input_ty in sig.inputs() {
-            let inst =
-                mir_ty::EarlyBinder::bind(*input_ty).instantiate(self.tcx, self.generic_args);
             let inst = self
                 .tcx
-                .normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), inst);
+                .try_normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), *input_ty)
+                .unwrap_or(*input_ty);
+
+            // Eagerly register closure type parameters (e.g. `F: Fn(...)` declared on
+            // this function) so that basic-block analysis can look up the contract
+            // when it later sees `<F as Fn<...>>::call(...)`.
+            let param_ty = match inst.kind() {
+                mir_ty::TyKind::Param(p) => Some(*p),
+                mir_ty::TyKind::Ref(_, inner, _) => {
+                    if let mir_ty::TyKind::Param(p) = inner.kind() {
+                        Some(*p)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(param_ty) = param_ty {
+                if let Some(fun_ty) = self.type_builder.build_closure_type_for_param(
+                    param_ty,
+                    self.local_def_id,
+                    self.tcx.mk_args(&[]),
+                ) {
+                    self.type_builder.register_closure_type_param(
+                        analyze::TypeParam::GenericType {
+                            param_def_id: self.type_builder.param_def_id(&param_ty),
+                            local_idx: self.type_builder.param_local_idx(&param_ty),
+                        },
+                        fun_ty,
+                    );
+                }
+            }
+
             let (fn_def_id, fn_args) = match inst.kind() {
                 mir_ty::TyKind::Closure(def_id, args) => {
                     (*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
@@ -340,7 +442,58 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if fn_def_id == self.local_def_id.to_def_id() {
                 continue;
             }
-            let _ = self.ctx.def_ty_with_args(fn_def_id, fn_args);
+            let _ = self
+                .ctx
+                .def_ty_with_args(fn_def_id, fn_args, self.owner_fn_id);
+        }
+
+        let parent_def_id = self.tcx.parent(self.local_def_id.to_def_id());
+        if matches!(
+            self.tcx.def_kind(parent_def_id),
+            rustc_hir::def::DefKind::Impl { .. }
+        ) {
+            if let Some(impl_local_def_id) = parent_def_id.as_local() {
+                self.precompute_impl_closure_type_params(impl_local_def_id);
+            }
+        }
+    }
+
+    /// Walks `impl_local_def_id`'s `predicates_of` and registers any
+    /// `Fn`/`FnMut`/`FnOnce` type parameters declared on the impl.
+    fn precompute_impl_closure_type_params(&mut self, impl_local_def_id: LocalDefId) {
+        for (clause, _) in self
+            .tcx
+            .predicates_of(impl_local_def_id.to_def_id())
+            .predicates
+            .iter()
+        {
+            let Some(trait_clause) = clause.as_trait_clause() else {
+                continue;
+            };
+            let trait_ref = trait_clause.skip_binder();
+            if self
+                .tcx
+                .fn_trait_kind_from_def_id(trait_ref.def_id())
+                .is_none()
+            {
+                continue;
+            }
+            let mir_ty::TyKind::Param(p) = trait_ref.self_ty().kind() else {
+                continue;
+            };
+            if let Some(fun_ty) = self.type_builder.build_closure_type_for_param(
+                *p,
+                impl_local_def_id,
+                self.tcx.mk_args(&[]),
+            ) {
+                self.type_builder.register_closure_type_param(
+                    analyze::TypeParam::GenericType {
+                        param_def_id: self.type_builder.param_def_id(p),
+                        local_idx: self.type_builder.param_local_idx(p),
+                    },
+                    fun_ty,
+                );
+            }
         }
     }
 
@@ -386,6 +539,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             &param_resolver,
             self_type_name.clone(),
             self.generic_args,
+            self.owner_fn_id,
         );
 
         let mut ensure_annot = self.ctx.extract_ensure_annot(
@@ -393,6 +547,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             &result_param_resolver,
             self_type_name.clone(),
             self.generic_args,
+            self.owner_fn_id,
         );
 
         if let Some(trait_item_id) = self.local_trait_item_id() {
@@ -402,12 +557,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 &param_resolver,
                 self_type_name.clone(),
                 self.generic_args,
+                self.owner_fn_id,
             );
             let trait_ensure_annot = self.ctx.extract_ensure_annot(
                 trait_item_id,
                 &result_param_resolver,
                 self_type_name.clone(),
                 self.generic_args,
+                self.owner_fn_id,
             );
 
             assert!(require_annot.is_none() || trait_require_annot.is_none());
@@ -435,9 +592,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         assert!(require_annot.is_none() || param_annots.is_empty());
         assert!(ensure_annot.is_none() || ret_annot.is_none());
 
-        let refinement_annots = self
-            .ctx
-            .extract_refinement_annots(self.local_def_id, self.generic_args);
+        let refinement_annots = self.ctx.extract_refinement_annots(
+            self.local_def_id,
+            self.generic_args,
+            self.owner_fn_id,
+        );
 
         let trait_item_ty = self.trait_item_ty();
         let is_fully_annotated = self.is_fully_annotated();
@@ -482,62 +641,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     /// The target is identified as the tail call expression (last expression without
     /// semicolon) in the function body block.
     pub fn extern_spec_fn_target_def_id(&self) -> DefId {
-        let node = self.tcx.hir_node_by_def_id(self.local_def_id);
-        let body_id = match node {
-            rustc_hir::Node::Item(item) => {
-                let rustc_hir::ItemKind::Fn { body: body_id, .. } = item.kind else {
-                    panic!("extern_spec_fn must be a function");
-                };
-                body_id
-            }
-            rustc_hir::Node::ImplItem(impl_item) => {
-                let rustc_hir::ImplItemKind::Fn(_, body_id) = impl_item.kind else {
-                    panic!("extern_spec_fn must be a function");
-                };
-                body_id
-            }
-            rustc_hir::Node::TraitItem(trait_item) => {
-                let rustc_hir::TraitItemKind::Fn(_, rustc_hir::TraitFn::Provided(body_id)) =
-                    trait_item.kind
-                else {
-                    panic!("extern_spec_fn must be a function with a body");
-                };
-                body_id
-            }
-            _ => panic!("extern_spec_fn must be a function item or impl item"),
-        };
-
-        let body = self.tcx.hir_body(body_id);
-
-        // The body is a block; the tail expression is the function call to the target.
-        let rustc_hir::ExprKind::Block(block, _) = &body.value.kind else {
-            panic!("extern_spec_fn body must be a block");
-        };
-        let tail_expr = block
-            .expr
-            .expect("extern_spec_fn block must end with a tail call expression");
-
-        let rustc_hir::ExprKind::Call(func_expr, _) = &tail_expr.kind else {
-            panic!("extern_spec_fn tail expression must be a function call");
-        };
-        let rustc_hir::ExprKind::Path(qpath) = &func_expr.kind else {
-            panic!("extern_spec_fn call must be a path expression");
-        };
-
-        let typeck_result = self.tcx.typeck(self.local_def_id);
-        let hir_id = func_expr.hir_id;
-        let rustc_hir::def::Res::Def(_, def_id) = typeck_result.qpath_res(qpath, hir_id) else {
-            panic!("extern_spec_fn call must resolve to a definition");
-        };
-
-        let args = typeck_result.node_args(hir_id);
-        let typing_env = self.body.typing_env(self.tcx);
-        let instance = mir_ty::Instance::try_resolve(self.tcx, typing_env, def_id, args).unwrap();
-        if let Some(instance) = instance {
-            instance.def_id()
-        } else {
-            def_id
-        }
+        extern_spec_fn_target_def_id_impl(&self.tcx, &self.local_def_id, &self.body)
     }
 
     fn is_mut_param(&self, param_idx: rty::FunctionParamIdx) -> bool {
@@ -941,18 +1045,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn local_of_name_in_bb(&self, name: rustc_span::Symbol, bty: &BasicBlockType) -> Option<Local> {
         let mut found: Option<Local> = None;
         for vdi in &self.body.var_debug_info {
+            tracing::debug!("comparing {name:?} with {vdi:?}...");
             if vdi.name != name {
+                tracing::debug!("different name, skip.");
                 continue;
             }
             let mir::VarDebugInfoContents::Place(place) = vdi.value else {
+                tracing::debug!("place, skip.");
                 continue;
             };
             if !place.projection.is_empty() {
+                tracing::debug!("empty projection, skip.");
                 continue;
             }
             if bty.param_of_local(place.local).is_none() {
+                tracing::debug!("not param of local, skip.");
                 continue;
             }
+            tracing::debug!("found.");
             match found {
                 None => found = Some(place.local),
                 Some(prev) if prev == place.local => {}
@@ -969,19 +1079,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn function_param_local_of_name(&self, name: rustc_span::Symbol) -> Option<Local> {
         let mut found: Option<Local> = None;
         for vdi in &self.body.var_debug_info {
+            tracing::debug!("comparing {name:?} with {vdi:?}...");
             if vdi.name != name {
+                tracing::debug!("different name, skip.");
                 continue;
             }
             let mir::VarDebugInfoContents::Place(place) = vdi.value else {
+                tracing::debug!("place, skip.");
                 continue;
             };
             if !place.projection.is_empty() {
+                tracing::debug!("empty projection, skip.");
                 continue;
             }
             let local = place.local;
             if local.index() == 0 || local.index() > self.body.arg_count {
+                tracing::debug!("not param of local, skip.");
                 continue;
             }
+            tracing::debug!("found.");
             match found {
                 None => found = Some(local),
                 Some(prev) if prev == local => {}
@@ -989,6 +1105,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
         found
+    }
+
+    fn expand_model_projection(&self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        if let mir_ty::Alias(mir_ty::AliasTyKind::Projection, ty) = ty.kind() {
+            if let Some(model_ty_def_id) = self.ctx.def_ids.model_ty() {
+                let arg_ty = ty.args.type_at(0);
+
+                if ty.def_id == model_ty_def_id {
+                    return arg_ty;
+                }
+            }
+        }
+        ty
     }
 
     /// Translates a user-provided loop invariant (a formula function over named
@@ -1003,7 +1132,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) -> rty::Refinement<rty::FunctionParamIdx> {
         let formula_fn = self
             .ctx
-            .formula_fn_with_args(formula_def_id, generic_args)
+            .formula_fn_with_args(formula_def_id, generic_args, self.owner_fn_id)
             .expect("invariant formula function is not registered");
         let idents = self.tcx.fn_arg_idents(formula_def_id.to_def_id());
         let sig = self
@@ -1022,6 +1151,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .unwrap_or(*input_ty)
             };
 
+            let input_ty = self.expand_model_projection(input_ty);
+            tracing::debug!(?ident_opt, ?input_ty, "resolving");
+
             // The synthetic `__thrust_self` parameter (emitted when an invariant refers to the receiver
             // `self`) maps to the loop-carried receiver, which appears as `self` in debug info.
             let name = if name.as_str() == "__thrust_self" {
@@ -1029,11 +1161,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             } else {
                 name
             };
-
+            tracing::debug!("{:?}", input_ty.ty_adt_def());
             if input_ty
                 .ty_adt_def()
                 .is_some_and(|def| Some(def.did()) == self.ctx.def_ids().fn_param_wrapper())
             {
+                tracing::debug!("fn_param_local: {input_ty:?}");
                 let local = self.function_param_local_of_name(name).unwrap_or_else(|| {
                     self.tcx.dcx().fatal(format!(
                         "loop invariant refers to `{name}` via FnParam, but it is not a function parameter"
@@ -1042,6 +1175,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let param_idx = crate::analyze::function_param_of_local(local);
                 mapping.push(bty.param_of_outer_fn_param(param_idx).unwrap());
             } else {
+                tracing::debug!("local: {input_ty:?}");
                 let local = self.local_of_name_in_bb(name, bty).unwrap_or_else(|| {
                     self.tcx.dcx().fatal(format!(
                         "loop invariant refers to `{name}`, which is not a live variable at the loop header"
@@ -1155,7 +1289,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .clone();
             let drop_points = self.drop_points[&bb].clone();
             self.ctx
-                .basic_block_analyzer(self.local_def_id, bb)
+                .basic_block_analyzer(self.local_def_id, bb, self.owner_fn_id)
                 .body(self.body.clone())
                 .drop_points(drop_points)
                 .run(&rty, expected_fn_ty);
@@ -1283,12 +1417,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let body = tcx.optimized_mir(local_def_id.to_def_id()).clone();
         let drop_points = Default::default();
-        let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
+        let owner_fn_id = if is_annotated_as_extern_spec_fn_impl(&tcx, &local_def_id) {
+            extern_spec_fn_target_def_id_impl(&tcx, &local_def_id, &body)
+        } else {
+            local_def_id.to_def_id()
+        };
+        let type_builder = ctx.type_builder(ctx.def_ids(), owner_fn_id);
         let generic_args = tcx.mk_args(&[]);
         Self {
             ctx,
             tcx,
             local_def_id,
+            owner_fn_id,
             body,
             generic_args,
             drop_points,
@@ -1298,6 +1438,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     pub fn local_def_id(&self) -> LocalDefId {
         self.local_def_id
+    }
+
+    pub fn owner_fn_id(&mut self, owner_fn_id: DefId) -> &mut Self {
+        tracing::debug!(
+            "change owner_fn_id from {:?} to {:?}.",
+            self.owner_fn_id,
+            owner_fn_id
+        );
+        self.owner_fn_id = owner_fn_id;
+        self.type_builder = self.ctx.type_builder(self.ctx.def_ids(), owner_fn_id);
+        self
     }
 
     pub fn generic_args(&mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> &mut Self {
