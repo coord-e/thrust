@@ -1048,12 +1048,22 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Path {
     Local(Local),
     Deref(Box<Path>),
     TupleProj(Box<Path>, usize),
     Downcast(Box<Path>, VariantIdx, FieldIdx),
+}
+
+impl Path {
+    fn deref(self) -> Self {
+        Path::Deref(Box::new(self))
+    }
+
+    fn tuple_proj(self, idx: usize) -> Self {
+        Path::TupleProj(Box::new(self), idx)
+    }
 }
 
 impl<'tcx> From<Place<'tcx>> for Path {
@@ -1098,14 +1108,57 @@ where
         self.path_type(&place.into())
     }
 
-    fn dropping_assumption(&mut self, path: &Path) -> Assumption {
+    /// Build the [`Path`] at which the drop walk reaches `place`, i.e. the raw
+    /// MIR projection with the `own`-box `Deref`s the type elaboration
+    /// introduces (mut/reborrowed locals, and every tuple field) inserted before
+    /// each projection step. Moved-out places are elaborated this way so they
+    /// compare equal to the drop walk's paths.
+    fn elaborated_path(&self, place: Place) -> Path {
+        let mut path = Path::Local(place.local);
+        let mut ty = self.local_type(place.local);
+        let mut proj = place.projection.iter();
+        while let Some(elem) = proj.next() {
+            // Peel the `own` boxes the walk would deref before this projection.
+            while ty.ty.is_own() {
+                path = path.deref();
+                ty = ty.deref();
+            }
+            match elem {
+                PlaceElem::Field(idx, _) => {
+                    path = path.tuple_proj(idx.as_usize());
+                    ty = ty.tuple_proj(idx.as_usize());
+                }
+                PlaceElem::Deref => {
+                    path = path.deref();
+                    ty = ty.deref();
+                }
+                PlaceElem::Downcast(_, variant) => {
+                    let Some(PlaceElem::Field(field, _)) = proj.next() else {
+                        panic!("downcast not followed by field");
+                    };
+                    path = Path::Downcast(Box::new(path), variant, field);
+                    ty = ty.downcast(variant, field, &self.enum_defs);
+                }
+                _ => unimplemented!("elaborated_path: {elem:?}"),
+            }
+        }
+        path
+    }
+
+    fn dropping_assumption(&mut self, path: &Path, except: &[Path]) -> Assumption {
         let PlaceType {
             ty,
             mut existentials,
             term,
             mut formula,
         } = self.path_type(path);
-        formula.push_conj(self.dropping_formula_for_term(&mut existentials, &ty, term));
+        formula.push_conj(self.dropping_formula_for_term(
+            &mut existentials,
+            &ty,
+            term,
+            path,
+            except,
+        ));
         Assumption::new(existentials, formula)
     }
 
@@ -1114,12 +1167,27 @@ where
         existentials: &mut IndexVec<rty::ExistentialVarIdx, chc::Sort>,
         ty: &rty::Type<Var>,
         term: chc::Term<PlaceTypeVar>,
+        place: &Path,
+        except: &[Path],
     ) -> chc::Body<PlaceTypeVar> {
+        // A sub-place moved out of this drop had its ownership (and the
+        // obligation to resolve any `&mut` prophecy it holds) transferred to the
+        // move destination, where it is resolved; skip the whole moved-out
+        // subtree so it is not resolved a second time.
+        if except.contains(place) {
+            return chc::Body::default();
+        }
         if ty.is_mut() {
             term.clone().mut_final().equal_to(term.mut_current()).into()
         } else if ty.is_own() {
             let inner = &ty.as_pointer().unwrap().elem.ty;
-            self.dropping_formula_for_term(existentials, inner, term.box_current())
+            self.dropping_formula_for_term(
+                existentials,
+                inner,
+                term.box_current(),
+                &place.clone().deref(),
+                except,
+            )
         } else if let Some(tty) = ty.as_tuple() {
             let mut body = chc::Body::default();
             for (i, elem) in tty.elems.iter().enumerate() {
@@ -1127,6 +1195,8 @@ where
                     existentials,
                     &elem.ty,
                     term.clone().tuple_proj(i),
+                    &place.clone().tuple_proj(i),
+                    except,
                 ));
             }
             body
@@ -1154,10 +1224,16 @@ where
                     }
                 }
 
+                // Enum fields are addressed through a matcher selector rather
+                // than a projection, so there is no place to except against;
+                // pass the enum's place unchanged (a moved-out enum field is not
+                // skipped -- an accepted limitation).
                 body.push_conj(self.dropping_formula_for_term(
                     existentials,
                     &field_type,
                     field_term,
+                    place,
+                    except,
                 ));
             }
 
@@ -1169,8 +1245,12 @@ where
         }
     }
 
-    pub fn drop_local(&mut self, local: Local) {
-        let assumption = self.dropping_assumption(&Path::Local(local));
+    /// Drop `local`, skipping any moved-out sub-place in `except` (its ownership,
+    /// and the obligation to resolve any `&mut` prophecy it holds, was
+    /// transferred to the move destination).
+    pub fn drop_local(&mut self, local: Local, except: &[Place<'_>]) {
+        let except: Vec<Path> = except.iter().map(|p| self.elaborated_path(*p)).collect();
+        let assumption = self.dropping_assumption(&Path::Local(local), &except);
         if !assumption.is_top() {
             self.assume(assumption);
         }
