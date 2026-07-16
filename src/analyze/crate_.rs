@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use rustc_hir::def::DefKind;
 use rustc_hir::def_id::CRATE_DEF_ID;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::LocalDefId;
@@ -60,11 +61,66 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn refine_local_defs(&mut self) {
-        for local_def_id in self.tcx.mir_keys(()) {
-            if self.tcx.def_kind(*local_def_id).is_fn_like() {
-                self.refine_fn_def(*local_def_id);
+        let keys: Vec<LocalDefId> = self
+            .tcx
+            .mir_keys(())
+            .iter()
+            .copied()
+            .filter(|def_id| self.tcx.def_kind(*def_id).is_fn_like())
+            .collect();
+
+        // Refine formula functions and foreign-trait-method extern specs before the rest.
+        //
+        // A trait-impl method without its own annotation is checked against the trait method's
+        // spec, which `expected_ty` obtains via `trait_item_ty` -> `def_ty_with_args` on the trait
+        // method def. That lookup returns `None` unless the trait method's (extern) spec is already
+        // registered, in which case the impl silently falls back to an unconstrained template and
+        // its body is never checked against the spec. Registering foreign-trait-method extern specs
+        // (and the formula functions their contracts depend on) first makes the lookup succeed
+        // regardless of `mir_keys` iteration order.
+        let prioritized: Vec<bool> = keys
+            .iter()
+            .map(|def_id| self.is_formula_fn_or_foreign_trait_method_extern_spec(*def_id))
+            .collect();
+
+        for (&local_def_id, &prioritized) in keys.iter().zip(&prioritized) {
+            if prioritized {
+                self.refine_fn_def(local_def_id);
             }
         }
+        for (&local_def_id, &prioritized) in keys.iter().zip(&prioritized) {
+            if !prioritized {
+                self.refine_fn_def(local_def_id);
+            }
+        }
+    }
+
+    /// Whether `refine_local_defs` should register this def in its first pass: formula functions
+    /// (whose contracts other defs' specs depend on) and extern specs targeting a *foreign* trait
+    /// method (which local trait-impl methods resolve through `trait_item_ty`).
+    fn is_formula_fn_or_foreign_trait_method_extern_spec(
+        &mut self,
+        local_def_id: LocalDefId,
+    ) -> bool {
+        let tcx = self.tcx;
+        let analyzer = self.ctx.local_def_analyzer(local_def_id);
+        if analyzer.is_annotated_as_formula_fn() {
+            return true;
+        }
+        if !analyzer.is_annotated_as_extern_spec_fn() {
+            return false;
+        }
+        let target_def_id = analyzer.extern_spec_fn_target_def_id();
+        // Restrict to a *foreign* trait method (an associated function whose parent is the trait,
+        // e.g. the blanket `core::cmp::PartialEq::eq` spec injected by std.rs). A foreign target is
+        // registered solely by this extern spec, so registering it early is safe and lets local
+        // trait-impl methods find it via `trait_item_ty`. A *local* trait method must not be moved:
+        // its `#[context]`/extern-spec companion and the plain trait method register the same key,
+        // and the design relies on the companion (higher DefId) being processed last so it wins the
+        // overwrite; hoisting it ahead of the plain method would drop the companion's contract.
+        !target_def_id.is_local()
+            && matches!(tcx.def_kind(target_def_id), DefKind::AssocFn)
+            && matches!(tcx.def_kind(tcx.parent(target_def_id)), DefKind::Trait)
     }
 
     #[tracing::instrument(skip(self), fields(def_id = %self.tcx.def_path_str(local_def_id)))]
