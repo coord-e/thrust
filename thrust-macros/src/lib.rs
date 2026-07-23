@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{TokenStream as TokenStream2, TokenTree as TokenTree2};
 
+mod closure;
 mod context;
 mod fn_outer_item;
 mod formula;
@@ -26,6 +27,15 @@ pub fn pre(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn post(input: TokenStream) -> TokenStream {
     pre_post::expand_post(input)
+}
+
+/// `closure!(requires(..), ensures(..), |x: T| -> R { .. })` attaches an
+/// explicit pre-/post-condition to a closure expression. Each of `requires` and
+/// `ensures` is optional (omitting one leaves that side inferred) and may be
+/// repeated (conjoined). See [`mod@closure`].
+#[proc_macro]
+pub fn closure(input: TokenStream) -> TokenStream {
+    closure::expand(input)
 }
 
 #[proc_macro_attribute]

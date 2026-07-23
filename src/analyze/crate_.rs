@@ -60,6 +60,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn refine_local_defs(&mut self) {
+        // Pre-pass: register every formula fn before any def's type is computed, so
+        // that a def's `expected_ty` can resolve the formula fns its
+        // `requires`/`ensures` refer to regardless of the order `mir_keys` yields
+        // them. A closure's spec formula fns are nested inside the closure body and
+        // would otherwise be visited only after the closure itself.
+        for local_def_id in self.tcx.mir_keys(()) {
+            if !self.tcx.def_kind(*local_def_id).is_fn_like() {
+                continue;
+            }
+            if self
+                .ctx
+                .local_def_analyzer(*local_def_id)
+                .is_annotated_as_formula_fn()
+            {
+                self.ctx.register_formula_fn(*local_def_id);
+                self.skip_analysis.insert(*local_def_id);
+            }
+        }
         for local_def_id in self.tcx.mir_keys(()) {
             if self.tcx.def_kind(*local_def_id).is_fn_like() {
                 self.refine_fn_def(*local_def_id);
