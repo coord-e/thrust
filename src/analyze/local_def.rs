@@ -47,7 +47,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     body: Body<'tcx>,
     /// to substitute HIR types during translation in [`crate::analyze::annot_fn`]
     generic_args: mir_ty::GenericArgsRef<'tcx>,
-    drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints>,
+    drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints<'tcx>>,
     type_builder: TypeBuilder<'tcx>,
 }
 
@@ -896,7 +896,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iterate_to_fixpoint(self.tcx, &self.body, None)
             .into_results_cursor(&self.body);
 
-        let mut builder = analyze::basic_block::DropPoints::builder(&self.body);
+        let mut builder = analyze::basic_block::DropPoints::builder(self.tcx, &self.body);
         for (bb, _data) in mir::traversal::postorder(&self.body) {
             let span = tracing::info_span!("refine_basic_block", ?bb);
             let _guard = span.enter();
@@ -931,7 +931,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         .get_mut(&bb)
                         .unwrap()
                         .before_statements
-                        .push(a);
+                        .insert(a);
                 }
             }
             // function return type is basic block return type
