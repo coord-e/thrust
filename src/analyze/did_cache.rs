@@ -38,6 +38,8 @@ struct DefIds {
 
     fn_param_wrapper: OnceCell<Option<DefId>>,
     fn_param_at_entry: OnceCell<Option<DefId>>,
+    fn_param_at_here: OnceCell<Option<DefId>>,
+    fn_param_is_not_changed: OnceCell<Option<DefId>>,
 
     closure_precondition: OnceCell<Option<DefId>>,
     closure_postcondition: OnceCell<Option<DefId>>,
@@ -268,6 +270,19 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .fn_param_at_entry
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::fn_param_at_entry_path()))
+    }
+
+    pub fn fn_param_at_here(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .fn_param_at_here
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::fn_param_at_here_path()))
+    }
+
+    pub fn fn_param_is_not_changed(&self) -> Option<DefId> {
+        *self.def_ids.fn_param_is_not_changed.get_or_init(|| {
+            self.annotated_def(&crate::analyze::annot::fn_param_is_not_changed_path())
+        })
     }
 
     pub fn closure_precondition(&self) -> Option<DefId> {

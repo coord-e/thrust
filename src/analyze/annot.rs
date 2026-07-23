@@ -214,6 +214,22 @@ pub fn fn_param_at_entry_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn fn_param_at_here_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("fn_param_at_here"),
+    ]
+}
+
+pub fn fn_param_is_not_changed_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("fn_param_is_not_changed"),
+    ]
+}
+
 pub fn closure_precondition_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
