@@ -281,18 +281,50 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let trait_item_ty = self.trait_item_ty();
         let is_fully_annotated = self.is_fully_annotated();
 
+        // A closure's `FunctionType` carries its environment as the first parameter
+        // (`[env, arg1, .., argN]`), but a user-written `requires`/`ensures` formula
+        // function is expressed over the logical arguments only (`[arg1, .., argN]`).
+        // For closures we therefore shift the formula's argument indices by one to
+        // skip the environment param.
+        let is_closure = matches!(
+            self.tcx.def_kind(self.local_def_id),
+            rustc_hir::def::DefKind::Closure
+        );
         let mut builder = self.type_builder.for_function_template(&mut self.ctx, sig);
         if let Some(require) = require_annot {
-            let formula = require.map_var(|idx| {
-                if idx.index() == sig.inputs().len() - 1 {
-                    rty::RefinedTypeVar::Value
-                } else {
-                    rty::RefinedTypeVar::Free(idx)
-                }
-            });
+            let formula = if is_closure {
+                let num_args = sig.inputs().len() - 1;
+                require.map_var(|idx| {
+                    if num_args > 0 && idx.index() == num_args - 1 {
+                        rty::RefinedTypeVar::Value
+                    } else {
+                        rty::RefinedTypeVar::Free(rty::FunctionParamIdx::from_usize(
+                            idx.index() + 1,
+                        ))
+                    }
+                })
+            } else {
+                require.map_var(|idx| {
+                    if idx.index() == sig.inputs().len() - 1 {
+                        rty::RefinedTypeVar::Value
+                    } else {
+                        rty::RefinedTypeVar::Free(idx)
+                    }
+                })
+            };
             builder.param_refinement(formula.into());
         }
         if let Some(ensure) = ensure_annot {
+            let ensure = if is_closure {
+                ensure.map_var(|v| match v {
+                    rty::RefinedTypeVar::Free(idx) => rty::RefinedTypeVar::Free(
+                        rty::FunctionParamIdx::from_usize(idx.index() + 1),
+                    ),
+                    other => other,
+                })
+            } else {
+                ensure
+            };
             builder.ret_refinement(ensure.into());
         }
         for (position, refinement) in refinement_annots {
