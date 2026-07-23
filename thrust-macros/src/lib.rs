@@ -133,6 +133,26 @@ pub fn sig(attr: TokenStream, item: TokenStream) -> TokenStream {
     rty::expand_sig(attr, item)
 }
 
+/// Reconstructs the effective type of a method receiver (`&self` -> `&Self`,
+/// `&mut self` -> `&mut Self`, `self` -> `Self`, `self: T` -> `T`), mirroring
+/// what syn 2's `Receiver::ty` used to provide directly.
+fn receiver_type(receiver: &syn::Receiver) -> syn::Type {
+    match &receiver.kind {
+        syn::ReceiverKind::Typed(_, ty) => (**ty).clone(),
+        syn::ReceiverKind::Reference(and_token, lifetime, mutability) => {
+            syn::Type::Reference(syn::TypeReference {
+                attrs: Vec::new(),
+                and_token: *and_token,
+                lifetime: lifetime.clone(),
+                mutability: *mutability,
+                elem: Box::new(syn::parse_quote!(Self)),
+            })
+        }
+        syn::ReceiverKind::Value => syn::parse_quote!(Self),
+        _ => unimplemented!("unknown syn::ReceiverKind variant"),
+    }
+}
+
 fn tokens_contain_ident<T>(tokens: &TokenStream2, target: T) -> bool
 where
     T: AsRef<str>,
