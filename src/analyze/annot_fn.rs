@@ -679,12 +679,15 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 let is_seq = array_ty
                     .ty_adt_def()
                     .is_some_and(|adt| Some(adt.did()) == self.def_ids.seq_model());
-                let array_inner = if is_seq {
-                    array_term.tuple_proj(0)
+                if is_seq {
+                    // Indexing a sequence is offset-aware: `s[i]` reads the underlying array at
+                    // `offset + i`.
+                    let offset = array_term.clone().tuple_proj(1);
+                    let array_inner = array_term.tuple_proj(0);
+                    FormulaOrTerm::Term(array_inner.select(offset.add(index_term)))
                 } else {
-                    array_term
-                };
-                FormulaOrTerm::Term(array_inner.select(index_term))
+                    FormulaOrTerm::Term(array_term.select(index_term))
+                }
             }
             ExprKind::MethodCall(method, receiver, args, _) => {
                 if let Some(def_id) = self.typeck.type_dependent_def_id(hir.hir_id) {
@@ -706,28 +709,34 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                     if Some(def_id) == self.def_ids.seq_len() {
                         assert!(args.is_empty(), "Seq::len does not take any arguments");
                         let t = self.to_term(receiver);
-                        return FormulaOrTerm::Term(t.tuple_proj(1));
+                        return FormulaOrTerm::Term(t.tuple_proj(2));
                     }
                     if Some(def_id) == self.def_ids.seq_push() {
                         assert_eq!(args.len(), 1, "Seq::push takes exactly 1 argument");
                         let t = self.to_term(receiver);
                         let v = self.to_term(&args[0]);
                         let arr = t.clone().tuple_proj(0);
-                        let len = t.tuple_proj(1);
-                        let new_arr = arr.store(len.clone(), v);
+                        let offset = t.clone().tuple_proj(1);
+                        let len = t.tuple_proj(2);
+                        let new_arr = arr.store(offset.clone().add(len.clone()), v);
                         let new_len = len.add(chc::Term::int(1));
-                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![
+                            new_arr, offset, new_len,
+                        ]));
                     }
                     if Some(def_id) == self.def_ids.seq_concat() {
                         assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
                         let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();
                         let t = self.to_term(receiver);
                         let other = self.to_term(&args[0]);
-                        let a_len = t.clone().tuple_proj(1);
-                        let b_len = other.clone().tuple_proj(1);
+                        let a_offset = t.clone().tuple_proj(1);
+                        let a_len = t.clone().tuple_proj(2);
+                        let b_len = other.clone().tuple_proj(2);
                         let new_arr = chc::Term::seq_concat(elem_sort, t, other);
                         let new_len = a_len.add(b_len);
-                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![
+                            new_arr, a_offset, new_len,
+                        ]));
                     }
                 }
                 unimplemented!("unsupported method call in formula: {:?}", method)
@@ -810,6 +819,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             return FormulaOrTerm::Term(chc::Term::tuple(vec![
                                 chc::Term::array_empty(chc::Sort::int(), elem_sort),
                                 chc::Term::int(0),
+                                chc::Term::int(0),
                             ]));
                         }
                         if Some(def_id) == self.def_ids.seq_singleton() {
@@ -820,6 +830,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 .store(chc::Term::int(0), v);
                             return FormulaOrTerm::Term(chc::Term::tuple(vec![
                                 new_arr,
+                                chc::Term::int(0),
                                 chc::Term::int(1),
                             ]));
                         }

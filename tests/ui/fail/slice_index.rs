@@ -3,7 +3,7 @@
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures((*result).length == 1 && (*result).array[0] == 10)]
+#[thrust_macros::ensures((*result).length == 1 && (*result).array[(*result).offset] == 10)]
 fn slice() -> &'static [i32] {
     unimplemented!()
 }
