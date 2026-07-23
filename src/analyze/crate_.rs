@@ -60,10 +60,35 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn refine_local_defs(&mut self) {
+        let mut keys = self.tcx.mir_keys(()).clone();
         for local_def_id in self.tcx.mir_keys(()) {
-            if self.tcx.def_kind(*local_def_id).is_fn_like() {
-                self.refine_fn_def(*local_def_id);
+            let analyzer = self.ctx.local_def_analyzer(*local_def_id);
+            if analyzer.is_annotated_as_extern_spec_fn() {
+                let target_def_id = analyzer.extern_spec_fn_target_def_id();
+                if let Some(local_target_def_id) = target_def_id.as_local() {
+                    keys.swap_remove(&local_target_def_id);
+                }
             }
+            if analyzer.is_annotated_as_ignored() {
+                self.skip_analysis.insert(*local_def_id);
+                keys.swap_remove(local_def_id);
+            }
+            if analyzer.is_annotated_as_predicate() {
+                analyzer.analyze_predicate_definition();
+                self.skip_analysis.insert(*local_def_id);
+                keys.swap_remove(local_def_id);
+            }
+            if analyzer.is_annotated_as_formula_fn() {
+                self.ctx.register_formula_fn(*local_def_id);
+                self.skip_analysis.insert(*local_def_id);
+                keys.swap_remove(local_def_id);
+            }
+            if !self.tcx.def_kind(*local_def_id).is_fn_like() {
+                keys.swap_remove(local_def_id);
+            }
+        }
+        for local_def_id in &keys {
+            self.refine_fn_def(*local_def_id);
         }
     }
 
@@ -81,23 +106,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if analyzer.is_annotated_as_extern_spec_fn() {
             assert!(analyzer.is_fully_annotated());
             self.skip_analysis.insert(local_def_id);
-        }
-
-        if analyzer.is_annotated_as_ignored() {
-            self.skip_analysis.insert(local_def_id);
-            return;
-        }
-
-        if analyzer.is_annotated_as_predicate() {
-            analyzer.analyze_predicate_definition();
-            self.skip_analysis.insert(local_def_id);
-            return;
-        }
-
-        if analyzer.is_annotated_as_formula_fn() {
-            self.ctx.register_formula_fn(local_def_id);
-            self.skip_analysis.insert(local_def_id);
-            return;
         }
 
         // skip analysis if the def is closure defined in skipped def
