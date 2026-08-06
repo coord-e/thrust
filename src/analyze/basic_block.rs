@@ -1151,6 +1151,120 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         None
     }
 
+    /// Whether this block's terminator is a `proof_assert!` marker call: the
+    /// formula function it carries, with the generic arguments it is
+    /// instantiated at, and the block to continue with.
+    fn terminator_is_proof_assert_marker(
+        &self,
+    ) -> Option<(LocalDefId, mir_ty::GenericArgsRef<'tcx>, BasicBlock)> {
+        let term = &self.body.basic_blocks[self.basic_block].terminator().kind;
+        let TerminatorKind::Call {
+            func, args, target, ..
+        } = term
+        else {
+            return None;
+        };
+        let (def_id, _) = func.const_fn_def()?;
+        if Some(def_id) != self.ctx.def_ids().proof_assert_marker() {
+            return None;
+        }
+        let arg_ty = args[0].node.ty(&self.local_decls, self.tcx);
+        let mir_ty::TyKind::FnDef(formula_def_id, generic_args) = arg_ty.kind() else {
+            panic!("proof_assert marker argument must be a formula function item");
+        };
+        let formula_def_id = formula_def_id
+            .as_local()
+            .expect("proof_assert formula function must be local");
+        let target = target.expect("proof_assert marker call must have a target");
+        Some((formula_def_id, *generic_args, target))
+    }
+
+    /// Resolves a source variable name in a `proof_assert!` predicate to the
+    /// live local it denotes at this point.
+    ///
+    /// When several distinct live locals share the name (e.g. two shadowed
+    /// variables), the mapping is ambiguous; rather than silently pick one, this
+    /// raises a fatal error.
+    fn local_of_name(&self, name: rustc_span::Symbol) -> Option<Local> {
+        let mut found: Option<Local> = None;
+        for vdi in &self.body.var_debug_info {
+            if vdi.name != name {
+                continue;
+            }
+            let mir::VarDebugInfoContents::Place(place) = vdi.value else {
+                continue;
+            };
+            if !place.projection.is_empty() {
+                continue;
+            }
+            if !self.env.contains_local(place.local) {
+                continue;
+            }
+            match found {
+                None => found = Some(place.local),
+                Some(prev) if prev == place.local => {}
+                Some(_) => self.tcx.dcx().fatal(format!(
+                    "`proof_assert!` refers to `{name}`, which is ambiguous here: multiple live \
+                     variables share this name (e.g. through shadowing). Rename the variables to \
+                     disambiguate."
+                )),
+            }
+        }
+        found
+    }
+
+    /// Checks a user-provided `proof_assert!` formula (a formula function over
+    /// named live variables) against the current env, and assumes it from here
+    /// on so it can serve as an intermediate lemma.
+    #[tracing::instrument(skip(self))]
+    fn type_proof_assert(
+        &mut self,
+        formula_def_id: LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) {
+        let formula_fn = self
+            .ctx
+            .formula_fn_with_args(formula_def_id, generic_args)
+            .expect("proof_assert formula function is not registered");
+
+        // Binding each referenced variable's place type to a temp var puts its
+        // refinement into the env, so the formula below is over plain `Var`s.
+        let mut vars = Vec::new();
+        for ident_opt in self.tcx.fn_arg_idents(formula_def_id.to_def_id()) {
+            let name = ident_opt
+                .expect("proof_assert parameters must be named")
+                .name;
+
+            // The synthetic `__thrust_self` parameter (emitted when the predicate refers to the
+            // receiver `self`) maps to the receiver, which appears as `self` in debug info.
+            let name = if name.as_str() == "__thrust_self" {
+                rustc_span::Symbol::intern("self")
+            } else {
+                name
+            };
+
+            let local = self.local_of_name(name).unwrap_or_else(|| {
+                self.tcx.dcx().fatal(format!(
+                    "`proof_assert!` refers to `{name}`, which is not a live variable here"
+                ))
+            });
+            let pty = self.env.local_type(local);
+            vars.push(self.env.immut_bind_tmp(pty.into()));
+        }
+
+        let formula = formula_fn
+            .formula()
+            .clone()
+            .subst_var(|idx| chc::Term::var(vars[idx.index()]));
+
+        let mut builder = self.env.build_clause();
+        let negated = formula.clone().not().map_var(|v| builder.mapped_var(v));
+        let clause = builder.add_body(negated).head(chc::Atom::bottom());
+        self.ctx.extend_clauses([clause]);
+
+        self.env.assume(formula.map_var(PlaceTypeVar::Var));
+    }
+
     fn analyze_statements(&mut self) {
         for local in self.drop_points.before_statements.clone() {
             tracing::info!(?local, "implicitly dropped before statements");
@@ -1194,6 +1308,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         if let Some(target) = self.terminator_is_invariant_marker() {
             tracing::debug!(?term, "skip invariant marker");
+            return mir::Terminator {
+                kind: TerminatorKind::Goto { target },
+                source_info: term.source_info,
+            };
+        }
+        if let Some((formula_def_id, generic_args, target)) =
+            self.terminator_is_proof_assert_marker()
+        {
+            self.type_proof_assert(formula_def_id, generic_args);
             return mir::Terminator {
                 kind: TerminatorKind::Goto { target },
                 source_info: term.source_info,

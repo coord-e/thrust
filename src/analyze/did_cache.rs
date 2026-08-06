@@ -35,6 +35,7 @@ struct DefIds {
     forall: OnceCell<Option<DefId>>,
     implies: OnceCell<Option<DefId>>,
     invariant_marker: OnceCell<Option<DefId>>,
+    proof_assert_marker: OnceCell<Option<DefId>>,
 
     fn_param_wrapper: OnceCell<Option<DefId>>,
     fn_param_at_entry: OnceCell<Option<DefId>>,
@@ -254,6 +255,13 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .invariant_marker
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::invariant_marker_path()))
+    }
+
+    pub fn proof_assert_marker(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .proof_assert_marker
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::proof_assert_marker_path()))
     }
 
     pub fn fn_param_wrapper(&self) -> Option<DefId> {

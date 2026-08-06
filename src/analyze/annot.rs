@@ -198,6 +198,14 @@ pub fn invariant_marker_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn proof_assert_marker_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("proof_assert_marker"),
+    ]
+}
+
 pub fn fn_param_wrapper_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

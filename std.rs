@@ -412,6 +412,13 @@ mod thrust_models {
         unimplemented!()
     }
 
+    #[thrust::def::proof_assert_marker]
+    #[thrust::ignored]
+    #[inline(never)]
+    pub fn __proof_assert_marker<F>(_f: F) {
+        unimplemented!()
+    }
+
     #[allow(dead_code)]
     #[thrust::def::fn_param_wrapper]
     pub struct FnParam<T>(std::marker::PhantomData<T>);

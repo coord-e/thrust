@@ -5,9 +5,9 @@ mod context;
 mod fn_outer_item;
 mod formula;
 mod formula_fn_type_lowering;
-mod invariant;
 mod invariant_context;
 mod pre_post;
+mod predicate_closure;
 mod rty;
 mod spec;
 
@@ -55,7 +55,7 @@ pub fn formula(input: TokenStream) -> TokenStream {
 /// predicate.
 #[proc_macro]
 pub fn invariant(input: TokenStream) -> TokenStream {
-    invariant::expand(input)
+    predicate_closure::expand(input, "invariant")
 }
 
 /// Context-carrying counterpart of `invariant!`, emitted by
@@ -64,14 +64,42 @@ pub fn invariant(input: TokenStream) -> TokenStream {
 /// body is the predicate closure (see [`invariant`]).
 #[proc_macro]
 pub fn _invariant_with_context(input: TokenStream) -> TokenStream {
-    invariant::expand_with_context(input)
+    predicate_closure::expand_with_context(input, "invariant")
 }
 
-/// Threads the surrounding generic context (and, in methods, `Self`) into
-/// every `thrust_macros::invariant!(...)` inside the annotated function, so an
-/// invariant may refer to generic- and `Self`-typed variables that the
-/// standalone `invariant!` macro cannot see. Each such call is rewritten into
-/// `thrust_macros::_invariant_with_context!`.
+/// Asserts a logical formula at this point in a function body:
+///
+/// ```ignore
+/// fn f(ma: &mut i64) {
+///     *ma += 1;
+///     thrust_macros::proof_assert!(|ma: &mut i64| *ma >= 1);
+/// }
+/// ```
+///
+/// The argument is a closure whose parameters name the live variables the
+/// formula refers to (with their types) and whose body is the asserted
+/// predicate. Thrust checks that the formula follows from the typing
+/// environment at this point, and assumes it from here on, so it can serve as
+/// an intermediate lemma. No code is generated for it.
+#[proc_macro]
+pub fn proof_assert(input: TokenStream) -> TokenStream {
+    predicate_closure::expand(input, "proof_assert")
+}
+
+/// Context-carrying counterpart of `proof_assert!`, emitted by
+/// `#[thrust_macros::invariant_context]`. Not intended to be written by hand:
+/// it takes a `fn` header carrying the threaded generics/where clause whose
+/// body is the predicate closure (see [`proof_assert`]).
+#[proc_macro]
+pub fn _proof_assert_with_context(input: TokenStream) -> TokenStream {
+    predicate_closure::expand_with_context(input, "proof_assert")
+}
+
+/// Threads the surrounding generic context (and, in methods, `Self`) into every
+/// `thrust_macros::invariant!(...)` and `thrust_macros::proof_assert!(...)`
+/// inside the annotated function, so their predicates may refer to generic- and
+/// `Self`-typed variables that the standalone macros cannot see. Each such call
+/// is rewritten into its `_with_context` counterpart.
 #[proc_macro_attribute]
 pub fn invariant_context(_attr: TokenStream, item: TokenStream) -> TokenStream {
     invariant_context::expand(item)

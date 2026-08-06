@@ -133,6 +133,22 @@ The bodies of functions marked with `#[thrust::trusted]` are not analyzed by Thr
 fn rand() -> i32 { unimplemented!() }
 ```
 
+### Assertions
+
+`thrust_macros::proof_assert!` asserts a logical formula at a point in a function body. Thrust checks that the formula follows from what it knows there, and assumes it from then on, so it can also serve as an intermediate lemma. It generates no code, so unlike `assert!` it can talk about the model operations described above.
+
+The argument is a closure whose parameters name the live variables the formula refers to (with their types) and whose body is the asserted formula, the same shape `thrust_macros::invariant!` takes for loop invariants.
+
+```rust
+#[thrust_macros::requires(*ma >= 0)]
+fn incr(ma: &mut i32) {
+    *ma += 1;
+    thrust_macros::proof_assert!(|ma: &mut i32| *ma >= 1);
+}
+```
+
+In a generic function or a method, annotate the enclosing function with `#[thrust_macros::invariant_context]` (and the enclosing `impl`/`trait` with `#[thrust_macros::context]`) so the formula may refer to generic- and `Self`-typed variables.
+
 ## Configuration
 
 Several environment variables are used by Thrust to configure its behavior:
@@ -152,7 +168,7 @@ The implementation of the Thrust is largely divided into the following modules.
 - `rty`: Refinement type primitives.
 - `chc`: CHC and logic primitives, and it also implements an invocation of the underlying CHC solver.
 
-The surface annotation syntax (`#[thrust_macros::requires]`, `ensures`, `param`, `ret`, `sig`, `predicate`, `invariant!`, `pre!`/`post!`, …) is implemented in the `thrust-macros` crate. These procedural macros expand into a small set of internal plugin attributes — chiefly `#[thrust::formula_fn]` companion functions (written as ordinary Rust over the `thrust_models` model types) together with `#[thrust::requires_path]`, `#[thrust::ensures_path]`, and `#[thrust::refinement_path(..)]` markers that link those companions to the function being specified. `analyze::annot_fn` then reads the type-checked HIR of each `formula_fn` to build the corresponding `chc::Formula`/`rty::Refinement`. The model types themselves are declared in `std.rs`, which Thrust injects into every crate it analyzes.
+The surface annotation syntax (`#[thrust_macros::requires]`, `ensures`, `param`, `ret`, `sig`, `predicate`, `invariant!`, `proof_assert!`, `pre!`/`post!`, …) is implemented in the `thrust-macros` crate. These procedural macros expand into a small set of internal plugin attributes — chiefly `#[thrust::formula_fn]` companion functions (written as ordinary Rust over the `thrust_models` model types) together with `#[thrust::requires_path]`, `#[thrust::ensures_path]`, and `#[thrust::refinement_path(..)]` markers that link those companions to the function being specified. `analyze::annot_fn` then reads the type-checked HIR of each `formula_fn` to build the corresponding `chc::Formula`/`rty::Refinement`. The model types themselves are declared in `std.rs`, which Thrust injects into every crate it analyzes.
 
 The implementation generates subtyping constraints in the form of CHCs (`chc::System`). The entry point is `analyze::crate_::Analyzer::run`, followed by `analyze::local_def::Analyzer::run` and `analyze::basic_block::Analyzer::run`, while accumulating the necessary information in `analyze::Analyzer`. Once `chc::System` is collected for the entire input, it invokes an external CHC solver via the `chc::solver` module and subsequently reports the result.
 

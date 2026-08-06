@@ -1,18 +1,23 @@
-//! Expansion of `thrust_macros::invariant!` and its context-carrying sibling
-//! `thrust_macros::_invariant_with_context!`.
+//! Expansion of the predicate-closure macros `thrust_macros::invariant!` and
+//! `thrust_macros::proof_assert!`, and of their context-carrying siblings
+//! `_invariant_with_context!` and `_proof_assert_with_context!`.
 //!
-//! Both expand a predicate closure with explicit parameter types into a
-//! `#[thrust::formula_fn]` over `Model::Ty` parameters plus a marker call
-//! referencing it; they share [`expand_invariant`] and differ only in input:
+//! All of them expand a predicate closure with explicit parameter types into a
+//! `#[thrust::formula_fn]` over `Model::Ty` parameters plus a call to the marker
+//! function the analyzer looks for. They share [`expand_predicate_closure`] and
+//! differ only in the `kind` they pass — `"invariant"` or `"proof_assert"`,
+//! naming both the generated formula function and the marker
+//! (`thrust_models::__<kind>_marker`) — and in whether the input carries a
+//! context:
 //!
 //! - `invariant!(|x: i64| x >= 1)` takes a bare predicate closure and only sees
 //!   concrete types.
 //! - `_invariant_with_context!(..)` additionally carries the enclosing generic
 //!   context. It is never written by hand: `#[thrust_macros::invariant_context]`
-//!   rewrites each `invariant!` it finds into this form, pasting the host
-//!   function's signature (and, in methods, a `#[thrust::_outer_context(..)]`
-//!   attribute carrying the enclosing `impl`/`trait` header) ahead of the
-//!   closure:
+//!   rewrites each `invariant!` and `proof_assert!` it finds into this form,
+//!   pasting the host function's signature (and, in methods, a
+//!   `#[thrust::_outer_context(..)]` attribute carrying the enclosing
+//!   `impl`/`trait` header) ahead of the closure:
 //!
 //!   ```ignore
 //!   _invariant_with_context!(
@@ -42,23 +47,24 @@ use crate::{fn_outer_item::FnOuterItem, FormulaFnTypeLowering};
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-/// Expands `invariant!(CLOSURE)`: a bare predicate closure with no threaded
+/// Expands `<kind>!(CLOSURE)`: a bare predicate closure with no threaded
 /// context.
-pub fn expand(input: TokenStream) -> TokenStream {
+pub fn expand(input: TokenStream, kind: &str) -> TokenStream {
     let input = crate::formula::wrap_closure_body(input.into());
     let closure = match syn::parse2::<syn::ExprClosure>(input) {
         Ok(closure) => closure,
         Err(e) => return e.to_compile_error().into(),
     };
-    match expand_invariant(&closure, None) {
+    match expand_predicate_closure(&closure, None, kind) {
         Ok(expr) => expr.into_token_stream().into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-/// Expands `_invariant_with_context!(#outer_attr #sig; CLOSURE)`, the form
-/// `#[thrust_macros::invariant_context]` rewrites each `invariant!` into.
-pub fn expand_with_context(input: TokenStream) -> TokenStream {
+/// Expands `_<kind>_with_context!(#outer_attr #sig; CLOSURE)`, the form
+/// `#[thrust_macros::invariant_context]` rewrites each predicate-closure macro
+/// call into.
+pub fn expand_with_context(input: TokenStream, kind: &str) -> TokenStream {
     struct WithContext {
         context: Context,
         closure: syn::ExprClosure,
@@ -83,15 +89,15 @@ pub fn expand_with_context(input: TokenStream) -> TokenStream {
         Ok(parsed) => parsed,
         Err(e) => return e.to_compile_error().into(),
     };
-    match expand_invariant(&closure, Some(&context)) {
+    match expand_predicate_closure(&closure, Some(&context), kind) {
         Ok(expr) => expr.into_token_stream().into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-/// The enclosing context threaded into an invariant by
+/// The enclosing context threaded into a predicate closure by
 /// `#[thrust_macros::invariant_context]`: the host function signature and, for a
-/// method, its `impl`/`trait` header. A standalone `invariant!` has none.
+/// method, its `impl`/`trait` header. A standalone call has none.
 struct Context {
     sig: Signature,
     outer: Option<FnOuterItem>,
@@ -126,19 +132,21 @@ impl Context {
     }
 }
 
-/// Expands a predicate closure into a `#[thrust::formula_fn]` plus a marker
-/// call. With `context`, the in-scope generics (and, in methods, `Self`) are
-/// re-declared on the formula function and instantiated via turbofish.
-fn expand_invariant(
+/// Expands a predicate closure into a `#[thrust::formula_fn]` plus a call to the
+/// `kind` marker. With `context`, the in-scope generics (and, in methods,
+/// `Self`) are re-declared on the formula function and instantiated via
+/// turbofish.
+fn expand_predicate_closure(
     closure: &syn::ExprClosure,
     context: Option<&Context>,
+    kind: &str,
 ) -> syn::Result<syn::Expr> {
     let mut fn_params: Vec<FnArg> = Vec::new();
     for param in &closure.inputs {
         let syn::Pat::Type(pt) = param else {
             return Err(syn::Error::new_spanned(
                 param,
-                "invariant closure parameters must have explicit types, e.g. `|x: i64| ...`",
+                format!("{kind} closure parameters must have explicit types, e.g. `|x: i64| ...`"),
             ));
         };
         let pat = &pt.pat;
@@ -174,8 +182,9 @@ fn expand_invariant(
 
     let mut body = closure.body.clone();
 
-    // An invariant may refer to the receiver value `self`; the lifted formula function is free, so
-    // rewrite `self` to a `__thrust_self` parameter. The analyzer binds it back to the loop-carried receiver.
+    // A predicate closure may refer to the receiver value `self`; the lifted formula function is
+    // free, so rewrite `self` to a `__thrust_self` parameter. The analyzer binds it back to the
+    // receiver.
     let mut rewriter = SelfValueRewriter {
         to: format_ident!("__thrust_self"),
     };
@@ -192,7 +201,9 @@ fn expand_invariant(
         let Some(outer) = context.and_then(|context| context.outer.as_ref()) else {
             return Err(syn::Error::new_spanned(
                 closure,
-                "invariant closure cannot refer to `Self` without an enclosing impl/trait context",
+                format!(
+                    "{kind} closure cannot refer to `Self` without an enclosing impl/trait context"
+                ),
             ));
         };
 
@@ -254,7 +265,8 @@ fn expand_invariant(
     let body = &body;
 
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let name = format_ident!("_thrust_invariant_{}", id);
+    let name = format_ident!("_thrust_{}_{}", kind, id);
+    let marker = format_ident!("__{}_marker", kind);
 
     let def_generics = if def_params.is_empty() {
         quote!()
@@ -280,7 +292,7 @@ fn expand_invariant(
             #body
         }
 
-        thrust_models::__invariant_marker(#name #turbofish)
+        thrust_models::#marker(#name #turbofish)
     }))
 }
 
