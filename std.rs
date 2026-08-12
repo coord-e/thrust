@@ -680,7 +680,8 @@ fn _extern_spec_result_is_err<T, E>(res: &Result<T, E>) -> bool
 }
 
 #[thrust::extern_spec_fn]
-#[thrust_macros::requires(true)] // TODO: require x != i32::MIN
+// `i32::MIN` is spelled out because associated constants are not available in formulas.
+#[thrust_macros::requires(x != -2147483648)]
 #[thrust_macros::ensures(result >= 0 && (result == x || result == -x))]
 fn _extern_spec_i32_abs(x: i32) -> i32 {
     i32::abs(x)
