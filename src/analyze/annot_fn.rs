@@ -211,6 +211,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     fn build_env_from_params(&mut self) {
         for (idx, param) in self.body.params.iter().enumerate() {
             let param_idx = rty::FunctionParamIdx::from(idx);
+            if self.is_closure_upvars_param(param) {
+                self.build_env_from_captures(chc::Term::var(param_idx), param.pat);
+                continue;
+            }
             let mir_ty = self.pat_ty(param.pat);
             // `at_entry()` yields the `Inner` of a `FnParam<Inner>`; classify by it so
             // a singleton wrapped argument collapses like any other singleton below.
@@ -224,6 +228,67 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 chc::Term::var(param_idx)
             };
             self.build_env_from_pat(term, param.pat);
+        }
+    }
+
+    /// Whether the parameter holds the closure's upvars, as marked by
+    /// `#[thrust::closure_upvars]` on a `closure!` specification.
+    fn is_closure_upvars_param(&self, param: &rustc_hir::Param<'tcx>) -> bool {
+        let attr_path = analyze::annot::closure_upvars_path();
+        self.tcx
+            .hir_attrs(param.hir_id)
+            .iter()
+            .any(|attr| attr.path_matches(&attr_path))
+    }
+
+    /// Binds the names of a closure specification's upvars pattern to the closure's
+    /// captured variables.
+    ///
+    /// The pattern lists the captures a clause names, in the order it wrote them,
+    /// while the upvars hold every capture in the order rustc chose. The two are
+    /// therefore matched up by name.
+    fn build_env_from_captures(
+        &mut self,
+        upvars_term: chc::Term<rty::FunctionParamIdx>,
+        pat: &'tcx rustc_hir::Pat<'tcx>,
+    ) {
+        let rustc_hir::PatKind::Tuple(subpats, _) = pat.kind else {
+            panic!(
+                "closure upvars are expected to be a tuple pattern: {:?}",
+                pat
+            );
+        };
+        let closure_def_id = self.tcx.local_parent(self.local_def_id);
+        let captures = self.tcx.closure_captures(closure_def_id);
+        let closure_ty = self.tcx.type_of(closure_def_id).instantiate_identity();
+        let mir_ty::TyKind::Closure(_, closure_args) = closure_ty.kind() else {
+            panic!("closure specification is expected to sit inside a closure");
+        };
+        let mut upvar_terms = Vec::new();
+        for i in 0..captures.len() {
+            let upvar_term = match closure_args.as_closure().kind() {
+                mir_ty::ClosureKind::Fn => upvars_term.clone().box_current().tuple_proj(i),
+                mir_ty::ClosureKind::FnMut => chc::Term::mut_(
+                    upvars_term.clone().mut_current().tuple_proj(i),
+                    upvars_term.clone().mut_final().tuple_proj(i),
+                ),
+                mir_ty::ClosureKind::FnOnce => upvars_term.clone().tuple_proj(i),
+            };
+            upvar_terms.push(upvar_term);
+        }
+        for subpat in subpats {
+            let rustc_hir::PatKind::Binding(_, hir_id, ident, None) = subpat.kind else {
+                panic!("closure capture is expected to be a binding: {:?}", subpat);
+            };
+            let Some(idx) = captures.iter().position(|capture| {
+                capture.var_ident.name == ident.name && capture.place.projections.is_empty()
+            }) else {
+                self.tcx.dcx().span_fatal(
+                    subpat.span,
+                    format!("`{}` is not captured by this closure", ident),
+                );
+            };
+            self.env.insert(hir_id, upvar_terms[idx].clone());
         }
     }
 
@@ -378,7 +443,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     }
 
     /// The values of a closure's parameters: the closure's first (RustCall) parameter is its
-    /// environment, which is the closure value itself, followed by the logical arguments.
+    /// upvars, which are the closure value itself, followed by the logical arguments.
     fn translate_closure_precondition(
         &self,
         receiver: &'tcx rustc_hir::Expr<'tcx>,
@@ -394,8 +459,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 )
             });
         let logical_args = self.closure_spec_args(args);
-        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
-        // environment is the closure value itself.
+        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[upvars, args..]`, where
+        // the upvars are the closure value itself.
         assert_eq!(
             logical_args.len(),
             fn_ty.params.len() - 1,
@@ -424,8 +489,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 )
             });
         let logical_args = self.closure_spec_args(args);
-        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[env, args..]`, where the
-        // environment is the closure value itself.
+        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[upvars, args..]`, where
+        // the upvars are the closure value itself.
         assert_eq!(
             logical_args.len(),
             fn_ty.params.len() - 1,

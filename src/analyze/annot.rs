@@ -46,6 +46,10 @@ pub fn refinement_path_path() -> [Symbol; 2] {
     [Symbol::intern("thrust"), Symbol::intern("refinement_path")]
 }
 
+pub fn closure_upvars_path() -> [Symbol; 2] {
+    [Symbol::intern("thrust"), Symbol::intern("closure_upvars")]
+}
+
 pub fn model_ty_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
