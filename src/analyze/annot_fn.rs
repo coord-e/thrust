@@ -260,20 +260,35 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         };
         let closure_def_id = self.tcx.local_parent(self.local_def_id);
         let captures = self.tcx.closure_captures(closure_def_id);
+        let closure_ty = self.tcx.type_of(closure_def_id).instantiate_identity();
+        let mir_ty::TyKind::Closure(_, closure_args) = closure_ty.kind() else {
+            panic!("closure specification is expected to sit inside a closure");
+        };
+        let mut upvar_terms = Vec::new();
+        for i in 0..captures.len() {
+            let upvar_term = match closure_args.as_closure().kind() {
+                mir_ty::ClosureKind::Fn => upvars_term.clone().box_current().tuple_proj(i),
+                mir_ty::ClosureKind::FnMut => chc::Term::mut_(
+                    upvars_term.clone().mut_current().tuple_proj(i),
+                    upvars_term.clone().mut_final().tuple_proj(i),
+                ),
+                mir_ty::ClosureKind::FnOnce => upvars_term.clone().tuple_proj(i),
+            };
+            upvar_terms.push(upvar_term);
+        }
         for subpat in subpats {
             let rustc_hir::PatKind::Binding(_, hir_id, ident, None) = subpat.kind else {
                 panic!("closure capture is expected to be a binding: {:?}", subpat);
             };
-            let Some(idx) = captures
-                .iter()
-                .position(|capture| capture.var_ident.name == ident.name)
-            else {
+            let Some(idx) = captures.iter().position(|capture| {
+                capture.var_ident.name == ident.name && capture.place.projections.is_empty()
+            }) else {
                 self.tcx.dcx().span_fatal(
                     subpat.span,
                     format!("`{}` is not captured by this closure", ident),
                 );
             };
-            self.env.insert(hir_id, upvars_term.clone().tuple_proj(idx));
+            self.env.insert(hir_id, upvar_terms[idx].clone());
         }
     }
 
