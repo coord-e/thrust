@@ -416,6 +416,38 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
+    /// Whether the receiver denotes the mutable-reference model of a closure (`&mut F` in the
+    /// specified signature) rather than the closure itself.
+    fn is_mut_receiver(&self, ty: mir_ty::Ty<'tcx>) -> bool {
+        matches!(
+            ty.kind(),
+            mir_ty::TyKind::Adt(adt, _) if Some(adt.did()) == self.def_ids.mut_model()
+        )
+    }
+
+    /// The receiver term to supply as the closure's environment, which is the first parameter of
+    /// its contract.
+    ///
+    /// A closure that mutates its environment receives it behind a `Mut` holding the environment
+    /// on entry and on exit, while a specification names the closure either by value or through a
+    /// `&mut`, so the two shapes need not agree. A closure value stands for an environment that
+    /// the call leaves as it is, and a `&mut` to a closure contributes the environment it holds on
+    /// entry.
+    fn closure_receiver_term(
+        &self,
+        receiver: &'tcx rustc_hir::Expr<'tcx>,
+        fn_ty: &rty::FunctionType,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        let env_ty = &fn_ty.params[rty::FunctionParamIdx::from(0usize)].ty;
+        let receiver_is_mut = self.is_mut_receiver(self.expr_ty(receiver));
+        let term = self.to_term(receiver);
+        match (env_ty.is_mut(), receiver_is_mut) {
+            (true, false) => chc::Term::mut_(term.clone(), term),
+            (false, true) => term.mut_current(),
+            _ => term,
+        }
+    }
+
     /// Resolves the [`rty::FunctionType`] of the closure contract referred to by the receiver.
     ///
     /// The receiver type is instantiated to the actual closure type in the formula function; its
@@ -467,7 +499,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure precondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.to_term(receiver))
+        let param_args: Vec<_> = std::iter::once(self.closure_receiver_term(receiver, &fn_ty))
             .chain(logical_args)
             .collect();
         FormulaOrTerm::Formula(fn_ty.precondition_formula(&param_args))
@@ -497,7 +529,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             "closure postcondition arity mismatch: closure takes {} argument(s)",
             fn_ty.params.len() - 1
         );
-        let param_args: Vec<_> = std::iter::once(self.to_term(receiver))
+        let param_args: Vec<_> = std::iter::once(self.closure_receiver_term(receiver, &fn_ty))
             .chain(logical_args)
             .collect();
         let result = self.to_term(result);
