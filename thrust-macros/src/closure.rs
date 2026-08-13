@@ -18,8 +18,8 @@
 //! and may be repeated, in which case its predicates are conjoined.
 //!
 //! `captures` restates the captured variables a clause wants to name, with the types
-//! they have outside the closure. Only the ones a clause names need restating, and in
-//! any order: the plugin matches them against the closure's real captures by name.
+//! they are captured by the closure. Only the ones a clause names need restating, and
+//! in any order: the plugin matches them against the closure's real captures by name.
 //!
 //! A clause sees no threaded generic or `Self` context, so a closure in a generic
 //! context cannot refer to generic- or `Self`-typed values.

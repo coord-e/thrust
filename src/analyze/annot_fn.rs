@@ -249,7 +249,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     /// are therefore matched up by name.
     fn build_env_from_captures(
         &mut self,
-        env: chc::Term<rty::FunctionParamIdx>,
+        upvars_term: chc::Term<rty::FunctionParamIdx>,
         pat: &'tcx rustc_hir::Pat<'tcx>,
     ) {
         let rustc_hir::PatKind::Tuple(subpats, _) = pat.kind else {
@@ -260,26 +260,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         };
         let closure_def_id = self.tcx.local_parent(self.local_def_id);
         let captures = self.tcx.closure_captures(closure_def_id);
-        let closure_ty = self.tcx.type_of(closure_def_id).instantiate_identity();
-        let mir_ty::TyKind::Closure(_, closure_args) = closure_ty.kind() else {
-            panic!("closure specification is expected to sit inside a closure");
-        };
-        let upvar_tys = closure_args.as_closure().upvar_tys();
-        // A closure called through `&mut self` receives its environment behind a `Mut`,
-        // a shape the analyzer does not yet represent consistently across a closure's
-        // definition and its call sites.
-        let env_ty = self.analyzer.fn_sig(closure_def_id.to_def_id()).inputs()[0];
-        if !subpats.is_empty()
-            && matches!(
-                env_ty.kind(),
-                mir_ty::TyKind::Ref(_, _, mir_ty::Mutability::Mut)
-            )
-        {
-            self.tcx.dcx().span_fatal(
-                pat.span,
-                "this closure is called through `&mut`, so a specification cannot name its captures yet",
-            );
-        }
         for subpat in subpats {
             let rustc_hir::PatKind::Binding(_, hir_id, ident, None) = subpat.kind else {
                 panic!("closure capture is expected to be a binding: {:?}", subpat);
@@ -293,54 +273,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                     format!("`{}` is not captured by this closure", ident),
                 );
             };
-            let term = self.capture_term(
-                env.clone().tuple_proj(idx),
-                captures[idx],
-                upvar_tys[idx],
-                subpat,
-            );
-            self.env.insert(hir_id, term);
+            self.env.insert(hir_id, upvars_term.clone().tuple_proj(idx));
         }
-    }
-
-    /// The value a capture name stands for, reporting against `subpat` when the
-    /// restated type does not describe what the closure captured.
-    ///
-    /// A shared borrow is read through, so that adding or removing `move` does not
-    /// change how a clause names the variable. A mutable borrow is left as the `Mut`
-    /// it is, since a clause has to say whether it means the value on entry or the
-    /// one on exit.
-    fn capture_term(
-        &self,
-        term: chc::Term<rty::FunctionParamIdx>,
-        capture: &mir_ty::CapturedPlace<'tcx>,
-        upvar_ty: mir_ty::Ty<'tcx>,
-        subpat: &'tcx rustc_hir::Pat<'tcx>,
-    ) -> chc::Term<rty::FunctionParamIdx> {
-        if !capture.place.projections.is_empty() {
-            self.tcx.dcx().span_fatal(
-                subpat.span,
-                format!(
-                    "`{}` is captured field by field, which a closure specification cannot name",
-                    capture.var_ident
-                ),
-            );
-        }
-        let (named_ty, term) = match upvar_ty.kind() {
-            mir_ty::TyKind::Ref(_, referent_ty, mir_ty::Mutability::Not) => {
-                (*referent_ty, term.box_current())
-            }
-            _ => (upvar_ty, term),
-        };
-        if self.type_builder.build(self.pat_ty(subpat)).to_sort()
-            != self.type_builder.build(named_ty).to_sort()
-        {
-            self.tcx.dcx().span_fatal(
-                subpat.span,
-                format!("`{}` is captured as `{}`", capture.var_ident, named_ty),
-            );
-        }
-        term
     }
 
     fn singleton_term_for_ty(
