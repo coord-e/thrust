@@ -1,8 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
 
-// A capture named in both clauses, so the environment is read from both companion
-// layouts: `requires` takes it first, `ensures` takes it after `result`.
 #[thrust_macros::requires(thrust_macros::pre!(f(x)))]
 #[thrust_macros::ensures(thrust_macros::post!(f(x), result))]
 fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {

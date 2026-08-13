@@ -1,12 +1,9 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
 
-// A capture taken by mutable borrow is named as the `&mut` it is, so that the clause
-// can say both what it was on entry (`*acc`) and what it becomes (`!acc`).
-//
-// The closure is passed straight to `apply`, which keeps it `FnOnce` and its
-// environment a plain tuple. A `FnMut` closure reached through `pre!`/`post!` instead
-// would be handed an environment without the `Mut` those translate away.
+// Passed straight to `apply` to keep the closure `FnOnce`: binding it to a `let` first
+// makes it `FnMut`, and `pre!`/`post!` hand a `FnMut` closure an environment stripped
+// of its `Mut`.
 #[thrust_macros::requires(thrust_macros::pre!(f(x)))]
 #[thrust_macros::ensures(thrust_macros::post!(f(x), result))]
 fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {

@@ -1,7 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
 
-// The declared postcondition pins `result` to `x + 1`, which is 4.
 #[thrust_macros::requires(thrust_macros::pre!(f(x)))]
 #[thrust_macros::ensures(thrust_macros::post!(f(x), result))]
 fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {

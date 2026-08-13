@@ -1,7 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
 
-// The captured `acc` counts up from 0, so the first call returns 4.
 fn main() {
     let mut acc = 0;
     let mut f = thrust_macros::closure!(
