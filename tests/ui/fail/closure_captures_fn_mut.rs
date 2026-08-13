@@ -5,9 +5,9 @@
 fn main() {
     let mut acc = 0;
     let mut f = thrust_macros::closure!(
-        captures(acc: &mut i32),
-        ensures(result == x + 1 && !acc == *acc + 1),
-        move |x: i32| -> i32 {
+        captures(acc: &mut &mut i32),
+        ensures(result == x + 1 && *(!acc) == *(*acc) + 1),
+        |x: i32| -> i32 {
             acc += 1;
             x + acc
         },
