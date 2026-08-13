@@ -1,9 +1,10 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
 
-// A `FnMut` environment is itself a `Mut`, so a mutable-borrow capture has two levels:
-// the outer holds the slot on entry (`*acc`) and on exit (`!acc`), the inner is the
-// borrow, whose current value is the counter. Hence `*(!acc)`, not `!(*acc)`.
+// A `FnMut` closure holds its upvars behind a `Mut`, so a mutable-borrow capture has
+// two levels: the outer holds the slot on entry (`*acc`) and on exit (`!acc`), the
+// inner is the borrow, whose current value is the counter. Hence `*(!acc)`, not
+// `!(*acc)`.
 fn main() {
     let mut acc = 0;
     let mut f = thrust_macros::closure!(

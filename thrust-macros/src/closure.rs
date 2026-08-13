@@ -108,7 +108,7 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
         mut closure,
     } = spec;
 
-    let env = env_param(&captures)?;
+    let upvars = upvars_param(&captures)?;
     let mut arg_params: Vec<FnArg> = Vec::new();
     for param in &closure.inputs {
         let syn::Pat::Type(pt) = param else {
@@ -133,10 +133,10 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
     // clause has none of its own.
     let spec_sig: syn::Signature = syn::parse_quote!(fn closure_spec());
     let type_lowering = FormulaFnTypeLowering::new(&spec_sig);
-    // A closure's parameters are `[env, arg1, .., argN]`, the environment holding its
-    // captures. The companions take the environment in that same leading position, so
-    // their parameters line up with the closure's.
-    let env_model = type_lowering.lower_params([&env]);
+    // A closure's parameters are `[upvars, arg1, .., argN]`. The companions take the
+    // upvars in that same leading position, so their parameters line up with the
+    // closure's.
+    let upvars_model = type_lowering.lower_params([&upvars]);
     let arg_models = type_lowering.lower_params(&arg_params);
 
     let mut prelude: Vec<TokenStream2> = Vec::new();
@@ -145,7 +145,7 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
             #[allow(unused_variables, non_snake_case)]
             #[thrust::formula_fn]
             fn _thrust_closure_requires(
-                #[thrust::closure_env] #env_model,
+                #[thrust::closure_upvars] #upvars_model,
                 #arg_models
             ) -> bool {
                 #body
@@ -162,7 +162,7 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
             #[thrust::formula_fn]
             fn _thrust_closure_ensures(
                 result: #ret_model,
-                #[thrust::closure_env] #env_model,
+                #[thrust::closure_upvars] #upvars_model,
                 #arg_models
             ) -> bool {
                 #body
@@ -190,9 +190,9 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
     Ok(closure)
 }
 
-/// The companion parameter holding the closure environment: a tuple of the captures a
-/// clause names, which the plugin matches up with the real environment by name.
-fn env_param(captures: &[FnArg]) -> syn::Result<FnArg> {
+/// The companion parameter holding the closure's upvars: a tuple of the captures a
+/// clause names, which the plugin matches up with the real upvars by name.
+fn upvars_param(captures: &[FnArg]) -> syn::Result<FnArg> {
     let mut names = Vec::new();
     let mut tys = Vec::new();
     for capture in captures {
