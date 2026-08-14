@@ -65,6 +65,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let mut keys = self.tcx.mir_keys(()).clone();
         let mut trait_method_spec_keys = HashSet::new();
         for local_def_id in self.tcx.mir_keys(()) {
+            if !self.tcx.def_kind(*local_def_id).is_fn_like() {
+                keys.swap_remove(local_def_id);
+                continue;
+            }
             let analyzer = self.ctx.local_def_analyzer(*local_def_id);
             if analyzer.is_annotated_as_extern_spec_fn() {
                 let target_def_id = analyzer.extern_spec_fn_target_def_id();
@@ -91,9 +95,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if analyzer.is_annotated_as_formula_fn() {
                 self.ctx.register_formula_fn(*local_def_id);
                 self.skip_analysis.insert(*local_def_id);
-                keys.swap_remove(local_def_id);
-            }
-            if !self.tcx.def_kind(*local_def_id).is_fn_like() {
                 keys.swap_remove(local_def_id);
             }
         }
