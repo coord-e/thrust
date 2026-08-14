@@ -425,23 +425,22 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         )
     }
 
-    /// The receiver term to supply as the closure's environment, which is the first parameter of
-    /// its contract.
+    /// The receiver term to supply as the closure's upvars, which are the first parameter of its
+    /// [`rty::FunctionType`].
     ///
-    /// A closure that mutates its environment receives it behind a `Mut` holding the environment
-    /// on entry and on exit, while a specification names the closure either by value or through a
-    /// `&mut`, so the two shapes need not agree. A closure value stands for an environment that
-    /// the call leaves as it is, and a `&mut` to a closure contributes the environment it holds on
-    /// entry.
+    /// A closure that mutates its upvars receives them behind a `Mut` holding the upvars on entry
+    /// and on exit, while a specification names the closure either by value or through a `&mut`,
+    /// so the two shapes need not agree. A closure value stands for upvars that the call leaves
+    /// as they are, and a `&mut` to a closure contributes the upvars it holds on entry.
     fn closure_receiver_term(
         &self,
         receiver: &'tcx rustc_hir::Expr<'tcx>,
         fn_ty: &rty::FunctionType,
     ) -> chc::Term<rty::FunctionParamIdx> {
-        let env_ty = &fn_ty.params[rty::FunctionParamIdx::from(0usize)].ty;
+        let upvars_ty = &fn_ty.params[rty::FunctionParamIdx::from(0usize)].ty;
         let receiver_is_mut = self.is_mut_receiver(self.expr_ty(receiver));
         let term = self.to_term(receiver);
-        match (env_ty.is_mut(), receiver_is_mut) {
+        match (upvars_ty.is_mut(), receiver_is_mut) {
             (true, false) => chc::Term::mut_(term.clone(), term),
             (false, true) => term.mut_current(),
             _ => term,
