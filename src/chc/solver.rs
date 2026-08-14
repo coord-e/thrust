@@ -19,6 +19,25 @@ pub enum CheckSatError {
     Io(#[from] std::io::Error),
 }
 
+/// Time a solver command that ran over its time limit is given to shut itself down.
+const TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Ends a solver command that ran over its time limit.
+///
+/// A solver command may hold resources that outlive it and that only it knows how to
+/// release -- `tests/thrust-pcsat-wrapper` leaves a Docker container running otherwise --
+/// so it is asked to exit with `SIGTERM` and killed only if it is still there once the
+/// grace period is over. The process is never reaped here, so the system cannot hand its
+/// identifier to an unrelated process in between.
+fn terminate(pid: u32) {
+    use nix::sys::signal::{kill, Signal};
+
+    let pid = nix::unistd::Pid::from_raw(pid as i32);
+    let _ = kill(pid, Signal::SIGTERM);
+    std::thread::sleep(TERMINATION_GRACE);
+    let _ = kill(pid, Signal::SIGKILL);
+}
+
 /// A configuration for running a command-line CHC solver.
 #[derive(Debug, Clone)]
 pub struct CommandConfig {
@@ -52,13 +71,17 @@ impl CommandConfig {
         use process_control::{ChildExt as _, Control as _};
 
         let start = std::time::Instant::now();
-        tracing::info!(timeout = ?self.timeout, pid = child.id(), "waiting");
-        let mut child = child.controlled_with_output().terminate_for_timeout();
+        let pid = child.id();
+        tracing::info!(timeout = ?self.timeout, pid, "waiting");
+        let mut child = child.controlled_with_output();
         if let Some(timeout) = self.timeout {
             child = child.time_limit(timeout);
         }
         let output = match child.wait()? {
-            None => return Err(CheckSatError::Timeout(self.timeout.unwrap())),
+            None => {
+                terminate(pid);
+                return Err(CheckSatError::Timeout(self.timeout.unwrap()));
+            }
             Some(output) => output,
         };
         let elapsed = std::time::Instant::now() - start;
