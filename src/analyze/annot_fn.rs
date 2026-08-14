@@ -416,33 +416,37 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
-    /// Whether the receiver denotes the mutable-reference model of a closure (`&mut F` in the
-    /// specified signature) rather than the closure itself.
-    fn is_mut_receiver(&self, ty: mir_ty::Ty<'tcx>) -> bool {
-        matches!(
-            ty.kind(),
-            mir_ty::TyKind::Adt(adt, _) if Some(adt.did()) == self.def_ids.mut_model()
-        )
-    }
-
-    /// The receiver term to supply as the closure's upvars, which are the first parameter of its
-    /// [`rty::FunctionType`].
+    /// The receiver term as the closure's own body takes it.
     ///
-    /// A closure that mutates its upvars receives them behind a `Mut` holding the upvars on entry
-    /// and on exit, while a specification names the closure either by value or through a `&mut`,
-    /// so the two shapes need not agree. A closure value stands for upvars that the call leaves
-    /// as they are, and a `&mut` to a closure contributes the upvars it holds on entry.
+    /// That body takes the upvars by `&`, by `&mut`, or by value, following the kind inferred
+    /// for the closure, while `pre!`/`post!` reach the closure through the parameter the
+    /// annotated function declares. A call bridges the two by borrowing the closure into the
+    /// receiver the body takes; the same borrow is taken here on the term.
     fn closure_receiver_term(
         &self,
         receiver: &'tcx rustc_hir::Expr<'tcx>,
         fn_ty: &rty::FunctionType,
     ) -> chc::Term<rty::FunctionParamIdx> {
+        let held_as = match self.expr_ty(receiver).kind() {
+            mir_ty::TyKind::Adt(adt, _) if Some(adt.did()) == self.def_ids.mut_model() => {
+                Some(rty::RefKind::Mut)
+            }
+            mir_ty::TyKind::Ref(_, _, mir_ty::Mutability::Not) => Some(rty::RefKind::Immut),
+            _ => None,
+        };
         let upvars_ty = &fn_ty.params[rty::FunctionParamIdx::from(0usize)].ty;
-        let receiver_is_mut = self.is_mut_receiver(self.expr_ty(receiver));
+        let received_as = match upvars_ty.as_pointer().map(|ty| ty.kind) {
+            Some(rty::PointerKind::Ref(kind)) => Some(kind),
+            _ => None,
+        };
+
         let term = self.to_term(receiver);
-        match (upvars_ty.is_mut(), receiver_is_mut) {
-            (true, false) => chc::Term::mut_(term.clone(), term),
-            (false, true) => term.mut_current(),
+        match (held_as, received_as) {
+            (None, Some(rty::RefKind::Immut)) => chc::Term::box_(term),
+            (None, Some(rty::RefKind::Mut)) => chc::Term::mut_(term.clone(), term),
+            (Some(rty::RefKind::Mut), Some(rty::RefKind::Immut)) => {
+                chc::Term::box_(term.mut_current())
+            }
             _ => term,
         }
     }
