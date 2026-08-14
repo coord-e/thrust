@@ -5,10 +5,18 @@ COAR_IMAGE=${COAR_IMAGE:-ghcr.io/hiroshi-unno/coar:main}
 smt2=$(mktemp -p . --suffix .smt2)
 trap "rm -f $smt2" EXIT
 cp "$1" "$smt2"
-out=$(
-docker run --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
-    main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2"
-)
+
+container=$(docker create --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
+    main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2")
+
+# Thrust gives up on a slow solver by killing this script with SIGKILL: no trap runs, and
+# Docker keeps the container going once the client attached to it is gone. Removing it is
+# left to a process that outlives this one, waiting for the write end of a pipe that the
+# kernel closes however this script dies. Every other process has to let go of that end --
+# hence the `exec 3>&-` below -- or the removal waits for as long as that process lives.
+exec 3> >(cat > /dev/null; docker rm --force "$container" > /dev/null 2>&1)
+
+out=$(exec 3>&-; docker start --attach "$container")
 exit_code=$?
 echo "${out%,*}"
 exit "$exit_code"
