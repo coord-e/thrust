@@ -43,6 +43,10 @@ impl<'tcx> FormulaFn<'tcx> {
         &self.formula
     }
 
+    pub fn params(&self) -> &IndexVec<rty::FunctionParamIdx, mir_ty::Ty<'tcx>> {
+        &self.params
+    }
+
     pub fn to_require_formula(&self) -> chc::Formula<rty::FunctionParamIdx> {
         self.formula.clone()
     }
