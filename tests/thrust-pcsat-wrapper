@@ -11,13 +11,13 @@ container=$(docker create --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
     main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2")
 
 # Thrust ends a solver that runs over its timeout with SIGTERM, and Docker keeps the
-# container going once the client attached to it is gone, so the container is removed from
-# here. Passing the signal on to the solver itself would achieve nothing: it runs as the
-# container's PID 1, for which the kernel drops every signal that has no handler.
+# container going once the client attached to it is gone. Passing the signal on to the
+# solver instead would achieve nothing: it runs as the container's PID 1, for which the
+# kernel drops every signal that has no handler.
 trap 'docker rm --force "$container" > /dev/null 2>&1; exit 143' TERM
 
 # Bash defers a trap until the command in the foreground finishes -- which would be the
-# solver this one is meant to interrupt. `wait` is the exception, hence the background job.
+# solver the trap above is meant to interrupt. `wait` is the exception.
 docker start --attach "$container" > "$solver_out" &
 wait $!
 exit_code=$?
