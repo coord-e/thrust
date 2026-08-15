@@ -2,6 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use rustc_index::bit_set::DenseBitSet;
 use rustc_middle::mir::{self, BasicBlock, Body, Local};
+use rustc_middle::ty::TyCtxt;
 use rustc_mir_dataflow::{impls::MaybeLiveLocals, ResultsCursor};
 
 #[derive(Debug, Clone, Default)]
@@ -17,8 +18,12 @@ pub struct DropPoints {
 }
 
 impl DropPoints {
-    pub fn builder<'mir, 'tcx>(body: &'mir Body<'tcx>) -> DropPointsBuilder<'mir, 'tcx> {
+    pub fn builder<'mir, 'tcx>(
+        tcx: TyCtxt<'tcx>,
+        body: &'mir Body<'tcx>,
+    ) -> DropPointsBuilder<'mir, 'tcx> {
         DropPointsBuilder {
+            tcx,
             body,
             bb_ins_cache: HashMap::new(),
         }
@@ -64,8 +69,9 @@ impl DropPoints {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DropPointsBuilder<'mir, 'tcx> {
+    tcx: TyCtxt<'tcx>,
     body: &'mir Body<'tcx>,
     bb_ins_cache: HashMap<BasicBlock, DenseBitSet<Local>>,
 }
@@ -75,28 +81,45 @@ pub struct DropPointsBuilder<'mir, 'tcx> {
 /// drop obligation (including resolving any mutable-borrow prophecies it owns)
 /// moves to the destination and it must not be dropped at the move site.
 ///
+/// Ownership is transferred by a `move` operand, and equally by a `copy` operand whose type is
+/// not `Copy`: runtime MIR reads a local that is dead afterwards with `copy` regardless of
+/// whether the type can actually be duplicated.
+///
 /// Only owned (non-reference) operands are reported: `move`d references are
 /// turned into reborrows by `ReborrowVisitor`/`RustCallVisitor`, so the source
 /// local remains live and must still be dropped.
 fn moved_locals<'tcx>(
+    tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     bb: BasicBlock,
     statement_index: usize,
 ) -> DenseBitSet<Local> {
     struct Visitor<'a, 'tcx> {
+        tcx: TyCtxt<'tcx>,
         body: &'a Body<'tcx>,
         locals: DenseBitSet<Local>,
     }
+    impl<'tcx> Visitor<'_, 'tcx> {
+        fn place_is_copy(&self, place: mir::Place<'tcx>) -> bool {
+            let ty = place.ty(&self.body.local_decls, self.tcx).ty;
+            self.tcx
+                .type_is_copy_modulo_regions(self.body.typing_env(self.tcx), ty)
+        }
+    }
     impl<'tcx> mir::visit::Visitor<'tcx> for Visitor<'_, 'tcx> {
         fn visit_operand(&mut self, operand: &mir::Operand<'tcx>, _location: mir::Location) {
-            if let mir::Operand::Move(place) = operand {
-                if place.projection.is_empty() && !self.body.local_decls[place.local].ty.is_ref() {
-                    self.locals.insert(place.local);
-                }
+            let place = match operand {
+                mir::Operand::Move(place) => place,
+                mir::Operand::Copy(place) if !self.place_is_copy(*place) => place,
+                _ => return,
+            };
+            if place.projection.is_empty() && !self.body.local_decls[place.local].ty.is_ref() {
+                self.locals.insert(place.local);
             }
         }
     }
     let mut visitor = Visitor {
+        tcx,
         body,
         locals: DenseBitSet::new_empty(body.local_decls.len()),
     };
@@ -192,7 +215,7 @@ impl<'mir, 'tcx> DropPointsBuilder<'mir, 'tcx> {
                     t.insert(def);
                 }
                 t.subtract(&last_live_locals);
-                t.subtract(&moved_locals(self.body, bb, statement_index));
+                t.subtract(&moved_locals(self.tcx, self.body, bb, statement_index));
                 t
             };
             last_live_locals = live_locals;
