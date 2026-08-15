@@ -75,6 +75,7 @@ impl CommandConfig {
             .args(&self.args)
             .arg(path_arg)
             .stdout(stdout)
+            .stderr(std::process::Stdio::piped())
             .spawn()?;
         tracing::info!(program = self.name, args = ?self.args, path = %path_arg.to_string_lossy(), pid = child.id(), "spawned");
 
