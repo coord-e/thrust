@@ -19,23 +19,18 @@ pub enum CheckSatError {
     Io(#[from] std::io::Error),
 }
 
-const TERMINATION_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Ends a solver command that ran over its time limit.
+/// Asks a solver command that ran over its time limit to shut itself down.
 ///
-/// The command is given a chance to shut itself down first: it may hold resources that
-/// outlive the process and that only it knows how to release, as
-/// `tests/thrust-pcsat-wrapper` does with the Docker container it runs the solver in.
+/// It is asked rather than killed because it may hold resources that outlive the process
+/// and that only it knows how to release, as `tests/thrust-pcsat-wrapper` does with the
+/// Docker container it runs the solver in.
 ///
 /// A timed-out process is left unreaped, so the system cannot hand its identifier to an
-/// unrelated process that the `SIGKILL` would then reach.
+/// unrelated process that this would then reach.
 fn terminate(pid: u32) {
     use nix::sys::signal::{kill, Signal};
 
-    let pid = nix::unistd::Pid::from_raw(pid as i32);
-    let _ = kill(pid, Signal::SIGTERM);
-    std::thread::sleep(TERMINATION_GRACE);
-    let _ = kill(pid, Signal::SIGKILL);
+    let _ = kill(nix::unistd::Pid::from_raw(pid as i32), Signal::SIGTERM);
 }
 
 /// A configuration for running a command-line CHC solver.
