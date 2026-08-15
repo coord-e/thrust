@@ -26,3 +26,6 @@ keep from reaching it.
 Neither prerequisite of `cargo test` is set up in the session container. Install Z3 at the
 version `.github/actions/setup-z3` pins for CI, and start a Docker daemon with `dockerd &`.
 The daemon dies from time to time, so restart it whenever the tests that need it fail.
+
+Export the `COAR_IMAGE` digest that `.github/workflows/ci.yml` pins, and `docker pull` it
+before running `cargo test`.
