@@ -24,29 +24,19 @@ mod drop_point;
 mod visitor;
 pub use drop_point::DropPoints;
 
-/// Whether a basic block needs a precondition of its own, rather than
-/// inheriting its predecessor's outgoing env state.
+/// Whether `bb` is a loop header, i.e. it is reached by an edge that closes a cycle.
 ///
-/// This holds for `START_BLOCK` (whose precondition comes from the function
-/// signature, not a predecessor) and for every block reached by more than one
-/// CFG edge — i.e. join points with multiple predecessors, or multiple edges
-/// from a single predecessor (e.g. `SwitchInt` arms that share a target).
+/// Basic blocks are analyzed in reverse postorder, under which every predecessor of a block comes
+/// before it unless the edge back to it closes a cycle. A block reached only from blocks analyzed
+/// before it inherits the states they leave as its precondition; a loop header cannot, as the
+/// state carried around the loop is not yet known when it is analyzed, and has to be inferred.
 ///
-/// A block with a unique incoming edge can inherit that edge's env state, so it
-/// needs no precondition of its own. A block that does need one currently models
-/// it with a fresh predicate variable; this is also the set of CFG cutpoints, so
-/// it cuts every cycle (a loop header always has in-degree >= 2).
-pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
-    if bb == mir::START_BLOCK {
-        return true;
-    }
-    let preds = &body.basic_blocks.predecessors()[bb];
-    if preds.len() != 1 {
-        return true;
-    }
-    let pred = preds[0];
-    let pred_term = body.basic_blocks[pred].terminator();
-    pred_term.successors().filter(|s| *s == bb).count() > 1
+/// These blocks are the cutpoints of the CFG, so a precondition inferred here cuts every cycle.
+pub fn is_loop_header(body: &Body<'_>, bb: BasicBlock) -> bool {
+    let doms = body.basic_blocks.dominators();
+    body.basic_blocks.predecessors()[bb]
+        .iter()
+        .any(|&pred| doms.dominates(bb, pred))
 }
 
 /// Adapts the actual arguments of a call to the parameter list of the callee's function type.
@@ -755,8 +745,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         bb: BasicBlock,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
-        if !needs_own_precondition(&self.body, bb) {
-            self.install_inherited_bb_ty(bb, outer_fn_param_vars);
+        if !is_loop_header(&self.body, bb) {
+            self.push_inherited_precondition(bb, outer_fn_param_vars);
             return;
         }
         let bty = self.basic_block_ty_with_precondition(bb);
@@ -793,10 +783,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.ctx.extend_clauses(clauses);
     }
 
-    /// Materializes the `BasicBlockType` for a target that inherits its
-    /// precondition by building its (pvar-free) layout and overwriting the last
-    /// param's refinement with the current env state.
-    fn install_inherited_bb_ty(
+    /// Records the env state this block leaves as one of the states `bb` is entered in, which its
+    /// precondition is the disjunction of.
+    fn push_inherited_precondition(
         &mut self,
         bb: BasicBlock,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
@@ -825,7 +814,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let precondition = capture.finish(&self.env);
 
         self.ctx
-            .register_basic_block_precondition(self.local_def_id, bb, precondition);
+            .push_basic_block_precondition(self.local_def_id, bb, precondition);
     }
 
     fn with_assumptions<F, T>(&mut self, assumptions: Vec<impl Into<Assumption>>, callback: F) -> T

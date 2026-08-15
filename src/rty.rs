@@ -52,7 +52,7 @@ mod clause_builder;
 pub use clause_builder::ClauseBuilderExt;
 
 mod subtyping;
-pub use subtyping::{ClauseScope, Subtyping};
+pub use subtyping::{relate_sub_precondition, ClauseScope, Subtyping};
 
 mod params;
 pub use params::{RefinedTypeArgs, TypeParamIdx, TypeParamSubst};
@@ -1521,6 +1521,37 @@ where
             .push_conj(body.map_var(|v| v.shift_existential(self.existentials.len())));
         self.existentials.extend(existentials);
         self.body.simplify();
+    }
+
+    /// The disjunction of the formulas, unless a predicate variable appears in one of them.
+    ///
+    /// The existential variables of every disjunct are hoisted in front of the disjunction, which
+    /// they may be as long as every sort is inhabited. A disjunct that holds a predicate variable
+    /// has no such form, as a disjunction is no conjunct of a Horn clause body. A single formula
+    /// stands for itself, and is under no such restriction.
+    pub fn disjunction(formulas: impl IntoIterator<Item = Self>) -> Option<Self> {
+        let mut formulas: Vec<_> = formulas.into_iter().collect();
+        if formulas.len() == 1 {
+            return formulas.pop();
+        }
+
+        let mut existentials = IndexVec::new();
+        let mut disjuncts = Vec::new();
+        for Formula {
+            existentials: disjunct_existentials,
+            body,
+        } in formulas
+        {
+            let base = existentials.len();
+            existentials.extend(disjunct_existentials);
+            disjuncts.push(body.map_var(|v| v.shift_existential(base)).into_formula()?);
+        }
+        let body = match disjuncts.len() {
+            0 => chc::Body::bottom(),
+            1 => disjuncts.pop().unwrap().into(),
+            _ => chc::Formula::Or(disjuncts).into(),
+        };
+        Some(Formula::new(existentials, body))
     }
 }
 

@@ -1225,6 +1225,10 @@ impl Pred {
         }
     }
 
+    pub fn is_var(&self) -> bool {
+        matches!(self, Pred::Var(_))
+    }
+
     pub fn is_top(&self) -> bool {
         match self {
             Pred::Known(p) => p.is_top(),
@@ -1785,6 +1789,21 @@ impl<V> Body<V> {
         let Body { atoms, formula } = other.into();
         self.atoms.extend(atoms);
         self.formula.push_conj(formula);
+    }
+
+    /// The body stated as a single formula, unless a predicate variable appears in it.
+    ///
+    /// A formula holds no predicate variable, because the only place a Horn clause has for one is
+    /// a conjunct of its body or its head (see [`Formula`]).
+    pub fn into_formula(self) -> Option<Formula<V>> {
+        if self.atoms.iter().any(|atom| atom.pred.is_var()) {
+            return None;
+        }
+        let mut formula = self.formula;
+        for atom in self.atoms {
+            formula.push_conj(Formula::Atom(atom));
+        }
+        Some(formula)
     }
 
     pub fn map_var<F, W>(self, mut f: F) -> Body<W>

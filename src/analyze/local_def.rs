@@ -744,16 +744,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     /// Walks up the dominator tree from the marker block to the innermost
-    /// enclosing loop header: the first dominator that needs its own
-    /// precondition (in-degree >= 2) and has a back edge.
+    /// enclosing loop header.
     fn loop_header_of(body: &Body<'_>, marker_bb: BasicBlock) -> Option<BasicBlock> {
         let doms = body.basic_blocks.dominators();
-        let preds = body.basic_blocks.predecessors();
         let mut cur = Some(marker_bb);
         while let Some(bb) = cur {
-            if analyze::basic_block::needs_own_precondition(body, bb)
-                && preds[bb].iter().any(|&p| doms.dominates(bb, p))
-            {
+            if analyze::basic_block::is_loop_header(body, bb) {
                 return Some(bb);
             }
             cur = doms.immediate_dominator(bb);
@@ -1021,7 +1017,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let bty = self.entry_block_ty(expected, live_locals, ret_ty);
                 self.ctx
                     .register_basic_block_ty_with_precondition(self.local_def_id, bb, bty);
-            } else if analyze::basic_block::needs_own_precondition(&self.body, bb) {
+            } else if analyze::basic_block::is_loop_header(&self.body, bb) {
                 let bty = self
                     .type_builder
                     .for_template(&mut self.ctx)
@@ -1029,9 +1025,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.ctx
                     .register_basic_block_ty_with_precondition(self.local_def_id, bb, bty);
             } else {
-                // The block inherits its predecessor's outgoing env state as its
-                // precondition, materialized lazily during the predecessor's
-                // analysis. Record only unrefined type here.
+                // The block inherits the states its predecessors leave as its precondition,
+                // which is only known once they have all been analyzed. Record the type alone.
                 let bty = self
                     .type_builder
                     .build_basic_block(&self.body, live_locals, ret_ty);
@@ -1043,12 +1038,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn analyze_basic_blocks(&mut self, expected_fn_ty: &rty::RefinedType) {
         let expected_fn_ty = expected_fn_ty.ty.as_function().unwrap();
-        // Reverse postorder guarantees each block that inherits its precondition
-        // is visited after the predecessor that lazily materialized its type.
+        // Reverse postorder guarantees each block that inherits its precondition is visited
+        // after every predecessor that leaves a state for it.
         for (bb, data) in mir::traversal::reverse_postorder(&self.body) {
             if data.is_cleanup {
                 continue;
             }
+            self.ctx
+                .install_inherited_basic_block_precondition(self.local_def_id, bb);
             let rty = self
                 .ctx
                 .basic_block_ty_with_precondition(self.local_def_id, bb)
