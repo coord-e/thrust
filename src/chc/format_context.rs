@@ -228,6 +228,12 @@ fn collect_sorts(system: &chc::System) -> BTreeSet<chc::Sort> {
         }
     }
 
+    for sort in sorts.clone() {
+        sort.walk(|inner_sort| {
+            sorts.insert(inner_sort.clone());
+        });
+    }
+
     sorts
 }
 
@@ -269,13 +275,33 @@ fn monomorphize_datatype(
 
 impl FormatContext {
     pub fn from_system(system: &chc::System) -> Self {
-        let mut sorts = collect_sorts(system);
         let mut datatypes = system.datatypes.clone();
-        for sort in sorts.iter().flat_map(|s| s.as_datatype()) {
-            if let Some(mono_datatype) = monomorphize_datatype(sort, &datatypes) {
-                datatypes.push(mono_datatype);
+        let mut sorts = collect_sorts(system);
+
+        let mut pending: Vec<_> = sorts.clone().into_iter().collect();
+        while let Some(sort) = pending.pop() {
+            if let Some(datatype_sort) = sort.as_datatype() {
+                let datatype = match monomorphize_datatype(datatype_sort, &datatypes) {
+                    Some(mono_datatype) => {
+                        datatypes.push(mono_datatype.clone());
+                        mono_datatype
+                    }
+                    None => datatypes
+                        .iter()
+                        .find(|d| d.symbol == datatype_sort.symbol)
+                        .unwrap()
+                        .clone(),
+                };
+                for selector in datatype.selectors() {
+                    selector.sort.walk(|sort| {
+                        if sorts.insert(sort.clone()) {
+                            pending.push(sort.clone());
+                        }
+                    });
+                }
             }
         }
+
         let int_array_elem_sorts: BTreeSet<_> = sorts
             .iter()
             .filter_map(|s| match s {
