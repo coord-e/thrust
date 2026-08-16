@@ -1648,6 +1648,7 @@ impl<FV> Refinement<FV> {
     pub fn instantiate(self) -> Instantiator<FV> {
         Instantiator {
             value_var: None,
+            value_term: None,
             existentials: HashMap::new(),
             refinement: self,
         }
@@ -1668,6 +1669,7 @@ impl<FV> Refinement<FV> {
 #[derive(Debug, Clone)]
 pub struct Instantiator<T> {
     value_var: Option<T>,
+    value_term: Option<chc::Term<T>>,
     existentials: HashMap<ExistentialVarIdx, T>,
     refinement: Refinement<T>,
 }
@@ -1675,6 +1677,11 @@ pub struct Instantiator<T> {
 impl<T> Instantiator<T> {
     pub fn value_var(&mut self, value_var: T) -> &mut Self {
         self.value_var = Some(value_var);
+        self
+    }
+
+    pub fn value_term(&mut self, value_term: chc::Term<T>) -> &mut Self {
+        self.value_term = Some(value_term);
         self
     }
 
@@ -1689,13 +1696,16 @@ impl<T> Instantiator<T> {
     {
         let Instantiator {
             value_var,
+            value_term,
             existentials,
             refinement,
         } = self;
-        refinement.body.map_var(move |v| match v {
-            RefinedTypeVar::Value => value_var.clone().unwrap(),
-            RefinedTypeVar::Existential(v) => existentials[&v].clone(),
-            RefinedTypeVar::Free(v) => v,
+        refinement.body.subst_var(move |v| match v {
+            RefinedTypeVar::Value => value_term
+                .clone()
+                .unwrap_or_else(|| chc::Term::var(value_var.clone().unwrap())),
+            RefinedTypeVar::Existential(v) => chc::Term::var(existentials[&v].clone()),
+            RefinedTypeVar::Free(v) => chc::Term::var(v),
         })
     }
 }
