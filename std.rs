@@ -427,6 +427,20 @@ mod thrust_models {
         pub fn at_entry(self) -> T {
             unimplemented!()
         }
+
+        #[allow(dead_code)]
+        #[thrust::def::fn_param_at_here]
+        #[thrust::ignored]
+        pub fn at_here(self) -> T {
+            unimplemented!()
+        }
+
+        #[allow(dead_code)]
+        #[thrust::def::fn_param_is_not_changed]
+        #[thrust::ignored]
+        pub fn is_not_changed(&self) -> bool {
+            unimplemented!()
+        }
     }
 }
 

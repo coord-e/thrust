@@ -14,7 +14,7 @@ fn keep<F: Fn(i64) -> i64, T: Copy + PartialEq>(f: F, v: T) {
   let _ = f;
   let mut x = v;
   while rand() == 0 {
-    thrust_macros::invariant!(|x: T, v: T| x == v);
+    thrust_macros::invariant!(|x: T, v: thrust_models::FnParam<T>| x == v.at_here());
     x = v;
   }
   assert!(x == v);

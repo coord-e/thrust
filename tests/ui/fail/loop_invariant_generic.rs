@@ -10,7 +10,7 @@ fn rand() -> i64 { unimplemented!() }
 fn keep<T: Copy + PartialEq>(v: T) {
   let mut x = v;
   while rand() == 0 {
-    thrust_macros::invariant!(|v: T| v == v);
+    thrust_macros::invariant!(|v: thrust_models::FnParam<T>| v.is_not_changed());
     x = v;
   }
   assert!(x == v);
