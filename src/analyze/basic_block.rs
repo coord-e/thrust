@@ -11,7 +11,7 @@ use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
 use crate::chc;
-use crate::pretty::PrettyDisplayExt as _;
+use crate::pretty::{PrettyDisplayExt as _, PrettySliceExt as _};
 use crate::refine::{
     Assumption, BasicBlockType, BasicBlockTypeParamKind, PlaceType, PlaceTypeBuilder, PlaceTypeVar,
     TempVarIdx, TypeBuilder, Var,
@@ -47,6 +47,103 @@ pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
     let pred = preds[0];
     let pred_term = body.basic_blocks[pred].terminator();
     pred_term.successors().filter(|s| *s == bb).count() > 1
+}
+
+/// Adapts the actual arguments of a call to the parameter list of the callee's function type.
+///
+/// A function type carries its precondition on its last parameter, so it has one even when the
+/// function takes no argument (see `refine::FunctionTemplateTypeBuilder::build`); a call with no
+/// argument passes a unit value for it. Under the `rust-call` ABI the caller passes the arguments
+/// after the receiver as a single tuple, while the parameter list spells them out one by one:
+///
+/// ```text
+/// &Closure, ((own i32)[<0>], (own bool)[<false>])[t]
+/// =>
+/// &Closure, i32[0], bool[false]
+/// ```
+fn adapt_args_to_abi(
+    mut args: Vec<PlaceType>,
+    abi: rty::FunctionAbi,
+) -> IndexVec<rty::FunctionParamIdx, PlaceType> {
+    match abi {
+        rty::FunctionAbi::Rust => {
+            if args.is_empty() {
+                args.push(PlaceType::with_ty_and_term(
+                    rty::Type::unit(),
+                    chc::Term::tuple(Vec::new()),
+                ));
+            }
+        }
+        rty::FunctionAbi::RustCall => {
+            let tupled = args.pop().expect("rust-call last arg");
+            let elems = tupled
+                .ty
+                .as_tuple()
+                .expect("rust-call last arg is tuple")
+                .elems
+                .len();
+            for idx in 0..elems {
+                // elaboration: all tuple elements are boxed
+                args.push(tupled.clone().tuple_proj(idx).deref());
+            }
+
+            tracing::info!(args = %args.pretty_slice().display(), "rust-call expanded");
+        }
+    }
+    args.into_iter().collect()
+}
+
+/// The refined type of a value described by a [`PlaceType`].
+///
+/// A value of a singleton sort is the only value of its sort, and its refinement is dropped so
+/// that it is not stated in terms of the variable holding it (see `refine::Env::var_type`).
+fn refined_type(pty: PlaceType) -> rty::RefinedType<Var> {
+    // TODO: should we cover "is_singleton" ness in relate_* methods or here?
+    if pty.ty.to_sort().is_singleton() {
+        return rty::RefinedType::unrefined(pty.ty);
+    }
+    pty.into()
+}
+
+/// The type of the value a call gives, which is the callee's return type with each parameter
+/// replaced by the argument passed for it.
+///
+/// The arguments are values of the environment, described by [`PlaceType`]s, and the existential
+/// variables they are stated in terms of are taken over by the refinement of the result. An
+/// argument stated that way cannot reach a refinement nested in the return type, which has an
+/// existential scope of its own.
+fn instantiate_return_type(
+    ret: rty::RefinedType<rty::FunctionParamIdx>,
+    args: IndexVec<rty::FunctionParamIdx, PlaceType>,
+) -> rty::RefinedType<Var> {
+    let mut arg_builder = PlaceTypeBuilder::default();
+    let arg_terms: IndexVec<rty::FunctionParamIdx, _> = args
+        .into_iter()
+        .map(|arg| arg_builder.subsume(arg).1)
+        .collect();
+    let rty::RefinedType { ty, refinement } =
+        ret.subst_var(|param_idx| arg_terms[param_idx].clone());
+
+    let ty = ty.map_var(|v| {
+        v.into_var()
+            .unwrap_or_else(|| unimplemented!("argument of a dependent return type: {:?}", v))
+    });
+    let rty::Formula {
+        mut existentials,
+        body: arg_body,
+    } = arg_builder.build_assumption();
+    let arg_existentials = existentials.len();
+    existentials.extend(refinement.existentials);
+
+    let mut body = arg_body.map_var(Into::into);
+    body.push_conj(refinement.body.map_var(|v| match v {
+        rty::RefinedTypeVar::Value => rty::RefinedTypeVar::Value,
+        rty::RefinedTypeVar::Free(v) => v.into(),
+        rty::RefinedTypeVar::Existential(ev) => {
+            rty::RefinedTypeVar::Existential(ev + arg_existentials)
+        }
+    }));
+    rty::RefinedType::new(ty, rty::Refinement::new(existentials, body))
 }
 
 /// Converts the current env state into a `Refinement<FunctionParamIdx>` to be
@@ -191,105 +288,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    // this can't be implmeneted in relate_sub_type because rty::FunctionType is free from Var
-    fn relate_fn_sub_type(
-        &mut self,
-        got: rty::FunctionType,
-        expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
-        expected_ret: rty::RefinedType<Var>,
-    ) -> Vec<chc::Clause> {
-        let mut clauses = Vec::new();
-
-        tracing::debug!(
-            got = %got.display(),
-            expected = %crate::pretty::FunctionType::new(&expected_args, &expected_ret).display(),
-            "fn_sub_type"
-        );
-
-        let mut builder = self.env.build_clause();
-        let cs = self.relate_fn_param_sub_types_with_builder(
-            got.params,
-            expected_args,
-            &mut builder,
-            got.abi,
-        );
-        clauses.extend(cs);
-
-        let cs = builder
-            .with_value_var(&got.ret.ty)
-            .add_body(got.ret.refinement)
-            .head(expected_ret.refinement);
-        clauses.extend(cs);
-
-        clauses.extend(builder.relate_sub_type(&got.ret.ty, &expected_ret.ty));
-        clauses
-    }
-
     fn relate_fn_param_sub_types(
         &mut self,
         got_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
         expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
     ) -> Vec<chc::Clause> {
         let mut builder = self.env.build_clause();
-        self.relate_fn_param_sub_types_with_builder(
-            got_args,
-            expected_args,
-            &mut builder,
-            rty::FunctionAbi::Rust,
-        )
+        self.relate_fn_param_sub_types_with_builder(got_args, expected_args, &mut builder)
     }
 
     fn relate_fn_param_sub_types_with_builder(
         &mut self,
         got_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<rty::FunctionParamIdx>>,
-        mut expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
+        expected_args: IndexVec<rty::FunctionParamIdx, rty::RefinedType<Var>>,
         builder: &mut chc::ClauseBuilder,
-        abi: rty::FunctionAbi,
     ) -> Vec<chc::Clause> {
         let mut clauses = Vec::new();
-
-        match abi {
-            rty::FunctionAbi::Rust => {
-                if expected_args.is_empty() {
-                    // elaboration: we need at least one predicate variable in parameter (see mir_function_ty_impl)
-                    expected_args.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
-                }
-            }
-            rty::FunctionAbi::RustCall => {
-                // &Closure, { v: (own i32, own bool) | v = (<0>, <false>) }
-                // =>
-                // &Closure, { v: i32 | (<v>, _) = (<0>, <false>) }, { v: bool | (_, <v>) = (<0>, <false>) }
-
-                let rty::RefinedType { ty, mut refinement } =
-                    expected_args.pop().expect("rust-call last arg");
-                let ty = ty.into_tuple().expect("rust-call last arg is tuple");
-                let mut replacement_tuple = Vec::new(); // will be (<v>, _) or (_, <v>)
-                for elem in &ty.elems {
-                    let existential = refinement.existentials.push(elem.ty.to_sort());
-                    replacement_tuple.push(chc::Term::var(rty::RefinedTypeVar::Existential(
-                        existential,
-                    )));
-                }
-
-                for (i, elem) in ty.elems.into_iter().enumerate() {
-                    // all tuple elements are boxed during the translation to rty::Type
-                    let mut param_ty = elem.deref();
-                    param_ty
-                        .refinement
-                        .push_conj(refinement.clone().subst_value_var(|| {
-                            let mut value_elems = replacement_tuple.clone();
-                            value_elems[i] = chc::Term::var(rty::RefinedTypeVar::Value).boxed();
-                            chc::Term::tuple(value_elems)
-                        }));
-                    expected_args.push(param_ty);
-                }
-
-                tracing::info!(
-                    expected = %crate::pretty::FunctionParams::new(&expected_args).display(),
-                    "rust-call expanded",
-                );
-            }
-        }
 
         assert!(got_args.len() == expected_args.len());
         // TODO: check stys are equal
@@ -688,14 +702,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn rvalue_refined_type(&mut self, rvalue: Rvalue<'tcx>) -> rty::RefinedType<Var> {
-        let ty = self.rvalue_type(rvalue);
-
-        // TODO: should we cover "is_singleton" ness in relate_* methods or here?
-        if !ty.ty.to_sort().is_singleton() {
-            return ty.into();
-        }
-
-        rty::RefinedType::unrefined(ty.ty)
+        refined_type(self.rvalue_type(rvalue))
     }
 
     fn type_rvalue(&mut self, rvalue: Rvalue<'tcx>, expected: &rty::RefinedType<Var>) {
@@ -946,7 +953,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         def_ty.ty
     }
 
-    fn type_call<I>(&mut self, func: Operand<'tcx>, args: I, expected_ret: &rty::RefinedType<Var>)
+    /// Checks a call against the callee's type and gives the type of its result.
+    ///
+    /// The arguments are checked against the parameters of the callee, and the result is the
+    /// return type of the callee instantiated at those arguments. Naming the result with a
+    /// predicate variable instead would leave its refinement to be inferred, while the callee
+    /// already states everything that is known about it.
+    fn type_call<I>(&mut self, func: Operand<'tcx>, args: I) -> rty::RefinedType<Var>
     where
         I: IntoIterator<Item = Operand<'tcx>>,
     {
@@ -956,16 +969,26 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         } else {
             self.operand_type(func.clone()).ty
         };
-        let expected_args: IndexVec<_, _> = args
-            .into_iter()
-            .map(|op| self.operand_refined_type(op))
-            .collect();
-        if let rty::Type::Function(func_ty) = func_ty {
-            let clauses = self.relate_fn_sub_type(func_ty, expected_args, expected_ret.clone());
-            self.ctx.extend_clauses(clauses);
-        } else {
+        let rty::Type::Function(func_ty) = func_ty else {
             panic!("unexpected def type: {:?}", func_ty);
-        }
+        };
+        let args = adapt_args_to_abi(
+            args.into_iter().map(|op| self.operand_type(op)).collect(),
+            func_ty.abi,
+        );
+        tracing::debug!(
+            callee = %func_ty.display(),
+            args = %args.pretty_slice().display(),
+            "call"
+        );
+
+        let arg_rtys = args.iter().cloned().map(refined_type).collect();
+        let mut builder = self.env.build_clause();
+        let clauses =
+            self.relate_fn_param_sub_types_with_builder(func_ty.params, arg_rtys, &mut builder);
+        self.ctx.extend_clauses(clauses);
+
+        instantiate_return_type(*func_ty.ret, args)
     }
 
     fn elaborate_place(&self, place: &mir::Place<'tcx>) -> mir::Place<'tcx> {
@@ -1103,13 +1126,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             } else {
                 operand.clone()
             };
-            let decl = self.local_decls[lhs.local].clone();
-            let rty = self
-                .type_builder
-                .for_template(&mut self.ctx)
-                .with_scope(&self.env)
-                .build_refined(decl.ty);
-            self.type_call(func, [operand], &rty);
+            let rty = self.type_call(func, [operand]);
             self.bind_local(lhs.local, rty);
             return;
         }
@@ -1222,17 +1239,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 unimplemented!()
             }
 
-            let decl = self.local_decls[destination].clone();
-            let rty = self
-                .type_builder
-                .for_template(&mut self.ctx)
-                .with_scope(&self.env)
-                .build_refined(decl.ty);
-            self.type_call(
-                func.clone(),
-                args.clone().iter().map(|a| a.node.clone()),
-                &rty,
-            );
+            let rty = self.type_call(func.clone(), args.iter().map(|a| a.node.clone()));
             self.bind_local(destination, rty);
         }
     }
