@@ -9,7 +9,6 @@ use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze;
 use crate::chc;
-use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
 
@@ -889,7 +888,73 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .into()
     }
 
-    fn refine_basic_blocks(&mut self) {
+    /// The precondition of the entry block, which is the precondition of the function itself.
+    ///
+    /// The entry block takes each parameter of the function twice: as the local that holds it and
+    /// as the value it has on entry ([`refine::BasicBlockTypeParamKind::OuterFnParam`]), which the
+    /// postcondition of the function is stated in terms of. Both denote the argument, so the
+    /// precondition equates them along with carrying the refinement of every parameter.
+    fn entry_precondition(
+        &self,
+        expected: &rty::FunctionType,
+        bty: &BasicBlockType,
+    ) -> rty::Refinement<rty::FunctionParamIdx> {
+        // The value of a parameter of the function among the parameters of the entry block. One of
+        // a singleton sort is denoted by its only value, as it is no variable of the constraints
+        // (see `refine::Env::var_type`), and so is the synthetic parameter that a function without
+        // one carries its precondition on, which has no local in the entry block.
+        let param_term = |idx: rty::FunctionParamIdx| {
+            let sort = expected.params[idx].ty.to_sort();
+            match bty.param_of_local(analyze::local_of_function_param(idx)) {
+                Some(param_idx) if !sort.is_singleton() => {
+                    chc::Term::var(rty::RefinedTypeVar::Free(param_idx))
+                }
+                _ => chc::Term::default_for(&sort),
+            }
+        };
+
+        let mut precondition = rty::Refinement::top();
+        for (idx, param) in expected.params.iter_enumerated() {
+            precondition.push_conj(param.refinement.clone().subst_var(|v| match v {
+                rty::RefinedTypeVar::Value => param_term(idx),
+                rty::RefinedTypeVar::Free(free_idx) => param_term(free_idx),
+                rty::RefinedTypeVar::Existential(ev) => {
+                    chc::Term::var(rty::RefinedTypeVar::Existential(ev))
+                }
+            }));
+
+            if let Some(outer_param_idx) = bty.param_of_outer_fn_param(idx) {
+                precondition.push_conj(
+                    chc::Term::var(rty::RefinedTypeVar::Free(outer_param_idx))
+                        .equal_to(param_term(idx))
+                        .into(),
+                );
+            }
+        }
+        precondition
+    }
+
+    /// The type of the entry block, which takes the arguments of the call under the precondition
+    /// of the function, leaving nothing about its state to be inferred.
+    fn entry_block_ty(
+        &self,
+        expected: &rty::RefinedType,
+        live_locals: Vec<(Local, TypeAndMut<'tcx>)>,
+        ret_ty: mir_ty::Ty<'tcx>,
+    ) -> BasicBlockType {
+        let mut expected_fn = expected.ty.as_function().cloned().unwrap();
+        self.elaborate_mut_params(&mut expected_fn);
+
+        let mut bty = self
+            .type_builder
+            .build_basic_block(&self.body, live_locals, ret_ty);
+        bty.install_signature_types(&expected_fn.params);
+        let precondition = self.entry_precondition(&expected_fn, &bty);
+        bty.set_precondition(precondition);
+        bty
+    }
+
+    fn refine_basic_blocks(&mut self, expected: &rty::RefinedType) {
         use rustc_mir_dataflow::Analysis as _;
         let loop_invariants = self.collect_loop_invariant_annotations();
         let mut results = rustc_mir_dataflow::impls::MaybeLiveLocals
@@ -950,6 +1015,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     inv.push_conj(one);
                 }
                 bty.set_precondition(inv);
+                self.ctx
+                    .register_basic_block_ty_with_precondition(self.local_def_id, bb, bty);
+            } else if bb == mir::START_BLOCK {
+                let bty = self.entry_block_ty(expected, live_locals, ret_ty);
                 self.ctx
                     .register_basic_block_ty_with_precondition(self.local_def_id, bb, bty);
             } else if analyze::basic_block::needs_own_precondition(&self.body, bb) {
@@ -1034,79 +1103,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         });
     }
-
-    /// Drop excessive parameters from the BB-side entry function type that do not
-    /// correspond to any function argument. These are introduced by ZST locals whose
-    /// liveness analysis treats them as live without an explicit def.
-    fn drop_bb_zst_params(&self, bb_ty: &BasicBlockType) -> rty::FunctionType {
-        let mut fn_ty = bb_ty.to_function_ty();
-        let arg_locals: HashSet<_> = self.body.args_iter().collect();
-
-        for idx in bb_ty.local_params().rev() {
-            let local = bb_ty.local_of_param(idx).unwrap();
-            if !arg_locals.contains(&local) {
-                fn_ty.remove_param(idx);
-            }
-        }
-
-        // A function type must keep at least one parameter to host the precondition
-        // predicate. When the function has no real argument, both the expected type and
-        // the BB type carry a synthetic unit parameter (see
-        // `crate::refine::TypeBuilder::build_basic_block`). That synthetic has no
-        // backing local, so it survives the drop loop untouched. If instead the entry
-        // block exposed only ZST-local parameters (e.g. `RETURN_PLACE`), dropping them
-        // empties the type, and we re-introduce the synthetic unit parameter carrying
-        // the precondition refinement of the last dropped parameter.
-        if self.body.arg_count == 0 && fn_ty.params.is_empty() {
-            let refinement = bb_ty.as_ref().last_param().unwrap().refinement.clone();
-            fn_ty
-                .params
-                .push(rty::RefinedType::new(rty::Type::unit(), refinement));
-        }
-
-        fn_ty
-    }
-
-    /// Drop function parameters from `expected_ty` whose corresponding local is unused
-    /// (and thus not represented) in the BB-side entry function type.
-    fn drop_unused_expected_params(
-        &self,
-        expected_ty: &mut rty::FunctionType,
-        bb_ty: &BasicBlockType,
-    ) {
-        if self.body.arg_count == 0 {
-            return;
-        }
-        let arg_locals: HashSet<_> = self.body.args_iter().collect();
-        let present_arg_locals: HashSet<_> = bb_ty
-            .locals()
-            .filter(|local| arg_locals.contains(local))
-            .collect();
-        for idx in expected_ty.params.indices().rev() {
-            let arg_local = analyze::local_of_function_param(idx);
-            if !present_arg_locals.contains(&arg_local) {
-                expected_ty.remove_param(idx);
-            }
-        }
-    }
-
-    fn assert_entry(&mut self, expected: &rty::RefinedType) {
-        let mut entry_ty = self
-            .ctx
-            .basic_block_ty_with_precondition(self.local_def_id, mir::START_BLOCK)
-            .clone();
-        tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry before");
-        let mut expected = expected.ty.as_function().cloned().unwrap();
-        self.elaborate_mut_params(&mut expected);
-
-        entry_ty.truncate_outer_fn_params();
-        self.drop_unused_expected_params(&mut expected, &entry_ty);
-        let entry_ty = self.drop_bb_zst_params(&entry_ty);
-
-        tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry after");
-        let clauses = rty::relate_sub_param_types(&entry_ty.params, &expected.params);
-        self.ctx.extend_clauses(clauses);
-    }
 }
 
 impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
@@ -1145,8 +1141,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.unelaborate_derefs();
         analyze::reconstruct_slice_indexing::reconstruct(self.tcx, &mut self.body);
         self.reassign_local_mutabilities();
-        self.refine_basic_blocks();
+
+        self.refine_basic_blocks(expected);
         self.analyze_basic_blocks(expected);
-        self.assert_entry(expected);
     }
 }

@@ -52,7 +52,7 @@ mod clause_builder;
 pub use clause_builder::ClauseBuilderExt;
 
 mod subtyping;
-pub use subtyping::{relate_sub_param_types, ClauseScope, Subtyping};
+pub use subtyping::{ClauseScope, Subtyping};
 
 mod params;
 pub use params::{RefinedTypeArgs, TypeParamIdx, TypeParamSubst};
