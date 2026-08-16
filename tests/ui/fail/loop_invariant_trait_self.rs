@@ -14,6 +14,7 @@ trait Gauge {
     #[thrust_macros::predicate]
     fn invariant(x: i32) -> bool;
 
+    #[thrust_macros::ensures(Self::invariant(result))]
     fn update(&mut self) -> i32;
 
     #[thrust_macros::invariant_context]
