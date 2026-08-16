@@ -954,6 +954,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         };
         if resolved_def_id == def_id {
+            if self.ctx.is_trait_method(def_id) {
+                tracing::debug!(?def_id, ?args, "using abstract trait method type");
+                return self.abstract_callable_ty(def_id, args);
+            }
             panic!(
                 "unknown def (and not resolved): {:?}, args: {:?}",
                 def_id, args
@@ -970,6 +974,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             );
         };
         def_ty.ty
+    }
+
+    fn abstract_callable_ty(
+        &self,
+        def_id: DefId,
+        args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> rty::Type<rty::Closed> {
+        let sig = self
+            .tcx
+            .fn_sig(def_id)
+            .instantiate(self.tcx, args)
+            .skip_binder();
+        let params = sig
+            .inputs()
+            .iter()
+            .map(|ty| rty::RefinedType::unrefined(self.type_builder.build(*ty)).vacuous())
+            .collect();
+        let ret = rty::RefinedType::unrefined(self.type_builder.build(sig.output())).vacuous();
+        rty::FunctionType::new(params, ret).into()
     }
 
     fn type_call<I>(&mut self, func: Operand<'tcx>, args: I, expected_ret: &rty::RefinedType<Var>)

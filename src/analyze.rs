@@ -976,6 +976,14 @@ impl<'tcx> Analyzer<'tcx> {
         out
     }
 
+    /// Whether the given `def_id` corresponds to a method of a trait.
+    pub fn is_trait_method(&self, def_id: DefId) -> bool {
+        self.tcx
+            .opt_associated_item(def_id)
+            .and_then(|item| item.trait_container(self.tcx))
+            .is_some()
+    }
+
     /// Whether the given `def_id` corresponds to a method of one of the `Fn` traits.
     fn is_fn_trait_method(&self, def_id: DefId) -> bool {
         self.tcx
