@@ -2091,6 +2091,7 @@ fn subst_ty_params_in_formula<T, V>(formula: &mut chc::Formula<V>, subst: &TypeP
 fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst<T>) {
     match term {
         chc::Term::Null
+        | chc::Term::ForallDefault(_)
         | chc::Term::Var(_)
         | chc::Term::Bool(_)
         | chc::Term::Int(_)

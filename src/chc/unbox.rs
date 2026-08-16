@@ -11,7 +11,12 @@ fn unbox_seq_concat_term(t: SeqConcatTerm) -> SeqConcatTerm {
 
 fn unbox_term(term: Term) -> Term {
     match term {
-        Term::Var(_) | Term::Bool(_) | Term::Int(_) | Term::String(_) | Term::Null => term,
+        Term::Var(_)
+        | Term::Bool(_)
+        | Term::Int(_)
+        | Term::String(_)
+        | Term::Null
+        | Term::ForallDefault(_) => term,
         Term::Box(t) => unbox_term(*t),
         Term::Mut(t1, t2) => Term::Mut(Box::new(unbox_term(*t1)), Box::new(unbox_term(*t2))),
         Term::BoxCurrent(t) => unbox_term(*t),

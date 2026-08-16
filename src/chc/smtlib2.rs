@@ -103,6 +103,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.inner {
             chc::Term::Null => write!(f, "null"),
+            chc::Term::ForallDefault(idx) => write!(f, "default_{idx}"),
             chc::Term::Var(v) => write!(f, "{}", v),
             chc::Term::Int(i) => write!(f, "{}", i),
             chc::Term::Bool(b) => write!(f, "{}", b),
@@ -699,6 +700,13 @@ impl<'a> std::fmt::Display for System<'a> {
 
         for forall_sort_idx in &self.inner.forall_sorts {
             writeln!(f, "(declare-forall-sort {})\n", forall_sort_idx)?;
+        }
+        for forall_sort_idx in &self.inner.forall_sorts {
+            writeln!(
+                f,
+                "(declare-const default_{} {})\n",
+                forall_sort_idx, forall_sort_idx
+            )?;
         }
 
         for pred in &self.inner.forall_pred_vars {

@@ -545,6 +545,7 @@ impl<V> SeqConcatTerm<V> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Term<V = TermVarIdx> {
     Null,
+    ForallDefault(ForallSortIdx),
     Var(V),
     Bool(bool),
     Int(i64),
@@ -574,6 +575,7 @@ where
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             Term::Null => allocator.text("null"),
+            Term::ForallDefault(idx) => allocator.text(format!("default_{idx}")),
             Term::Var(var) => allocator.text(format!("{var:?}")),
             Term::Int(n) => allocator.as_string(n),
             Term::Bool(b) => allocator.as_string(b),
@@ -659,6 +661,7 @@ impl<V> Term<V> {
     fn subst_var_impl<W>(self, mut f: Box<dyn FnMut(V) -> Term<W> + '_>) -> Term<W> {
         match self {
             Term::Null => Term::Null,
+            Term::ForallDefault(idx) => Term::ForallDefault(idx),
             Term::Var(v) => f(v),
             Term::Bool(b) => Term::Bool(b),
             Term::Int(n) => Term::Int(n),
@@ -707,6 +710,7 @@ impl<V> Term<V> {
     {
         match self {
             Term::Null => Sort::null(),
+            Term::ForallDefault(idx) => Sort::forall(*idx),
             Term::Var(v) => var_sort(v),
             Term::Bool(_) => Sort::bool(),
             Term::Int(_) => Sort::int(),
@@ -739,6 +743,7 @@ impl<V> Term<V> {
         match self {
             Term::Var(v) => Box::new(std::iter::once(v)),
             Term::Null
+            | Term::ForallDefault(_)
             | Term::Bool(_)
             | Term::Int(_)
             | Term::String(_)
@@ -788,6 +793,7 @@ impl<V> Term<V> {
     pub fn default_for(sort: &Sort) -> Self {
         match sort {
             Sort::Null => Term::Null,
+            Sort::Forall(idx) => Term::ForallDefault(*idx),
             Sort::Int => Term::Int(0),
             Sort::Bool => Term::Bool(false),
             Sort::String => Term::String(String::new()),
@@ -798,8 +804,8 @@ impl<V> Term<V> {
             ),
             Sort::Tuple(ts) => Term::Tuple(ts.iter().map(Self::default_for).collect()),
             Sort::Array(i, e) => Term::ArrayEmpty((**i).clone(), (**e).clone()),
-            // TODO: defaults for Datatype and Param and Forall.
-            Sort::Datatype(_) | Sort::Param(_) | Sort::Forall(_) => {
+            // TODO: defaults for Datatype and Param.
+            Sort::Datatype(_) | Sort::Param(_) => {
                 unimplemented!("no default value for sort {sort:?}")
             }
         }
@@ -2395,5 +2401,31 @@ impl System {
             }
         }
         Config::from_env().check_sat(system.smtlib2())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declares_forall_default_once() {
+        let mut system = System::default();
+        let idx = system.new_forall_sort();
+        let default = Term::default_for(&Sort::forall(idx));
+        let body = Atom::new(
+            Pred::Known(KnownPred::EQUAL),
+            vec![default, Term::var(0usize.into())],
+        );
+        system.push_clause(Clause {
+            vars: [Sort::forall(idx)].into_iter().collect(),
+            head: Atom::new(Pred::UserDefined(UserDefinedPred::new("p".into())), vec![]),
+            body: body.into(),
+            debug_info: DebugInfo::default(),
+        });
+
+        let smt = system.smtlib2().to_string();
+        assert_eq!(smt.matches("(declare-const default_a0 a0)").count(), 1);
+        assert_eq!(smt.matches("default_a0").count(), 2);
     }
 }

@@ -29,6 +29,7 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
     sorts.insert(clause.term_sort(t));
     match t {
         chc::Term::Null => {}
+        chc::Term::ForallDefault(_) => {}
         chc::Term::Var(_) => {}
         chc::Term::Bool(_) => {}
         chc::Term::Int(_) => {}
