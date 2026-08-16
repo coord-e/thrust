@@ -13,6 +13,9 @@ use crate::rty;
 #[derive(Debug, Clone)]
 pub struct FormulaFn<'tcx> {
     params: IndexVec<rty::FunctionParamIdx, mir_ty::Ty<'tcx>>,
+    // TODO: remove once we stop relying on debug info to map parameters
+    // `None` for a parameter bound by a pattern, as the closure upvars tuple is.
+    param_idents: IndexVec<rty::FunctionParamIdx, Option<rustc_span::symbol::Ident>>,
     formula: chc::Formula<rty::FunctionParamIdx>,
 }
 
@@ -41,6 +44,16 @@ where
 impl<'tcx> FormulaFn<'tcx> {
     pub fn formula(&self) -> &chc::Formula<rty::FunctionParamIdx> {
         &self.formula
+    }
+
+    pub fn params(&self) -> &IndexVec<rty::FunctionParamIdx, mir_ty::Ty<'tcx>> {
+        &self.params
+    }
+
+    pub fn param_idents(
+        &self,
+    ) -> &IndexVec<rty::FunctionParamIdx, Option<rustc_span::symbol::Ident>> {
+        &self.param_idents
     }
 
     pub fn to_require_formula(&self) -> chc::Formula<rty::FunctionParamIdx> {
@@ -382,8 +395,15 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .skip_binder()
             .inputs()
             .to_vec();
+        let param_idents = self
+            .tcx
+            .fn_arg_idents(self.local_def_id.to_def_id())
+            .iter()
+            .copied()
+            .collect();
         FormulaFn {
             params: IndexVec::from_raw(params),
+            param_idents,
             formula,
         }
     }

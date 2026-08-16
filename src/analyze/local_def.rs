@@ -836,15 +836,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .ctx
             .formula_fn_with_args(formula_def_id, generic_args)
             .expect("invariant formula function is not registered");
-        let idents = self.tcx.fn_arg_idents(formula_def_id.to_def_id());
+        let idents = formula_fn.param_idents();
         let sig = self
             .tcx
             .fn_sig(formula_def_id.to_def_id())
             .instantiate(self.tcx, generic_args);
 
         let mut mapping: Vec<rty::FunctionParamIdx> = Vec::with_capacity(idents.len());
-        for (ident_opt, input_ty) in idents.iter().zip(sig.skip_binder().inputs()) {
-            let name = ident_opt.expect("invariant parameters must be named").name;
+        for (ident, input_ty) in idents.iter().zip(sig.skip_binder().inputs()) {
+            let ident = ident.expect("invariant parameters must be named");
             let input_ty = {
                 let typing_env =
                     mir_ty::TypingEnv::post_analysis(self.tcx, formula_def_id.to_def_id());
@@ -855,10 +855,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
             // The synthetic `__thrust_self` parameter (emitted when an invariant refers to the receiver
             // `self`) maps to the loop-carried receiver, which appears as `self` in debug info.
-            let name = if name.as_str() == "__thrust_self" {
+            let name = if ident.name.as_str() == "__thrust_self" {
                 rustc_span::Symbol::intern("self")
             } else {
-                name
+                ident.name
             };
 
             if input_ty

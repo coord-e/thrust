@@ -6,6 +6,7 @@ mod context;
 mod fn_outer_item;
 mod formula;
 mod formula_fn_type_lowering;
+mod ghost;
 mod invariant;
 mod invariant_context;
 mod pre_post;
@@ -36,6 +37,20 @@ pub fn post(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn closure(input: TokenStream) -> TokenStream {
     closure::expand(input)
+}
+
+/// Introduces a ghost value: proof-only data with no runtime representation.
+///
+/// ```ignore
+/// let s = thrust_macros::ghost!(|s: Ghost<Seq<Int>>, x: i64| -> Seq<Int> { s.push(x) });
+/// ```
+///
+/// The argument is a closure whose parameters name the live variables the ghost term
+/// refers to (with their types) and whose return type is the logical type of the value.
+/// See [`mod@ghost`].
+#[proc_macro]
+pub fn ghost(input: TokenStream) -> TokenStream {
+    ghost::expand(input)
 }
 
 #[proc_macro_attribute]

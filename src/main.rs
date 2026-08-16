@@ -19,6 +19,15 @@ impl Callbacks for CompilerCalls {
         attrs.push("feature(register_tool)".to_owned());
         attrs.push("register_tool(thrust)".to_owned());
 
+        // Refinements live on MIR locals, and `RemoveZsts` rewrites reads of zero-sized
+        // locals into constants, losing the refinement of every value whose type carries
+        // no runtime data -- the model types and `Ghost<T>`.
+        config
+            .opts
+            .unstable_opts
+            .mir_enable_passes
+            .push(("RemoveZsts".to_owned(), false));
+
         config.override_queries = Some(|_sess, providers| {
             providers.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
         });
