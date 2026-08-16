@@ -30,6 +30,7 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 process_control = "5.2.0"
+nix = { version = "0.31.3", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
 ui_test = "0.30.6"

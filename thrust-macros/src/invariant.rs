@@ -300,7 +300,7 @@ impl VisitMut for SelfValueRewriter {
         match arg {
             syn::FnArg::Receiver(receiver) => {
                 let to = &self.to;
-                let ty = &receiver.ty;
+                let ty = crate::receiver_type(receiver);
                 *arg = syn::parse_quote!(#to: #ty);
             }
             syn::FnArg::Typed(_) => { /* handled by visit_pat_ident_mut */ }

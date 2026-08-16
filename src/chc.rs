@@ -2104,6 +2104,12 @@ pub struct Datatype {
     pub ctors: Vec<DatatypeCtor>,
 }
 
+impl Datatype {
+    pub fn selectors(&self) -> impl Iterator<Item = &DatatypeSelector> {
+        self.ctors.iter().flat_map(|ctor| ctor.selectors.iter())
+    }
+}
+
 rustc_index::newtype_index! {
     /// An index of [`Clause`].
     ///

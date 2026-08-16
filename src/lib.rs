@@ -21,7 +21,6 @@ mod analyze;
 mod refine;
 
 // pure logic
-mod annot;
 mod chc;
 mod rty;
 

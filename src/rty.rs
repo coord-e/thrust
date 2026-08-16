@@ -303,6 +303,18 @@ impl FunctionType {
             Box::new(RefinedType::unrefined(Type::unit())),
         );
         self.ret = Box::new(old_ret.map_var(shift));
+
+        if let Some(last_idx) = self.params.last_index() {
+            let refinement = removed.refinement.clone().map_var(|v| match v {
+                RefinedTypeVar::Value => {
+                    panic!("refinement of the parameter being removed references its own value")
+                }
+                RefinedTypeVar::Free(v) if shift(v) == last_idx => RefinedTypeVar::Value,
+                RefinedTypeVar::Free(v) => RefinedTypeVar::Free(shift(v)),
+                v => v,
+            });
+            self.params[last_idx].refinement.push_conj(refinement);
+        }
         removed
     }
 

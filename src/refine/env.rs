@@ -992,7 +992,16 @@ where
             }
             None => {
                 let rty = self.var(var).expect("unbound var");
-                PlaceType::with_ty_and_term(rty.ty.clone(), chc::Term::var(var))
+                let sort = rty.ty.to_sort();
+                // A variable of a singleton sort is not registered as a clause variable (see
+                // `dependencies`), so it must not be referred to by name. Such a sort has exactly
+                // one value, and that value stands for the variable instead.
+                let term = if sort.is_singleton() {
+                    chc::Term::default_for(&sort)
+                } else {
+                    chc::Term::var(var)
+                };
+                PlaceType::with_ty_and_term(rty.ty.clone(), term)
             }
         }
     }

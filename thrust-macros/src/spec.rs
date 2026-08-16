@@ -99,8 +99,8 @@ pub fn expand_requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStr
         .into();
     }
 
-    let ens_expr = exprs.pop().unwrap().into_value();
-    let req_expr = exprs.pop().unwrap().into_value();
+    let ens_expr = exprs.pop().unwrap();
+    let req_expr = exprs.pop().unwrap();
 
     let func = parse_macro_input!(item as FnItemWithSignature);
     let outer_context = match extract_outer_context(&func) {
@@ -225,8 +225,8 @@ fn extract_requires_ensures(func: &mut FnItemWithSignature) -> syn::Result<(syn:
                     "expected exactly two comma-separated expressions in _requires_ensures attribute",
                 ));
             }
-            let ens_expr = exprs.pop().unwrap().into_value();
-            let req_expr = exprs.pop().unwrap().into_value();
+            let ens_expr = exprs.pop().unwrap();
+            let req_expr = exprs.pop().unwrap();
             result = Some((req_expr, ens_expr));
         }
     }

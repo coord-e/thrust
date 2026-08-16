@@ -15,6 +15,7 @@ jobs:
       contents: read
       pages: write
       id-token: write
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

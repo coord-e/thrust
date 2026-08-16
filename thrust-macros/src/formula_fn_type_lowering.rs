@@ -49,7 +49,7 @@ impl<'a> FormulaFnTypeLowering<'a> {
         for arg in args {
             match arg {
                 syn::FnArg::Receiver(receiver) => {
-                    let ty = &receiver.ty;
+                    let ty = crate::receiver_type(receiver);
                     model_inputs.push(syn::parse_quote!(self_: <#ty as thrust_models::Model>::Ty));
                 }
                 syn::FnArg::Typed(pt) => {
