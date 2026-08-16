@@ -19,20 +19,6 @@ pub enum CheckSatError {
     Io(#[from] std::io::Error),
 }
 
-/// Asks a solver command that ran over its time limit to shut itself down.
-///
-/// It is asked rather than killed because it may hold resources that outlive the process
-/// and that only it knows how to release, as `tests/thrust-pcsat-wrapper` does with the
-/// Docker container it runs the solver in.
-///
-/// A timed-out process is left unreaped, so the system cannot hand its identifier to an
-/// unrelated process that this would then reach.
-fn terminate(pid: u32) {
-    use nix::sys::signal::{kill, Signal};
-
-    let _ = kill(nix::unistd::Pid::from_raw(pid as i32), Signal::SIGTERM);
-}
-
 /// A configuration for running a command-line CHC solver.
 #[derive(Debug, Clone)]
 pub struct CommandConfig {
@@ -74,7 +60,10 @@ impl CommandConfig {
         }
         let output = match child.wait()? {
             None => {
-                terminate(pid);
+                let pid = nix::unistd::Pid::from_raw(pid as i32);
+                if let Err(err) = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM) {
+                    tracing::error!(?pid, ?err, "failed to send SIGTERM to solver process");
+                }
                 return Err(CheckSatError::Timeout(self.timeout.unwrap()));
             }
             Some(output) => output,
