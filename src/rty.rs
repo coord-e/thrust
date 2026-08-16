@@ -824,7 +824,11 @@ where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        self.type_param_idx.pretty(allocator)
+        self.type_param_idx
+            .pretty(allocator)
+            .append(allocator.text("(ForallSortIdx="))
+            .append(self.forall_sort_idx.pretty(allocator))
+            .append(allocator.text(")"))
     }
 }
 
