@@ -176,7 +176,7 @@ struct DeferredDefTy<'tcx> {
     // the def that provides the spec (`expected_ty`). this is different from a key in defs when
     // the def is an extern_spec_fn (then it is the extern_spec_fn wrapper carrying the contract).
     local_def_id: LocalDefId,
-    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
+    cache: Rc<RefCell<HashMap<InstantiationKey<'tcx>, rty::RefinedType>>>,
     mode: DeferredDefMode,
 }
 
@@ -184,8 +184,14 @@ struct DeferredDefTy<'tcx> {
 struct GenericDefTy<'tcx> {
     // this is different from a key in defs when the def is extern_spec_fn
     local_def_id: LocalDefId,
-    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, rty::RefinedType>>>,
+    cache: Rc<RefCell<HashMap<InstantiationKey<'tcx>, rty::RefinedType>>>,
     rty: Option<rty::RefinedType>,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct InstantiationKey<'tcx> {
+    generic_args: mir_ty::GenericArgsRef<'tcx>,
+    caller_def_id: DefId,
 }
 
 #[derive(Debug, Clone)]
@@ -483,6 +489,7 @@ impl<'tcx> Analyzer<'tcx> {
         &self,
         def_id: DefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
+        caller_def_id: DefId,
     ) -> Option<rty::FunctionType> {
         let type_builder = TypeBuilder::new(
             self.tcx,
@@ -492,10 +499,14 @@ impl<'tcx> Analyzer<'tcx> {
             self.closure_type_params.clone(),
             self.system.clone(),
         );
+        let key = InstantiationKey {
+            generic_args,
+            caller_def_id,
+        };
         let mut def_ty = match self.defs.get(&def_id)? {
             DefTy::Concrete(rty) => rty.clone(),
-            DefTy::Generic(generic) => generic.cache.borrow().get(&generic_args)?.clone(),
-            DefTy::Deferred(deferred) => deferred.cache.borrow().get(&generic_args)?.clone(),
+            DefTy::Generic(generic) => generic.cache.borrow().get(&key)?.clone(),
+            DefTy::Deferred(deferred) => deferred.cache.borrow().get(&key)?.clone(),
         };
         def_ty.instantiate_ty_params(
             generic_args
@@ -569,7 +580,11 @@ impl<'tcx> Analyzer<'tcx> {
                 ),
             };
 
-        if let Some(rty) = instantiated_ty_cache.borrow().get(&generic_args) {
+        let key = InstantiationKey {
+            generic_args,
+            caller_def_id,
+        };
+        if let Some(rty) = instantiated_ty_cache.borrow().get(&key) {
             return Some(rty.clone());
         }
 
@@ -581,7 +596,7 @@ impl<'tcx> Analyzer<'tcx> {
         let expected = analyzer.expected_ty();
         instantiated_ty_cache
             .borrow_mut()
-            .insert(generic_args, expected.clone());
+            .insert(key, expected.clone());
         tracing::info!(?def_id, rty = %expected.display(), ?generic_args, "deferred def");
 
         if deferred_ty_mode.is_some_and(|mode| mode.should_analyze()) {

@@ -510,8 +510,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             }
             return None;
         };
-        self.analyzer
-            .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
+        self.analyzer.known_function_ty_with_args(
+            *def_id,
+            self.tcx.mk_args(args.as_closure().parent_args()),
+            self.type_builder.owner_fn_id(),
+        )
     }
 
     fn register_forall_pred(&self, forall_pred: chc::ForallPred) {
