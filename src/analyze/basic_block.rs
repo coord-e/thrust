@@ -1053,6 +1053,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iter()
             .skip(1)
             .map(|ident| {
+                let ident = ident.expect("ghost term parameters must be named");
                 let operand = self.operand_of_name(ident.name).unwrap_or_else(|| {
                     self.tcx.dcx().fatal(format!(
                         "ghost term refers to `{ident}`, which is not a live variable here"
