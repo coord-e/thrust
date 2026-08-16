@@ -1,3 +1,4 @@
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 //@check-pass
 
 pub enum Pair<T> {

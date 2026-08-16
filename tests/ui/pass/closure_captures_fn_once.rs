@@ -1,6 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 // Passed straight to `apply` to keep the closure `FnOnce`: binding it to a `let` first
 // makes it `FnMut`, which holds its upvars behind another `Mut`.
 #[thrust_macros::requires(thrust_macros::pre!(f(x)))]

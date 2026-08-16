@@ -1,5 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -Adead_code -C debug-assertions=off
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 #[thrust::predicate]
 fn is_double(x: thrust_models::model::Int, doubled_x: thrust_models::model::Int) -> bool {

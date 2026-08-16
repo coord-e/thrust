@@ -1,4 +1,5 @@
 //@check-pass
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 fn project_first<T, U, V>(triple: (T, U, V)) -> T {
     triple.0
