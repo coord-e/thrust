@@ -3,12 +3,19 @@
 COAR_IMAGE=${COAR_IMAGE:-ghcr.io/hiroshi-unno/coar:main}
 
 smt2=$(mktemp -p . --suffix .smt2)
-trap "rm -f $smt2" EXIT
+solver_out=$(mktemp)
+trap 'rm -f "$smt2" "$solver_out"' EXIT
 cp "$1" "$smt2"
-out=$(
-docker run --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
-    main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2"
-)
+
+container=$(docker create --rm -v "$PWD:/mnt" -w /root/coar "$COAR_IMAGE" \
+    main.exe -c ./config/solver/pcsat_tbq_ar.json -p pcsp "/mnt/$smt2")
+trap 'docker rm --force "$container" >/dev/null; exit 143' TERM
+
+# needs `wait` to fire the `trap` above
+docker start --attach "$container" > "$solver_out" &
+wait $!
 exit_code=$?
+
+out=$(< "$solver_out")
 echo "${out%,*}"
 exit "$exit_code"

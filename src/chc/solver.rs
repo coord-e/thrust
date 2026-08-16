@@ -52,13 +52,20 @@ impl CommandConfig {
         use process_control::{ChildExt as _, Control as _};
 
         let start = std::time::Instant::now();
-        tracing::info!(timeout = ?self.timeout, pid = child.id(), "waiting");
-        let mut child = child.controlled_with_output().terminate_for_timeout();
+        let pid = child.id();
+        tracing::info!(timeout = ?self.timeout, pid, "waiting");
+        let mut child = child.controlled_with_output();
         if let Some(timeout) = self.timeout {
             child = child.time_limit(timeout);
         }
         let output = match child.wait()? {
-            None => return Err(CheckSatError::Timeout(self.timeout.unwrap())),
+            None => {
+                let pid = nix::unistd::Pid::from_raw(pid as i32);
+                if let Err(err) = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGTERM) {
+                    tracing::error!(?pid, ?err, "failed to send SIGTERM to solver process");
+                }
+                return Err(CheckSatError::Timeout(self.timeout.unwrap()));
+            }
             Some(output) => output,
         };
         let elapsed = std::time::Instant::now() - start;
