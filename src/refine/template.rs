@@ -151,7 +151,7 @@ impl<'tcx> TypeBuilder<'tcx> {
         })
     }
 
-    fn resolve_model_ty(&self, orig_ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+    pub fn resolve_model_ty(&self, orig_ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.replace_closure_model(orig_ty);
 
         let Some(model_ty_def_id) = self.def_ids.model_ty() else {
