@@ -2142,3 +2142,17 @@ where
             s2
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ParamType, TypeParamIdx};
+    use crate::chc::ForallSortIdx;
+    use crate::pretty::PrettyDisplayExt as _;
+
+    #[test]
+    fn param_type_display_includes_forall_sort() {
+        let param = ParamType::new(TypeParamIdx::from(0_usize), ForallSortIdx::from(2_usize));
+
+        assert_eq!(param.display().to_string(), "T0(ForallSortIdx=a2)");
+    }
+}
