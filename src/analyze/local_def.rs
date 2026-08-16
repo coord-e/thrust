@@ -34,6 +34,10 @@ fn stmt_str_literal(stmt: &rustc_hir::Stmt) -> Option<String> {
     }
 }
 
+fn is_raw_const_ptr(ty: mir_ty::Ty<'_>) -> bool {
+    matches!(ty.kind(), mir_ty::TyKind::RawPtr(_, mutbl) if mutbl.is_not())
+}
+
 /// An implementation of the typing of local definitions.
 ///
 /// The current implementation only applies to function definitions. The entry point is
@@ -181,7 +185,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .tcx
             .opt_associated_item(self.local_def_id.to_def_id())?;
         let trait_item_id = impl_item_assoc
-            .trait_item_def_id
+            .trait_item_def_id()
             .and_then(|id| id.as_local())?;
 
         if trait_item_id == self.local_def_id {
@@ -198,11 +202,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return None;
         }
 
-        let trait_ref = self.tcx.impl_trait_ref(impl_did)?.instantiate_identity();
+        let trait_ref = self
+            .tcx
+            .impl_opt_trait_ref(impl_did)?
+            .instantiate_identity();
         let trait_item_did = self
             .tcx
             .associated_item(self.local_def_id.to_def_id())
-            .trait_item_def_id
+            .trait_item_def_id()
             .unwrap();
         self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
     }
@@ -387,54 +394,80 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         if !lhs.projection.as_ref().is_empty() {
             return None;
         }
-        let lhs_local = lhs.local;
+        Some((lhs.local, self.deref_alias_source(rvalue)?))
+    }
 
-        if let mir::Rvalue::CopyForDeref(place) = &rvalue {
-            return Some((lhs_local, *place));
+    /// The place an rvalue reads through when it is one of the aliases deref elaboration
+    /// introduces, or `None` when the rvalue is an ordinary read.
+    fn deref_alias_source(&self, rvalue: &mir::Rvalue<'tcx>) -> Option<mir::Place<'tcx>> {
+        match rvalue {
+            mir::Rvalue::Use(mir::Operand::Copy(place)) => {
+                if self.is_mut_ref_field(*place) || self.is_box_behind_ref(*place) {
+                    return Some(*place);
+                }
+                self.box_of_nonnull_field(*place)
+            }
+            mir::Rvalue::Cast(mir::CastKind::Transmute, mir::Operand::Copy(place), cast_ty)
+                if is_raw_const_ptr(*cast_ty) =>
+            {
+                self.box_of_nonnull_field(*place)
+                    .or_else(|| self.place_ty(*place).is_box().then_some(*place))
+            }
+            _ => None,
         }
+    }
 
-        let unique_did = self.ctx.def_ids.unique()?;
-        let nonnull_did = self.ctx.def_ids.nonnull()?;
+    fn place_ty(&self, place: mir::Place<'tcx>) -> mir_ty::Ty<'tcx> {
+        place.ty(&self.body.local_decls, self.tcx).ty
+    }
 
+    /// Whether a place reads a `&mut T` out of a struct field, the alias created so that the
+    /// result can be dereffed — a closure's captured `&mut`, for instance. A field projection is
+    /// required, since a plain `_ret = copy _param` is a genuine read rather than an alias.
+    fn is_mut_ref_field(&self, place: mir::Place<'tcx>) -> bool {
+        if !matches!(
+            place.projection.last(),
+            Some(mir::ProjectionElem::Field(..))
+        ) {
+            return false;
+        }
+        matches!(
+            self.place_ty(place).kind(),
+            mir_ty::TyKind::Ref(_, _, mir::Mutability::Mut)
+        )
+    }
+
+    /// Whether a place reads a `Box<T>` through a reference to it, as in `copy (*ref_to_box)`.
+    fn is_box_behind_ref(&self, place: mir::Place<'tcx>) -> bool {
+        matches!(place.projection.as_slice(), [mir::ProjectionElem::Deref])
+            && self.place_ty(place).is_box()
+    }
+
+    /// The `Box<T>` under `box.Field(0, Unique<T>).Field(0, NonNull<T>)`, the pointer field that
+    /// box deref elaboration reads before transmuting it to a raw pointer.
+    fn box_of_nonnull_field(&self, place: mir::Place<'tcx>) -> Option<mir::Place<'tcx>> {
         use mir::ProjectionElem::Field;
         use rustc_abi::FieldIdx;
         const ZERO_FIELD: FieldIdx = FieldIdx::from_u32(0);
 
-        // Box deref pattern: `(_box.0.0 as *const T) Transmute`
-        //   projection = [..., Field(0, Unique<T>), Field(0, NonNull<T>)], transmuted to *const T
-        let mir::Rvalue::Cast(mir::CastKind::Transmute, mir::Operand::Copy(place), cast_ty) =
-            &rvalue
+        let (rest, [Field(ZERO_FIELD, unique_ty), Field(ZERO_FIELD, nonnull_ty)]) =
+            place.projection.as_slice().split_last_chunk::<2>()?
         else {
             return None;
         };
-        if !matches!(cast_ty.kind(), mir_ty::TyKind::RawPtr(_, mutbl) if mutbl.is_not()) {
-            return None;
-        }
-        let Some((rest, [Field(ZERO_FIELD, ty0), Field(ZERO_FIELD, ty1)])) =
-            place.projection.as_slice().split_last_chunk::<2>()
-        else {
-            return None;
-        };
-        let rest_place = mir::Place {
+        let box_place = mir::Place {
             local: place.local,
             projection: self.tcx.mk_place_elems(rest),
         };
-        let local_ty = rest_place.ty(&self.body.local_decls, self.tcx).ty;
-        if !local_ty.is_box() {
-            return None;
-        }
-        let inner_ty = local_ty.boxed_ty()?;
-        if !matches!(ty0.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == unique_did && args.type_at(0) == inner_ty)
-        {
-            return None;
-        }
-        if !matches!(ty1.kind(), mir_ty::TyKind::Adt(def, args)
-            if def.did() == nonnull_did && args.type_at(0) == inner_ty)
-        {
-            return None;
-        }
-        Some((lhs_local, rest_place))
+        let inner_ty = self.place_ty(box_place).boxed_ty()?;
+        let wraps_inner = |ty: mir_ty::Ty<'tcx>, did| {
+            matches!(ty.kind(), mir_ty::TyKind::Adt(def, args)
+                if def.did() == did && args.type_at(0) == inner_ty)
+        };
+        let unique_did = self.ctx.def_ids.unique()?;
+        let nonnull_did = self.ctx.def_ids.nonnull()?;
+        (wraps_inner(*unique_ty, unique_did) && wraps_inner(*nonnull_ty, nonnull_did))
+            .then_some(box_place)
     }
 
     fn unelaborate_derefs(&mut self) {
@@ -623,33 +656,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let move_data = {
             // XXX: what...
             let mut body = self.body.clone();
-            struct Visitor {
-                deref_temps: DenseBitSet<Local>,
-            }
-            impl<'tcx> mir::visit::Visitor<'tcx> for Visitor {
-                fn visit_assign(
-                    &mut self,
-                    place: &mir::Place<'tcx>,
-                    rvalue: &mir::Rvalue<'tcx>,
-                    _location: mir::Location,
-                ) {
-                    if let mir::Rvalue::CopyForDeref { .. } = rvalue {
-                        self.deref_temps.insert(place.local);
-                    }
-                }
-            }
-            let mut visitor = Visitor {
-                deref_temps: DenseBitSet::new_empty(body.local_decls.len()),
-            };
-            use mir::visit::Visitor as _;
-            visitor.visit_body(&body);
-            for (local, local_decl) in body.local_decls.iter_enumerated_mut() {
-                let local_info = if visitor.deref_temps.contains(local) {
-                    mir::LocalInfo::DerefTemp
-                } else {
-                    mir::LocalInfo::Boring
-                };
-                local_decl.local_info = mir::ClearCrossCrate::Set(Box::new(local_info));
+            for local_decl in &mut body.local_decls {
+                local_decl.local_info = mir::ClearCrossCrate::Set(Box::new(mir::LocalInfo::Boring));
             }
             MoveData::gather_moves(&body, self.tcx, |_| true)
         };
@@ -896,7 +904,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .iterate_to_fixpoint(self.tcx, &self.body, None)
             .into_results_cursor(&self.body);
 
-        let mut builder = analyze::basic_block::DropPoints::builder(&self.body);
+        let mut builder = analyze::basic_block::DropPoints::builder(self.tcx, &self.body);
         for (bb, _data) in mir::traversal::postorder(&self.body) {
             let span = tracing::info_span!("refine_basic_block", ?bb);
             let _guard = span.enter();

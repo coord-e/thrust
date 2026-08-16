@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@no-rustfix
 
 fn select<T, U, V>(a: T, b: U, c: V, which: i32) -> T {
     if which == 0 {

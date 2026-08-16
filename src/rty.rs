@@ -302,7 +302,7 @@ impl FunctionType {
             &mut self.ret,
             Box::new(RefinedType::unrefined(Type::unit())),
         );
-        self.ret = Box::new(old_ret.map_var(shift));
+        *self.ret = old_ret.map_var(shift);
 
         if let Some(last_idx) = self.params.last_index() {
             let refinement = removed.refinement.clone().map_var(|v| match v {

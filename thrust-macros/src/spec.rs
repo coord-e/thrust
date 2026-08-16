@@ -41,8 +41,9 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
     let model_preds = type_lowering.model_where_predicates();
     let extended_where = extended_where_clause(&func, &model_preds);
 
+    // A predicate's parameters are named by its SMT-LIB body, never used as Rust values.
     let sig = quote! {
-        #[allow(dead_code)]
+        #[allow(dead_code, unused_variables)]
         #[thrust::predicate]
         fn #name #def_generics(#model_ty_params) -> #model_ret #extended_where
     };

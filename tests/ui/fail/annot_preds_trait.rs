@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@no-rustfix
 //@compile-flags: -Adead_code -C debug-assertions=off
 
 // A is represented as Tuple<Int> in SMT-LIB2 format.

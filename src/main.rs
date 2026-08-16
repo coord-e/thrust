@@ -20,7 +20,7 @@ impl Callbacks for CompilerCalls {
         attrs.push("register_tool(thrust)".to_owned());
 
         config.override_queries = Some(|_sess, providers| {
-            providers.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
+            providers.queries.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
         });
     }
 
@@ -38,10 +38,14 @@ impl Callbacks for CompilerCalls {
             &compiler.sess.psess,
             rustc_span::FileName::Custom("thrust std injected".to_string()),
             injected.to_owned(),
+            rustc_parse::lexer::StripTokens::Nothing,
         )
         .unwrap();
         while let Some(item) = parser
-            .parse_item(rustc_parse::parser::ForceCollect::No)
+            .parse_item(
+                rustc_parse::parser::ForceCollect::No,
+                rustc_parse::parser::AllowConstBlockItems::No,
+            )
             .unwrap()
         {
             krate.items.push(item);
@@ -90,7 +94,7 @@ fn thrust_macros_path() -> Option<std::path::PathBuf> {
     None
 }
 
-pub fn main() {
+pub fn main() -> std::process::ExitCode {
     let mut args = std::env::args().collect::<Vec<_>>();
 
     use tracing_subscriber::{filter::EnvFilter, prelude::*};
@@ -112,8 +116,5 @@ pub fn main() {
         tracing::warn!("could not locate thrust_macros library");
     }
 
-    let code = rustc_driver::catch_with_exit_code(|| {
-        rustc_driver::run_compiler(&args, &mut CompilerCalls {})
-    });
-    std::process::exit(code);
+    rustc_driver::catch_with_exit_code(|| rustc_driver::run_compiler(&args, &mut CompilerCalls {}))
 }

@@ -66,6 +66,7 @@ impl Iterator for Range {
     }
 }
 
+#[allow(unused_variables)]
 fn main() {
     let mut range = Range { start: 0, end: 5 };
 
