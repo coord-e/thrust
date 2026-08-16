@@ -8,7 +8,6 @@ fn rand() -> i64 { unimplemented!() }
 
 #[thrust_macros::context]
 trait Foo {
-    #[thrust_macros::invariant_context]
     fn run(&mut self) {
         let mut x: i64 = 0;
         while rand() == 0 {
