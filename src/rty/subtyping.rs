@@ -1,9 +1,13 @@
 //! Translation of subtyping relations into CHC constraints.
 
+use rustc_index::IndexVec;
+
 use crate::chc;
 use crate::pretty::PrettyDisplayExt;
 
-use super::{ClauseBuilderExt as _, PointerKind, RefKind, RefinedType, Type};
+use super::{
+    ClauseBuilderExt as _, FunctionParamIdx, PointerKind, RefKind, RefinedType, Refinement, Type,
+};
 
 /// A scope for building clauses.
 ///
@@ -167,4 +171,29 @@ where
         clauses.extend(self.relate_sub_refined_type(expected, got));
         clauses
     }
+}
+
+/// Produces the constraint that a state a basic block is entered in satisfies its precondition.
+///
+/// A precondition is a refinement of the last parameter of the block, over the other parameters
+/// (see [`crate::refine::BasicBlockType::set_precondition`]), and both refinements are stated in
+/// terms of the given parameters.
+#[must_use]
+pub fn relate_sub_precondition(
+    params: &IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
+    got: Refinement<FunctionParamIdx>,
+    expected: Refinement<FunctionParamIdx>,
+) -> Vec<chc::Clause> {
+    let mut builder = chc::ClauseBuilder::default();
+    for (param_idx, param) in params.iter_enumerated() {
+        let param_sort = param.ty.to_sort();
+        if !param_sort.is_singleton() {
+            builder.add_mapped_var(param_idx, param_sort);
+        }
+    }
+    let last_param_idx = params.last_index().expect("basic block has a parameter");
+    builder
+        .with_mapped_value_var(last_param_idx)
+        .add_body(got)
+        .head(expected)
 }

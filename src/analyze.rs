@@ -188,7 +188,18 @@ enum DefTy<'tcx> {
 #[derive(Debug, Clone)]
 struct BasicBlockDef {
     ty: BasicBlockType,
-    has_precondition: bool,
+    precondition: BasicBlockPrecondition,
+}
+
+/// How a basic block comes by its precondition.
+#[derive(Debug, Clone)]
+enum BasicBlockPrecondition {
+    /// Already installed, be it from an annotation, the signature of the function, or a predicate
+    /// variable left to be inferred.
+    Installed,
+    /// The disjunction of the states its predecessors leave, collected as they are analyzed and
+    /// installed once they all have been.
+    Inherited(Vec<rty::Refinement<rty::FunctionParamIdx>>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -553,7 +564,7 @@ impl<'tcx> Analyzer<'tcx> {
             bb,
             BasicBlockDef {
                 ty: rty,
-                has_precondition: true,
+                precondition: BasicBlockPrecondition::Installed,
             },
         );
     }
@@ -569,7 +580,7 @@ impl<'tcx> Analyzer<'tcx> {
             bb,
             BasicBlockDef {
                 ty: rty,
-                has_precondition: false,
+                precondition: BasicBlockPrecondition::Inherited(Vec::new()),
             },
         );
     }
@@ -579,30 +590,89 @@ impl<'tcx> Analyzer<'tcx> {
             def_id = ?def_id,
             ?bb,
             rty = %def.ty.display(),
-            has_precondition = def.has_precondition,
             "register_basic_block_def",
         );
         self.basic_blocks.entry(def_id).or_default().insert(bb, def);
     }
 
-    pub fn register_basic_block_precondition(
+    /// Records the state a predecessor leaves as one of the states the block is entered in.
+    pub fn push_basic_block_precondition(
         &mut self,
         def_id: LocalDefId,
         bb: BasicBlock,
         precondition: rty::Refinement<rty::FunctionParamIdx>,
     ) {
-        let bb_def = &mut self
-            .basic_blocks
+        let bb_def = self.basic_block_def_mut(def_id, bb);
+        match &mut bb_def.precondition {
+            BasicBlockPrecondition::Inherited(states) => states.push(precondition),
+            BasicBlockPrecondition::Installed => {
+                panic!("precondition of {bb:?} is already installed")
+            }
+        }
+    }
+
+    /// Installs the precondition of a block that inherits it, once every predecessor has been
+    /// analyzed.
+    ///
+    /// The states its predecessors leave are the states it is entered in, so their disjunction is
+    /// its precondition. A disjunction is no conjunct of a Horn clause body, so when a predicate
+    /// variable appears in one of the states, the disjunction has to be named by a predicate
+    /// variable of its own, bounded from below by every state.
+    pub fn install_inherited_basic_block_precondition(
+        &mut self,
+        def_id: LocalDefId,
+        bb: BasicBlock,
+    ) {
+        let bb_def = self.basic_block_def_mut(def_id, bb);
+        let states =
+            match std::mem::replace(&mut bb_def.precondition, BasicBlockPrecondition::Installed) {
+                BasicBlockPrecondition::Inherited(states) => states,
+                BasicBlockPrecondition::Installed => return,
+            };
+        let ty = bb_def.ty.clone();
+
+        let precondition = match rty::Refinement::disjunction(states.iter().cloned()) {
+            Some(disjunction) => disjunction,
+            None => {
+                let template = self.precondition_template(&ty);
+                for state in states {
+                    let clauses =
+                        rty::relate_sub_precondition(&ty.as_ref().params, state, template.clone());
+                    self.extend_clauses(clauses);
+                }
+                template
+            }
+        };
+        self.basic_block_def_mut(def_id, bb)
+            .ty
+            .set_precondition(precondition);
+    }
+
+    /// A predicate variable standing for the precondition of a basic block, over its parameters.
+    fn precondition_template(
+        &mut self,
+        ty: &BasicBlockType,
+    ) -> rty::Refinement<rty::FunctionParamIdx> {
+        use crate::refine::TemplateRegistry as _;
+
+        let params = &ty.as_ref().params;
+        let last_param_idx = params.last_index().expect("basic block has a parameter");
+        let mut builder = rty::TemplateBuilder::default();
+        for (param_idx, param) in params.iter_enumerated() {
+            if param_idx != last_param_idx {
+                builder.add_dependency(param_idx, param.ty.to_sort());
+            }
+        }
+        let template = builder.build(params[last_param_idx].ty.clone());
+        self.register_template(template).refinement
+    }
+
+    fn basic_block_def_mut(&mut self, def_id: LocalDefId, bb: BasicBlock) -> &mut BasicBlockDef {
+        self.basic_blocks
             .get_mut(&def_id)
             .unwrap()
             .get_mut(&bb)
-            .unwrap();
-        assert!(
-            !bb_def.has_precondition,
-            "precondition is already registered for basic block"
-        );
-        bb_def.has_precondition = true;
-        bb_def.ty.set_precondition(precondition);
+            .unwrap()
     }
 
     pub fn basic_block_ty(&self, def_id: LocalDefId, bb: BasicBlock) -> &BasicBlockType {
@@ -616,7 +686,7 @@ impl<'tcx> Analyzer<'tcx> {
     ) -> &BasicBlockType {
         let def = &self.basic_blocks[&def_id][&bb];
         assert!(
-            def.has_precondition,
+            matches!(def.precondition, BasicBlockPrecondition::Installed),
             "basic block does not have precondition"
         );
         &def.ty
