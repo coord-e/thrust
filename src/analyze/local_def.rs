@@ -853,13 +853,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .unwrap_or(*input_ty)
             };
 
-            // The synthetic `__thrust_self` parameter (emitted when an invariant refers to the receiver
-            // `self`) maps to the loop-carried receiver, which appears as `self` in debug info.
-            let name = if ident.name.as_str() == "__thrust_self" {
-                rustc_span::Symbol::intern("self")
-            } else {
-                ident.name
-            };
+            let name = analyze::annot_fn::lifted_param_source_name(ident);
 
             if input_ty
                 .ty_adt_def()
