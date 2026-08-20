@@ -816,9 +816,40 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         capture.push_env_state(&self.env);
         let precondition = capture.finish(&self.env);
+        let param_tys = self.inherited_param_tys(bty);
 
         self.ctx
+            .register_basic_block_param_tys(self.local_def_id, bb, param_tys);
+        self.ctx
             .register_basic_block_precondition(self.local_def_id, bb, precondition);
+    }
+
+    /// Rebuilds a goto target's params that contain a function type, taking the
+    /// specifications the env holds.
+    ///
+    /// A function type carries the callee's specification in the type itself rather than
+    /// in a refinement, so a precondition captured from the env cannot bring it along.
+    /// The target's params are typed from their MIR types alone, which leaves every
+    /// function type in them unrefined.
+    fn inherited_param_tys(
+        &self,
+        bty: &BasicBlockType,
+    ) -> Vec<(rty::FunctionParamIdx, rty::Type<rty::FunctionParamIdx>)> {
+        let mut tys = Vec::new();
+        for (param_idx, param_rty) in bty.as_ref().params.iter_enumerated() {
+            // Only a param standing for a local is ever called; an `OuterFnParam` copy of
+            // a function-typed argument exists to name the argument's entry value.
+            let BasicBlockTypeParamKind::Local(local, _) = bty.param_kind(param_idx) else {
+                continue;
+            };
+            if !param_rty.ty.contains_function() {
+                continue;
+            }
+            let mut ty = param_rty.ty.clone();
+            ty.copy_function_types(&self.env.local_type(local).ty);
+            tys.push((param_idx, ty));
+        }
+        tys
     }
 
     fn with_assumptions<F, T>(&mut self, assumptions: Vec<impl Into<Assumption>>, callback: F) -> T

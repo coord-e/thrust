@@ -1056,6 +1056,50 @@ impl<T> Type<T> {
         }
     }
 
+    /// Whether a function type occurs anywhere in this type.
+    pub fn contains_function(&self) -> bool {
+        match self {
+            Type::Function(_) => true,
+            Type::Pointer(ty) => ty.elem.ty.contains_function(),
+            Type::Tuple(ty) => ty.elems.iter().any(|elem| elem.ty.contains_function()),
+            Type::Enum(ty) => ty.args.iter().any(|arg| arg.ty.contains_function()),
+            Type::Array(ty) => ty.index.ty.contains_function() || ty.elem.ty.contains_function(),
+            Type::Int | Type::Bool | Type::String | Type::Never | Type::Param(_) => false,
+        }
+    }
+
+    /// Replaces every function type in this type with the one at the same position in `src`.
+    ///
+    /// A function type states the callee's specification in the type itself, so a type built
+    /// from a MIR type alone (see [`crate::refine::TypeBuilder`]) leaves that specification
+    /// unrefined. This takes the specifications from a type of the same shape and leaves the
+    /// rest of this type alone. A position where the two shapes disagree is left as it is:
+    /// missing a specification only costs precision, whereas installing one from an unrelated
+    /// position would be wrong.
+    pub fn copy_function_types<U>(&mut self, src: &Type<U>) {
+        match (self, src) {
+            (Type::Function(dst), Type::Function(src)) => *dst = src.clone(),
+            (Type::Pointer(dst), Type::Pointer(src)) => {
+                dst.elem.ty.copy_function_types(&src.elem.ty)
+            }
+            (Type::Tuple(dst), Type::Tuple(src)) if dst.elems.len() == src.elems.len() => {
+                for (dst, src) in dst.elems.iter_mut().zip(src.elems.iter()) {
+                    dst.ty.copy_function_types(&src.ty);
+                }
+            }
+            (Type::Enum(dst), Type::Enum(src)) if dst.args.len() == src.args.len() => {
+                for (dst, src) in dst.args.iter_mut().zip(src.args.iter()) {
+                    dst.ty.copy_function_types(&src.ty);
+                }
+            }
+            (Type::Array(dst), Type::Array(src)) => {
+                dst.index.ty.copy_function_types(&src.index.ty);
+                dst.elem.ty.copy_function_types(&src.elem.ty);
+            }
+            _ => {}
+        }
+    }
+
     pub fn as_pointer(&self) -> Option<&PointerType<T>> {
         match self {
             Type::Pointer(ty) => Some(ty),

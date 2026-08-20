@@ -585,6 +585,28 @@ impl<'tcx> Analyzer<'tcx> {
         self.basic_blocks.entry(def_id).or_default().insert(bb, def);
     }
 
+    /// Installs the types of a basic block's parameters.
+    ///
+    /// A block whose parameters are typed from MIR types alone carries an unrefined
+    /// specification for every function type they contain. This overwrites those
+    /// parameters with types whose specifications were recovered from elsewhere.
+    pub fn register_basic_block_param_tys(
+        &mut self,
+        def_id: LocalDefId,
+        bb: BasicBlock,
+        tys: impl IntoIterator<Item = (rty::FunctionParamIdx, rty::Type<rty::FunctionParamIdx>)>,
+    ) {
+        let bb_def = self
+            .basic_blocks
+            .get_mut(&def_id)
+            .unwrap()
+            .get_mut(&bb)
+            .unwrap();
+        for (idx, ty) in tys {
+            bb_def.ty.set_param_ty(idx, ty);
+        }
+    }
+
     pub fn register_basic_block_precondition(
         &mut self,
         def_id: LocalDefId,
