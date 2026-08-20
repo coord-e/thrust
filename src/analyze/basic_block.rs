@@ -1067,9 +1067,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .skip(1)
             .map(|ident| {
                 let ident = ident.expect("ghost term parameters must be named");
-                let operand = self.operand_of_name(ident.name).unwrap_or_else(|| {
+                let name = analyze::annot_fn::lifted_param_source_name(ident);
+                let operand = self.operand_of_name(name).unwrap_or_else(|| {
                     self.tcx.dcx().fatal(format!(
-                        "ghost term refers to `{ident}`, which is not a live variable here"
+                        "ghost term refers to `{name}`, which is not a live variable here"
                     ))
                 });
                 self.operand_refined_type(operand)

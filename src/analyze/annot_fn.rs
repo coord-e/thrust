@@ -19,6 +19,20 @@ pub struct FormulaFn<'tcx> {
     formula: chc::Formula<rty::FunctionParamIdx>,
 }
 
+/// The source name a parameter of a formula function lifted out of a function body
+/// (`invariant!`, `ghost!`) refers to.
+///
+/// The lifted function is free, where `self` is not a legal parameter name, so a formula
+/// naming the receiver gets a synthetic parameter instead. It stands for the value that
+/// debug info records as `self`.
+pub fn lifted_param_source_name(ident: rustc_span::symbol::Ident) -> rustc_span::Symbol {
+    if ident.name.as_str() == "__thrust_self" {
+        rustc_span::Symbol::intern("self")
+    } else {
+        ident.name
+    }
+}
+
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &FormulaFn<'_>
 where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
