@@ -816,9 +816,43 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
         capture.push_env_state(&self.env);
         let precondition = capture.finish(&self.env);
+        let param_tys = self.inherited_param_tys(bty);
 
         self.ctx
+            .register_basic_block_param_tys(self.local_def_id, bb, param_tys);
+        self.ctx
             .register_basic_block_precondition(self.local_def_id, bb, precondition);
+    }
+
+    /// Takes the types the env holds for a goto target's params.
+    ///
+    /// The captured precondition carries what a parameter's *value* satisfies, and the
+    /// target's params are otherwise built from their MIR types alone. Everything a type
+    /// states by itself is therefore missing from the target: the refinements nested in
+    /// it, and the specification a function type spells out. Those are handed over here.
+    ///
+    /// A type in the env is closed — a refinement nested in one constrains the value at
+    /// its own position and names nothing from the env — so it transfers as it stands.
+    fn inherited_param_tys(
+        &self,
+        bty: &BasicBlockType,
+    ) -> Vec<(rty::FunctionParamIdx, rty::Type<rty::FunctionParamIdx>)> {
+        let mut tys = Vec::new();
+        for (param_idx, param_rty) in bty.as_ref().params.iter_enumerated() {
+            // An `OuterFnParam` copy of an argument names that argument's entry value, and
+            // takes its type from the outer function's signature rather than from the env.
+            let BasicBlockTypeParamKind::Local(local, _) = bty.param_kind(param_idx) else {
+                continue;
+            };
+            let ty = self.env.local_type(local).ty.assert_closed().vacuous();
+            assert_eq!(
+                ty.to_sort(),
+                param_rty.ty.to_sort(),
+                "env holds {local:?} at a different sort than the goto target's parameter"
+            );
+            tys.push((param_idx, ty));
+        }
+        tys
     }
 
     fn with_assumptions<F, T>(&mut self, assumptions: Vec<impl Into<Assumption>>, callback: F) -> T
