@@ -5,6 +5,7 @@ mod closure;
 mod context;
 mod fn_outer_item;
 mod formula;
+mod formula_fn_lifting;
 mod formula_fn_type_lowering;
 mod ghost;
 mod invariant;
