@@ -824,29 +824,32 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .register_basic_block_precondition(self.local_def_id, bb, precondition);
     }
 
-    /// Rebuilds a goto target's params that contain a function type, taking the
-    /// specifications the env holds.
+    /// Takes the types the env holds for a goto target's params.
     ///
-    /// A function type carries the callee's specification in the type itself rather than
-    /// in a refinement, so a precondition captured from the env cannot bring it along.
-    /// The target's params are typed from their MIR types alone, which leaves every
-    /// function type in them unrefined.
+    /// The captured precondition carries what a parameter's *value* satisfies, and the
+    /// target's params are otherwise built from their MIR types alone. Everything a type
+    /// states by itself is therefore missing from the target: the refinements nested in
+    /// it, and the specification a function type spells out. Those are handed over here.
+    ///
+    /// A type in the env is closed — a refinement nested in one constrains the value at
+    /// its own position and names nothing from the env — so it transfers as it stands.
     fn inherited_param_tys(
         &self,
         bty: &BasicBlockType,
     ) -> Vec<(rty::FunctionParamIdx, rty::Type<rty::FunctionParamIdx>)> {
         let mut tys = Vec::new();
         for (param_idx, param_rty) in bty.as_ref().params.iter_enumerated() {
-            // Only a param standing for a local is ever called; an `OuterFnParam` copy of
-            // a function-typed argument exists to name the argument's entry value.
+            // An `OuterFnParam` copy of an argument names that argument's entry value, and
+            // takes its type from the outer function's signature rather than from the env.
             let BasicBlockTypeParamKind::Local(local, _) = bty.param_kind(param_idx) else {
                 continue;
             };
-            if !param_rty.ty.contains_function() {
-                continue;
-            }
-            let mut ty = param_rty.ty.clone();
-            ty.copy_function_types(&self.env.local_type(local).ty);
+            let ty = self.env.local_type(local).ty.assert_closed().vacuous();
+            assert_eq!(
+                ty.to_sort(),
+                param_rty.ty.to_sort(),
+                "env holds {local:?} at a different sort than the goto target's parameter"
+            );
             tys.push((param_idx, ty));
         }
         tys
