@@ -45,6 +45,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     local_def_id: LocalDefId,
 
     body: Body<'tcx>,
+    /// the instantiation of the def's generic parameters being analyzed, also used
     /// to substitute HIR types during translation in [`crate::analyze::annot_fn`]
     generic_args: mir_ty::GenericArgsRef<'tcx>,
     drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints>,
@@ -198,7 +199,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return None;
         }
 
-        let trait_ref = self.tcx.impl_trait_ref(impl_did)?.instantiate_identity();
+        // an associated method's generic arguments start with those of its impl
+        let trait_ref = self
+            .tcx
+            .impl_trait_ref(impl_did)?
+            .instantiate(self.tcx, self.generic_args);
         let trait_item_did = self
             .tcx
             .associated_item(self.local_def_id.to_def_id())
@@ -1115,7 +1120,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let body = tcx.optimized_mir(local_def_id.to_def_id()).clone();
         let drop_points = Default::default();
         let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
-        let generic_args = tcx.mk_args(&[]);
+        let generic_args = mir_ty::GenericArgs::identity_for_item(tcx, local_def_id);
         Self {
             ctx,
             tcx,
