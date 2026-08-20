@@ -201,6 +201,14 @@ impl FnItemWithSignature {
             FnItemWithSignature::TraitItemFn(trait_item_fn) => &trait_item_fn.sig,
         }
     }
+
+    pub fn sig_mut(&mut self) -> &mut syn::Signature {
+        match self {
+            FnItemWithSignature::ItemFn(item_fn) => &mut item_fn.sig,
+            FnItemWithSignature::ImplItemFn(impl_item_fn) => &mut impl_item_fn.sig,
+            FnItemWithSignature::TraitItemFn(trait_item_fn) => &mut trait_item_fn.sig,
+        }
+    }
 }
 
 fn extract_requires_ensures(func: &mut FnItemWithSignature) -> syn::Result<(syn::Expr, syn::Expr)> {

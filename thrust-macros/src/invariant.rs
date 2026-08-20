@@ -8,7 +8,7 @@
 //! - `invariant!(|x: i64| x >= 1)` takes a bare predicate closure and only sees
 //!   concrete types.
 //! - `_invariant_with_context!(..)` additionally carries the enclosing generic
-//!   context. It is never written by hand: `#[thrust_macros::invariant_context]`
+//!   context. It is never written by hand: `#[thrust_macros::context]`
 //!   rewrites each `invariant!` it finds into this form, pasting the host
 //!   function's signature (and, in methods, a `#[thrust::_outer_context(..)]`
 //!   attribute carrying the enclosing `impl`/`trait` header) ahead of the
@@ -57,7 +57,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
 }
 
 /// Expands `_invariant_with_context!(#outer_attr #sig; CLOSURE)`, the form
-/// `#[thrust_macros::invariant_context]` rewrites each `invariant!` into.
+/// `#[thrust_macros::context]` rewrites each `invariant!` into.
 pub fn expand_with_context(input: TokenStream) -> TokenStream {
     struct WithContext {
         context: Context,
@@ -90,7 +90,7 @@ pub fn expand_with_context(input: TokenStream) -> TokenStream {
 }
 
 /// The enclosing context threaded into an invariant by
-/// `#[thrust_macros::invariant_context]`: the host function signature and, for a
+/// `#[thrust_macros::context]`: the host function signature and, for a
 /// method, its `impl`/`trait` header. A standalone `invariant!` has none.
 struct Context {
     sig: Signature,

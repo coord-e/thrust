@@ -9,7 +9,7 @@ fn rand() -> bool {
 }
 
 #[thrust_macros::ensures(result == a)]
-#[thrust_macros::invariant_context]
+#[thrust_macros::context]
 fn keep_argument(a: i64) -> i64 {
     let mut v = a;
 

@@ -5,7 +5,7 @@
 // `f.at_entry()` yields `Closure<F>`. Here the invariant relates `acc` to the
 // entry closure's postcondition, from which the postcondition below is proven.
 #[thrust_macros::ensures((n > 0) ==> thrust_macros::post!(f(n - 1), result))]
-#[thrust_macros::invariant_context]
+#[thrust_macros::context]
 fn last_apply<F>(f: F, n: i64) -> i64
 where
     F: Fn(i64) -> i64,
@@ -25,7 +25,7 @@ where
 
 // A capture-free closure is null (singleton) sorted; comparing its identity
 // must collapse to a canonical value rather than ICE during clause building.
-#[thrust_macros::invariant_context]
+#[thrust_macros::context]
 fn unchanged<F>(mut f: F)
 where
     F: FnMut(i64) -> i64,

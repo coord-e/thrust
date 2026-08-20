@@ -3,7 +3,7 @@
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(result.length == v.length + 2)]
-#[thrust_macros::invariant_context]
+#[thrust_macros::context]
 fn push_two(v: Vec<i64>) -> Vec<i64> {
     let mut w = v;
     let mut i = 0_i64;

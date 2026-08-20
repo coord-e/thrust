@@ -18,7 +18,6 @@ impl thrust_models::Model for Counter {
 
 #[thrust_macros::context]
 impl Counter {
-    #[thrust_macros::invariant_context]
     fn run(&mut self) -> i64 {
         let init = *self;
         while rand() {
