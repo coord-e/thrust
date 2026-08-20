@@ -920,12 +920,25 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    /// Analyzes the body of the implementation a call dispatches to.
+    ///
+    /// A call typed by a trait method's spec never asks for the implementing method's type, and
+    /// an implementation with generic parameters is analyzed only when its type is asked for.
+    fn analyze_resolved_impl_body(&mut self, def_id: DefId, args: mir_ty::GenericArgsRef<'tcx>) {
+        let (impl_def_id, impl_args) = self.resolve_fn_def(def_id, args);
+        if impl_def_id == def_id {
+            return;
+        }
+        let _ = self.ctx.def_ty_with_args(impl_def_id, impl_args);
+    }
+
     fn fn_def_ty(
         &mut self,
         def_id: DefId,
         args: mir_ty::GenericArgsRef<'tcx>,
     ) -> rty::Type<rty::Closed> {
         if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args) {
+            self.analyze_resolved_impl_body(def_id, args);
             return def_ty.ty;
         }
 
