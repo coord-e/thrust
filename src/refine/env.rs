@@ -1010,16 +1010,38 @@ where
         self.var_type(local.into())
     }
 
+    /// Returns the variable holding the value of `current` after a mutable borrow of it ends,
+    /// which the borrow's `prophecy` variable stands for.
+    ///
+    /// When `current` has a flow binding, the prophesied value is given one as well, so that it
+    /// can be projected and borrowed through just like the value it replaces. `prophecy` itself
+    /// is an opaque variable and admits neither, which would leave a reference stored in the
+    /// prophesied value unusable as the target of a later write.
+    fn bind_prophesied_value(&mut self, current: TempVarIdx, prophecy: TempVarIdx) -> TempVarIdx {
+        if self.flow_binding(current.into()).is_none() {
+            return prophecy;
+        }
+        let ty = self.var_type(current.into()).ty;
+        let refinement = chc::Term::var(rty::RefinedTypeVar::Value)
+            .equal_to(chc::Term::var(rty::RefinedTypeVar::Free(prophecy.into())))
+            .into();
+        let var = self.temp_vars.next_index();
+        self.bind_impl(var.into(), rty::RefinedType::new(ty, refinement), 0);
+        var
+    }
+
     fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> PlaceType {
         match *self.flow_binding(var).expect("borrowing unbound var") {
             FlowBinding::Box(x) => {
                 let inner_ty = self.var_type(x.into());
-                self.insert_flow_binding(var, FlowBinding::Box(prophecy));
+                let current = self.bind_prophesied_value(x, prophecy);
+                self.insert_flow_binding(var, FlowBinding::Box(current));
                 inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
             }
             FlowBinding::Mut(x1, x2) => {
                 let inner_ty = self.var_type(x1.into());
-                self.insert_flow_binding(var, FlowBinding::Mut(prophecy, x2));
+                let current = self.bind_prophesied_value(x1, prophecy);
+                self.insert_flow_binding(var, FlowBinding::Mut(current, x2));
                 inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
             }
             _ => panic!("invalid borrow"),
