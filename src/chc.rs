@@ -869,15 +869,19 @@ impl<V> Term<V> {
         // indexed properties against the inlined ITE for *any* recursion bound, where unfolding
         // through `define-fun-rec` would require an inductive invariant pcsat can't find.
         //
-        // `select(seq_concat(s, t), i)
-        //   ↦ ite(i < len(s), select(array(s), i), select(array(t), i - len(s)))`
-        // where `s`/`t` are `(array, length)` tuples.
+        // `select(seq_concat(s, t), i)`
+        //   ↦ ite(i < offset(s) + length(s),
+        //         select(array(s), i),
+        //         select(array(t), offset(t) + i - (offset(s) + length(s))))`
+        // where `s`/`t` are `(array, offset, length)` tuples and `i` is an absolute index into
+        // the concatenated array (which reuses `s`'s offset).
         if let Term::SeqConcat(_, t) = self {
             let SeqConcatTerm { seq1, seq2 } = *t;
-            let len1 = seq1.clone().tuple_proj(1);
-            let cond = index.clone().lt(len1.clone());
+            let split = seq1.clone().tuple_proj(1).add(seq1.clone().tuple_proj(2));
+            let offset2 = seq2.clone().tuple_proj(1);
+            let cond = index.clone().lt(split.clone());
             let then_ = seq1.tuple_proj(0).select(index.clone());
-            let else_ = seq2.tuple_proj(0).select(index.sub(len1));
+            let else_ = seq2.tuple_proj(0).select(offset2.add(index.sub(split)));
             return Term::ite(cond, then_, else_);
         }
         Term::App(Function::SELECT, vec![self, index])

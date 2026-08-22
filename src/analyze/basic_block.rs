@@ -544,8 +544,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             Rvalue::Aggregate(kind, fields) => {
                 match *kind {
                     mir::AggregateKind::Array(mir_elem_ty) => {
-                        // Build Seq<T> = (Box<Array<Int,T>>, Box<Int>) from array literal elements,
-                        // pinning each element at its index via store folds.
+                        // Build Seq<T> = (Box<Array<Int,T>>, Box<Int>, Box<Int>) from array literal
+                        // elements, pinning each element at its index via store folds. The offset
+                        // of a freshly built array is 0.
                         //
                         // TODO: Stop embedding knowledge of `<[T; N] as Model>::Ty` in the analyzer
                         let mut builder = PlaceTypeBuilder::default();
@@ -561,12 +562,18 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             rty::ArrayType::new(rty::Type::int(), elem_ty).into(),
                             arr_term,
                         );
+                        let offset_pty =
+                            PlaceType::with_ty_and_term(rty::Type::int(), chc::Term::int(0));
                         let size = fields.len();
                         let size_pty = PlaceType::with_ty_and_term(
                             rty::Type::int(),
                             chc::Term::int(size as i64),
                         );
-                        PlaceType::tuple(vec![arr_pty.boxed(), size_pty.boxed()])
+                        PlaceType::tuple(vec![
+                            arr_pty.boxed(),
+                            offset_pty.boxed(),
+                            size_pty.boxed(),
+                        ])
                     }
                     mir::AggregateKind::Adt(did, variant_idx, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>
