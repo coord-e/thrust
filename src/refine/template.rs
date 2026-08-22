@@ -263,7 +263,7 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     pub fn build_basic_block<I>(
-        &mut self,
+        &self,
         body: &rustc_middle::mir::Body<'tcx>,
         live_locals: I,
         ret_ty: mir_ty::Ty<'tcx>,
