@@ -6,8 +6,8 @@ mod context;
 mod fn_outer_item;
 mod formula;
 mod formula_fn_type_lowering;
+mod ghost;
 mod invariant;
-mod invariant_context;
 mod pre_post;
 mod rty;
 mod spec;
@@ -38,6 +38,25 @@ pub fn closure(input: TokenStream) -> TokenStream {
     closure::expand(input)
 }
 
+/// Introduces a ghost value: proof-only data with no runtime representation.
+///
+/// ```ignore
+/// let s = thrust_macros::ghost!(|s: Ghost<Seq<Int>>, x: i64| -> Seq<Int> { s.push(x) });
+/// ```
+///
+/// The argument is a closure whose parameters name the live variables the ghost term
+/// refers to (with their types) and whose return type is the logical type of the value.
+/// See [`mod@ghost`].
+#[proc_macro]
+pub fn ghost(input: TokenStream) -> TokenStream {
+    ghost::expand(input)
+}
+
+/// Makes the enclosing context available to the specifications written inside an
+/// item. On an `impl`/`trait`, each method recovers the outer generics (and `Self`)
+/// in its `requires`/`ensures`; on a function — including a method reached that way —
+/// every `thrust_macros::invariant!(...)` in the body may refer to generic- and
+/// `Self`-typed variables that the standalone macro cannot see. See [`mod@context`].
 #[proc_macro_attribute]
 pub fn context(_attr: TokenStream, item: TokenStream) -> TokenStream {
     context::expand(item)
@@ -69,22 +88,12 @@ pub fn invariant(input: TokenStream) -> TokenStream {
 }
 
 /// Context-carrying counterpart of `invariant!`, emitted by
-/// `#[thrust_macros::invariant_context]`. Not intended to be written by hand:
+/// `#[thrust_macros::context]`. Not intended to be written by hand:
 /// it takes a `fn` header carrying the threaded generics/where clause whose
 /// body is the predicate closure (see [`invariant`]).
 #[proc_macro]
 pub fn _invariant_with_context(input: TokenStream) -> TokenStream {
     invariant::expand_with_context(input)
-}
-
-/// Threads the surrounding generic context (and, in methods, `Self`) into
-/// every `thrust_macros::invariant!(...)` inside the annotated function, so an
-/// invariant may refer to generic- and `Self`-typed variables that the
-/// standalone `invariant!` macro cannot see. Each such call is rewritten into
-/// `thrust_macros::_invariant_with_context!`.
-#[proc_macro_attribute]
-pub fn invariant_context(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    invariant_context::expand(item)
 }
 
 #[proc_macro_attribute]
@@ -108,8 +117,8 @@ pub fn _requires_ensures(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 /// Reads the `#[thrust::_outer_context(..)]` attribute stamped onto methods by
-/// `#[thrust_macros::context]` (and threaded by `invariant_context`), returning
-/// the enclosing `impl`/`trait` header it carries, or `None` if absent.
+/// `#[thrust_macros::context]` (and threaded into the invariants in their bodies),
+/// returning the enclosing `impl`/`trait` header it carries, or `None` if absent.
 fn extract_outer_context(attrs: &[syn::Attribute]) -> syn::Result<Option<FnOuterItem>> {
     let outer_context_path: syn::Path = syn::parse_quote!(thrust::_outer_context);
     let mut outer_context = None;

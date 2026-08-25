@@ -6,7 +6,7 @@
 #[thrust::trusted]
 fn rand() -> i64 { unimplemented!() }
 
-#[thrust_macros::invariant_context]
+#[thrust_macros::context]
 fn keep<T: Copy + PartialEq>(v: T) {
   let mut x = v;
   while rand() == 0 {

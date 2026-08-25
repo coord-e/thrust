@@ -1004,8 +1004,8 @@ where
                         rty::RefinedType::unrefined(
                             self.inner
                                 .for_template(self.registry)
-                                .with_scope(&builder)
-                                .build(param_ty.ty),
+                                .build(param_ty.ty)
+                                .vacuous(),
                         )
                     }
                 });

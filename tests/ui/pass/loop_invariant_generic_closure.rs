@@ -9,7 +9,7 @@ fn rand() -> i64 { unimplemented!() }
 // A closure-typed generic param must not be given a `Model` bound: the
 // invariant only constrains the `Model`-typed `T`, and `keep` must still be
 // callable with a real closure.
-#[thrust_macros::invariant_context]
+#[thrust_macros::context]
 fn keep<F: Fn(i64) -> i64, T: Copy + PartialEq>(f: F, v: T) {
   let _ = f;
   let mut x = v;

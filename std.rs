@@ -412,6 +412,32 @@ mod thrust_models {
         unimplemented!()
     }
 
+    /// Proof-only data, introduced by `thrust_macros::ghost!`. In the logic it is its
+    /// content, so a specification refers to a `Ghost<T>` as if it were a `T`.
+    #[allow(dead_code)]
+    pub struct Ghost<T: ?Sized>(std::marker::PhantomData<T>);
+
+    impl<T: ?Sized> Clone for Ghost<T> {
+        #[thrust::ignored]
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    impl<T: ?Sized> Copy for Ghost<T> {}
+
+    impl<T: ?Sized> Model for Ghost<T> where T: Model {
+        type Ty = <T as Model>::Ty;
+    }
+
+    #[doc(hidden)]
+    #[thrust::def::ghost_marker]
+    #[thrust::ignored]
+    #[inline(never)]
+    pub fn __ghost_marker<F, T: ?Sized>(_f: F) -> Ghost<T> {
+        Ghost(std::marker::PhantomData)
+    }
+
     #[allow(dead_code)]
     #[thrust::def::fn_param_wrapper]
     pub struct FnParam<T>(std::marker::PhantomData<T>);

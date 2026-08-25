@@ -9,7 +9,7 @@ use rustc_middle::mir::{
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
-use crate::analyze::{self, TypeParam};
+use crate::analyze::{self, annot_fn::FormulaFn, TypeParam};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
@@ -1017,6 +1017,105 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    /// The formula function a ghost marker call carries, or `None` for any other call.
+    fn ghost_marker_formula_fn(
+        &self,
+        func: &Operand<'tcx>,
+        args: &[rustc_span::source_map::Spanned<Operand<'tcx>>],
+    ) -> Option<(LocalDefId, mir_ty::GenericArgsRef<'tcx>)> {
+        let (def_id, _) = func.const_fn_def()?;
+        if Some(def_id) != self.ctx.def_ids().ghost_marker() {
+            return None;
+        }
+
+        let arg_ty = args[0].node.ty(&self.local_decls, self.tcx);
+        let mir_ty::TyKind::FnDef(formula_def_id, generic_args) = arg_ty.kind() else {
+            panic!("ghost marker argument must be a formula function item");
+        };
+        let formula_def_id = formula_def_id
+            .as_local()
+            .expect("ghost formula function must be local");
+        Some((formula_def_id, generic_args))
+    }
+
+    /// Forges an operand for a live variable named `name` using var_debug_info
+    ///
+    /// Shadowing can leave several entries sharing a name, and debug info does not say
+    /// which one the source that named it meant, so this refuses to guess.
+    fn operand_of_name(&self, name: rustc_span::Symbol) -> Option<Operand<'tcx>> {
+        let mut found: Option<Operand<'tcx>> = None;
+        for vdi in self
+            .body
+            .var_debug_info
+            .iter()
+            .filter(|vdi| vdi.name == name)
+        {
+            let operand = match &vdi.value {
+                mir::VarDebugInfoContents::Place(place) => {
+                    if !place.projection.is_empty() || !self.is_defined(place.local) {
+                        continue;
+                    }
+                    Operand::Copy(*place)
+                }
+                mir::VarDebugInfoContents::Const(constant) => {
+                    Operand::Constant(Box::new(*constant))
+                }
+            };
+            match &found {
+                None => found = Some(operand),
+                Some(prev) if *prev == operand => {}
+                Some(_) => self.tcx.dcx().fatal(format!(
+                    "ghost term refers to `{name}`, which is ambiguous here: multiple live \
+                     variables share this name (e.g. through shadowing). Rename the variables \
+                     to disambiguate."
+                )),
+            }
+        }
+
+        found
+    }
+
+    /// Types the introduction of a ghost value as a call to the function the ghost term
+    /// denotes: one from the live variables it names to a value refined by the term.
+    fn type_ghost_value(&mut self, formula_fn: FormulaFn<'tcx>, expected: &rty::RefinedType<Var>) {
+        let (value_ty, param_tys) = formula_fn
+            .params()
+            .raw
+            .split_first()
+            .expect("ghost formula function takes the ghost value as its first parameter");
+        let mut params: IndexVec<_, _> = param_tys
+            .iter()
+            .map(|ty| rty::RefinedType::unrefined(self.type_builder.build(*ty)).vacuous())
+            .collect();
+        if params.is_empty() {
+            // elaboration: we need at least one predicate variable in parameter
+            params.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
+        }
+        let value_ty = self.type_builder.build(*value_ty);
+        let func_ty = rty::FunctionType::new(
+            params,
+            rty::RefinedType::new(value_ty.vacuous(), formula_fn.to_refinement()),
+        );
+
+        let args = formula_fn
+            .param_idents()
+            .iter()
+            .skip(1)
+            .map(|ident| {
+                let ident = ident.expect("ghost term parameters must be named");
+                let operand = self.operand_of_name(ident.name).unwrap_or_else(|| {
+                    self.tcx.dcx().fatal(format!(
+                        "ghost term refers to `{ident}`, which is not a live variable here"
+                    ))
+                });
+                self.operand_refined_type(operand)
+            })
+            .collect();
+
+        let clauses = self.relate_fn_sub_type(func_ty, args, expected.clone());
+        self.ctx.extend_clauses(clauses);
+    }
+
     fn elaborate_place(&self, place: &mir::Place<'tcx>) -> mir::Place<'tcx> {
         let mut projection = Vec::new();
         if self.is_mut_local(place.local) {
@@ -1277,11 +1376,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .for_template(&mut self.ctx)
                 .with_scope(&self.env)
                 .build_refined(decl.ty);
-            self.type_call(
-                func.clone(),
-                args.clone().iter().map(|a| a.node.clone()),
-                &rty,
-            );
+            if let Some((formula_def_id, generic_args)) = self.ghost_marker_formula_fn(func, args) {
+                let formula_fn = self
+                    .ctx
+                    .formula_fn_with_args(
+                        formula_def_id,
+                        generic_args,
+                        self.local_def_id.to_def_id(),
+                    )
+                    .expect("ghost formula function is not registered");
+                self.type_ghost_value(formula_fn, &rty);
+            } else {
+                self.type_call(
+                    func.clone(),
+                    args.clone().iter().map(|a| a.node.clone()),
+                    &rty,
+                );
+            }
             self.bind_local(destination, rty);
         }
     }

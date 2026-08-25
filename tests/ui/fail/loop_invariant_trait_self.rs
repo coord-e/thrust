@@ -17,7 +17,6 @@ trait Gauge {
     #[thrust_macros::ensures(Self::invariant(result))]
     fn update(&mut self) -> i32;
 
-    #[thrust_macros::invariant_context]
     fn run(&mut self) -> i32 {
         let mut state = 0;
         while rand() == 0 {

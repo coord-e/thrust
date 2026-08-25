@@ -202,6 +202,14 @@ pub fn invariant_marker_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn ghost_marker_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("ghost_marker"),
+    ]
+}
+
 pub fn fn_param_wrapper_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),
