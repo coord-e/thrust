@@ -45,6 +45,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     local_def_id: LocalDefId,
 
     body: Body<'tcx>,
+    /// the instantiation of the def's generic parameters being analyzed, also used
     /// to substitute HIR types during translation in [`crate::analyze::annot_fn`]
     generic_args: mir_ty::GenericArgsRef<'tcx>,
     drop_points: HashMap<BasicBlock, analyze::basic_block::DropPoints>,
@@ -191,20 +192,39 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         Some(trait_item_id)
     }
 
-    pub fn trait_item_ty(&mut self) -> Option<rty::RefinedType> {
+    /// The generic arguments the implemented trait method takes for the instantiation
+    /// being analyzed.
+    pub fn trait_item_args(&self) -> Option<mir_ty::GenericArgsRef<'tcx>> {
         let impl_did = self.tcx.parent(self.local_def_id.to_def_id());
 
         if self.tcx.def_kind(impl_did) != (rustc_hir::def::DefKind::Impl { of_trait: true }) {
             return None;
         }
 
-        let trait_ref = self.tcx.impl_trait_ref(impl_did)?.instantiate_identity();
+        // an associated method's generic arguments start with those of its impl
+        let trait_ref = self
+            .tcx
+            .impl_trait_ref(impl_did)?
+            .instantiate(self.tcx, self.generic_args);
+        // ... and end with the method's own, which the trait method is generic over as well
+        let own_args = self
+            .generic_args
+            .iter()
+            .skip(self.tcx.generics_of(self.local_def_id).parent_count);
+        Some(
+            self.tcx
+                .mk_args_from_iter(trait_ref.args.iter().chain(own_args)),
+        )
+    }
+
+    pub fn trait_item_ty(&mut self) -> Option<rty::RefinedType> {
+        let trait_item_args = self.trait_item_args()?;
         let trait_item_did = self
             .tcx
             .associated_item(self.local_def_id.to_def_id())
             .trait_item_def_id
             .unwrap();
-        self.ctx.def_ty_with_args(trait_item_did, trait_ref.args)
+        self.ctx.def_ty_with_args(trait_item_did, trait_item_args)
     }
 
     // TODO: Remove this eager precompute together with
@@ -252,14 +272,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .ctx
             .extract_ensure_annot(self.local_def_id, self.generic_args);
 
-        if let Some(trait_item_id) = self.local_trait_item_id() {
+        if let Some((trait_item_id, trait_item_args)) =
+            self.local_trait_item_id().zip(self.trait_item_args())
+        {
             tracing::info!("trait item found: {:?}", trait_item_id);
             let trait_require_annot = self
                 .ctx
-                .extract_require_annot(trait_item_id, self.generic_args);
+                .extract_require_annot(trait_item_id, trait_item_args);
             let trait_ensure_annot = self
                 .ctx
-                .extract_ensure_annot(trait_item_id, self.generic_args);
+                .extract_ensure_annot(trait_item_id, trait_item_args);
 
             assert!(require_annot.is_none() || trait_require_annot.is_none());
             require_annot = require_annot.or(trait_require_annot);
@@ -1115,7 +1137,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let body = tcx.optimized_mir(local_def_id.to_def_id()).clone();
         let drop_points = Default::default();
         let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
-        let generic_args = tcx.mk_args(&[]);
+        let generic_args = mir_ty::GenericArgs::identity_for_item(tcx, local_def_id);
         Self {
             ctx,
             tcx,

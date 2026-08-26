@@ -1,0 +1,29 @@
+//@error-in-other-file: Unsat
+//@compile-flags: -C debug-assertions=off
+
+#[thrust_macros::context]
+trait Tr {
+    #[thrust_macros::requires(true)]
+    #[thrust_macros::ensures(result > 0)]
+    fn m<U>(&self, u: U) -> i32;
+}
+
+struct W<T>(T);
+
+impl<T> thrust_models::Model for W<T>
+where
+    T: thrust_models::Model,
+{
+    type Ty = Self;
+}
+
+impl<T> Tr for W<T> {
+    fn m<U>(&self, _u: U) -> i32 {
+        -1
+    }
+}
+
+fn main() {
+    let w = W(0i32);
+    assert!(w.m(0i64) > 0);
+}

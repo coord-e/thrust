@@ -934,6 +934,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         args: mir_ty::GenericArgsRef<'tcx>,
     ) -> rty::Type<rty::Closed> {
         if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args) {
+            let (impl_def_id, impl_args) = self.resolve_fn_def(def_id, args);
+            // otherwise nothing asks for a deferred impl method's type and its body goes unchecked
+            if impl_def_id != def_id {
+                let _ = self.ctx.def_ty_with_args(impl_def_id, impl_args);
+            }
             return def_ty.ty;
         }
 
