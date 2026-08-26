@@ -1433,40 +1433,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn register_enum_defs(&mut self) {
-        use mir_ty::{TypeSuperVisitable as _, TypeVisitable as _};
-        struct EnumCollector<'tcx> {
-            tcx: mir_ty::TyCtxt<'tcx>,
-            builder: TypeBuilder<'tcx>,
-            enums: std::collections::HashSet<DefId>,
-            visited: std::collections::HashSet<mir_ty::Ty<'tcx>>,
-        }
-        impl<'tcx> mir_ty::TypeVisitor<mir_ty::TyCtxt<'tcx>> for EnumCollector<'tcx> {
-            fn visit_ty(&mut self, ty: mir_ty::Ty<'tcx>) {
-                let ty = self.builder.resolve_model_ty(ty);
-                if let mir_ty::TyKind::Adt(def, args) = ty.kind() {
-                    if self.visited.insert(ty) {
-                        if def.is_enum() {
-                            self.enums.insert(def.did());
-                        }
-                        for field in def.all_fields() {
-                            field.ty(self.tcx, args).visit_with(self);
-                        }
-                    }
-                }
-                ty.super_visit_with(self);
-            }
-        }
-        let mut visitor = EnumCollector {
-            tcx: self.tcx,
-            builder: self.type_builder.clone(),
-            enums: std::collections::HashSet::new(),
-            visited: std::collections::HashSet::new(),
-        };
         for local_decl in &self.local_decls {
-            local_decl.ty.visit_with(&mut visitor);
-        }
-        for def_id in visitor.enums {
-            self.ctx.get_or_register_enum_def(def_id);
+            self.ctx
+                .register_enum_defs_in_ty(&self.type_builder, local_decl.ty);
         }
     }
 }
