@@ -95,6 +95,16 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
         self.super_assign(place, rvalue, location);
     }
 
+    fn visit_rvalue(&mut self, rvalue: &mut mir::Rvalue<'tcx>, location: mir::Location) {
+        // `PtrMetadata` only reads the length out of the reference it is applied to, so its
+        // operand needs no reborrow. `analyze_assignment` takes the shared borrow it needs.
+        if let mir::Rvalue::UnaryOp(mir::UnOp::PtrMetadata, _) = rvalue {
+            return;
+        }
+
+        self.super_rvalue(rvalue, location);
+    }
+
     // TODO: is it always true that the operand is not referred again in rvalue
     fn visit_operand(&mut self, operand: &mut mir::Operand<'tcx>, location: mir::Location) {
         let Some(p) = operand.place() else {
