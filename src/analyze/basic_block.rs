@@ -852,14 +852,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     ) where
         F: FnMut(&mut Self, BasicBlock),
     {
+        let discr_mir_ty = discr.ty(&self.local_decls, self.tcx);
         let discr_ty = self.operand_type(discr);
         let mut negations = Vec::new();
-        for (val, bb) in targets.iter() {
-            let val: i64 = val.try_into().unwrap();
-            let target_term = match (val, &discr_ty.ty) {
+        for (bits, bb) in targets.iter() {
+            let target_term = match (bits, &discr_ty.ty) {
                 (0, rty::Type::Bool) => chc::Term::bool(false),
                 (1, rty::Type::Bool) => chc::Term::bool(true),
-                (n, rty::Type::Int) => chc::Term::int(n),
+                (_, rty::Type::Int) => {
+                    let (size, signed) = discr_mir_ty.int_size_and_signed(self.tcx);
+                    let val: i64 = if signed {
+                        size.sign_extend(bits).try_into().unwrap()
+                    } else {
+                        bits.try_into().unwrap()
+                    };
+                    chc::Term::int(val)
+                }
                 _ => unimplemented!(),
             };
 
