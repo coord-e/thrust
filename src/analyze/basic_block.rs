@@ -132,7 +132,7 @@ impl PrecondCapture {
 }
 
 enum ResolvedCallable<'tcx> {
-    Closure(DefId, mir_ty::GenericArgsRef<'tcx>),
+    Concrete(DefId, mir_ty::GenericArgsRef<'tcx>),
     Generic(TypeParam),
 }
 
@@ -918,7 +918,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     // closure encoding that type_builder.build() cannot handle.
                     let parent_count = self.tcx.generics_of(*closure_def_id).parent_count;
                     let parent_args = self.tcx.mk_args(&closure_args[..parent_count]);
-                    ResolvedCallable::Closure(*closure_def_id, parent_args)
+                    ResolvedCallable::Concrete(*closure_def_id, parent_args)
                 }
                 mir_ty::TyKind::Param(ty) => ResolvedCallable::Generic(TypeParam::GenericType {
                     param_def_id: self.type_builder.param_def_id(ty),
@@ -933,9 +933,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             let instance =
                 mir_ty::Instance::try_resolve(self.tcx, typing_env, def_id, args).unwrap();
             if let Some(instance) = instance {
-                ResolvedCallable::Closure(instance.def_id(), instance.args)
+                ResolvedCallable::Concrete(instance.def_id(), instance.args)
             } else {
-                ResolvedCallable::Closure(def_id, args)
+                ResolvedCallable::Concrete(def_id, args)
             }
         }
     }
@@ -954,7 +954,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     .expect("unknown closure type")
                     .into()
             }
-            ResolvedCallable::Closure(resolved_def_id, resolved_args) => {
+            ResolvedCallable::Concrete(resolved_def_id, resolved_args) => {
                 if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args, caller_def_id) {
                     // otherwise nothing asks for a deferred impl method's type and its body goes unchecked
                     if resolved_def_id != def_id {
