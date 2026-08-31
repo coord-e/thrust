@@ -295,9 +295,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .associated_item(self.local_def_id.to_def_id())
             .trait_item_def_id
             .unwrap();
-        let impl_did = self.tcx.parent(self.local_def_id.to_def_id());
-        self.ctx
-            .def_ty_with_args(trait_item_did, trait_item_args, impl_did)
+        self.ctx.def_ty_with_args(
+            trait_item_did,
+            trait_item_args,
+            self.local_def_id.to_def_id(),
+        )
     }
 
     // TODO: Remove this eager precompute together with
