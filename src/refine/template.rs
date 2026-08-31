@@ -522,12 +522,14 @@ impl<'tcx> TypeBuilder<'tcx> {
         if trait_ref.self_ty() != param_ty.to_ty(self.tcx) {
             return None;
         }
+        // Reject non-`Fn`/`FnMut`/`FnOnce` predicates (e.g. `Sized`) before building any type,
+        // so that a `ParamTy` the current TypeBuilder cannot translate is never built here.
+        use mir_ty::ClosureKind::*;
+        let closure_kind = self.tcx.fn_trait_kind_from_def_id(trait_ref.def_id)?;
         tracing::debug!(?trait_ref.args);
 
         let receiver_type = self.build(trait_ref.args.type_at(0));
-
-        use mir_ty::ClosureKind::*;
-        let receiver_type = match self.tcx.fn_trait_kind_from_def_id(trait_ref.def_id)? {
+        let receiver_type = match closure_kind {
             Fn => rty::PointerType::immut_to(receiver_type).into(),
             FnMut => rty::PointerType::mut_to(receiver_type).into(),
             FnOnce => receiver_type,
