@@ -5,9 +5,7 @@ use std::collections::BTreeMap;
 use pretty::{termcolor, Pretty};
 use rustc_index::IndexVec;
 
-use crate::chc;
-
-use super::{Closed, RefinedType, Type};
+use super::{Closed, RefinedType};
 
 rustc_index::newtype_index! {
     /// An index representing a type parameter.
@@ -54,7 +52,6 @@ impl TypeParamIdx {
 }
 
 pub type RefinedTypeArgs<T = Closed> = IndexVec<TypeParamIdx, RefinedType<T>>;
-pub type TypeArgs<T = Closed> = IndexVec<TypeParamIdx, Type<T>>;
 
 /// A substitution for type parameters that maps type parameters to refinement types.
 #[derive(Debug, Clone)]
@@ -67,16 +64,6 @@ impl<T> Default for TypeParamSubst<T> {
         Self {
             subst: Default::default(),
         }
-    }
-}
-
-impl<T> From<TypeArgs<T>> for TypeParamSubst<T> {
-    fn from(params: TypeArgs<T>) -> Self {
-        let subst = params
-            .into_iter_enumerated()
-            .map(|(idx, ty)| (idx, RefinedType::unrefined(ty)))
-            .collect();
-        Self { subst }
     }
 }
 
@@ -96,47 +83,8 @@ impl<T> std::ops::Index<TypeParamIdx> for TypeParamSubst<T> {
 }
 
 impl<T> TypeParamSubst<T> {
-    pub fn new(subst: BTreeMap<TypeParamIdx, RefinedType<T>>) -> Self {
-        Self { subst }
-    }
-
-    pub fn singleton(idx: TypeParamIdx, ty: RefinedType<T>) -> Self {
-        let mut subst = BTreeMap::default();
-        subst.insert(idx, ty);
-        Self { subst }
-    }
-
     pub fn get(&self, idx: TypeParamIdx) -> Option<&RefinedType<T>> {
         self.subst.get(&idx)
-    }
-
-    pub fn compose(&mut self, other: Self)
-    where
-        T: chc::Var,
-    {
-        for (idx, mut t1) in other.subst {
-            t1.subst_ty_params(self);
-            if let Some(t2) = self.subst.remove(&idx) {
-                t1.refinement.push_conj(t2.refinement);
-            }
-            self.subst.insert(idx, t1);
-        }
-    }
-
-    pub fn into_args<F>(mut self, expected_len: usize, mut default: F) -> RefinedTypeArgs<T>
-    where
-        T: chc::Var,
-        F: FnMut(TypeParamIdx) -> RefinedType<T>,
-    {
-        let mut args = RefinedTypeArgs::new();
-        for idx in 0..expected_len {
-            let ty = self
-                .subst
-                .remove(&idx.into())
-                .unwrap_or_else(|| default(idx.into()));
-            args.push(ty);
-        }
-        args
     }
 
     pub fn strip_refinement(self) -> TypeParamSubst<Closed> {

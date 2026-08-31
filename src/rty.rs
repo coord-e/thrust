@@ -24,7 +24,6 @@
 //!
 //! - `subst_var`: Substitutes logical variables with logical terms.
 //! - `map_var`: Maps logical variables to other logical variables.
-//! - `free_ty_params`: Collects free type parameters [`TypeParamIdx`] in the type.
 //! - `subst_ty_params`: Substitutes type parameters with other types. Since this replaces
 //!   type parameters with refinement types, [`Type`] does not implement this, and
 //!   [`RefinedType::subst_ty_params`] handles the substitution logic instead.
@@ -37,7 +36,7 @@
 //! - [`subtyping`]: Generates CHC constraints [`crate::chc`] from subtyping relations between types.
 //! - [`clause_builder`]: Helper to build [`crate::chc::Clause`] from the refinement types.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use pretty::{termcolor, Pretty};
 use rustc_abi::VariantIdx;
@@ -255,29 +254,12 @@ impl FunctionType {
         Type::Function(self)
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.params
-            .iter()
-            .flat_map(RefinedType::free_ty_params)
-            .chain(self.ret.free_ty_params())
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<Closed>) {
         let subst = subst.clone().vacuous();
         for param in &mut self.params {
             param.subst_ty_params(&subst);
         }
         self.ret.subst_ty_params(&subst);
-    }
-
-    pub fn unify_ty_params(self, other: FunctionType) -> TypeParamSubst<FunctionParamIdx> {
-        assert_eq!(self.params.len(), other.params.len());
-        let mut tys1 = self.params;
-        tys1.push(*self.ret);
-        let mut tys2 = other.params;
-        tys2.push(*other.ret);
-        unify_tys_params(tys1, tys2)
     }
 
     /// Removes the parameter at the given index from this function type.
@@ -562,23 +544,11 @@ impl<T> PointerType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.elem.free_ty_params()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
     {
         self.elem.subst_ty_params(subst)
-    }
-
-    pub fn unify_ty_params(self, other: PointerType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        assert_eq!(self.kind, other.kind);
-        self.elem.unify_ty_params(*other.elem)
     }
 }
 
@@ -661,13 +631,6 @@ impl<T> TupleType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.elems
-            .iter()
-            .flat_map(RefinedType::free_ty_params)
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
@@ -675,14 +638,6 @@ impl<T> TupleType<T> {
         for elem in &mut self.elems {
             elem.subst_ty_params(subst);
         }
-    }
-
-    pub fn unify_ty_params(self, other: TupleType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        assert_eq!(self.elems.len(), other.elems.len());
-        unify_tys_params(self.elems, other.elems)
     }
 }
 
@@ -787,13 +742,6 @@ impl<T> EnumType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.args
-            .iter()
-            .flat_map(RefinedType::free_ty_params)
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
@@ -801,14 +749,6 @@ impl<T> EnumType<T> {
         for arg in &mut self.args {
             arg.subst_ty_params(subst);
         }
-    }
-
-    pub fn unify_ty_params(self, other: EnumType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        assert_eq!(self.symbol, other.symbol);
-        unify_tys_params(self.args, other.args)
     }
 }
 
@@ -964,27 +904,12 @@ impl<T> ArrayType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.index
-            .free_ty_params()
-            .into_iter()
-            .chain(self.elem.free_ty_params())
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
     {
         self.index.subst_ty_params(subst);
         self.elem.subst_ty_params(subst);
-    }
-
-    pub fn unify_ty_params(self, other: ArrayType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        unify_tys_params([*self.index, *self.elem], [*other.index, *other.elem])
     }
 }
 
@@ -1276,23 +1201,6 @@ impl<T> Type<T> {
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
             Type::Array(ty) => Type::Array(ty.strip_refinement()),
             Type::Enum(ty) => Type::Enum(ty.strip_refinement()),
-        }
-    }
-
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        match self {
-            Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
-            Type::Param(ty) => std::iter::once(ty.type_param_index()).collect(),
-            Type::Alias(ty) => ty
-                .args()
-                .iter()
-                .flat_map(|ty| ty.free_ty_params())
-                .collect(),
-            Type::Pointer(ty) => ty.free_ty_params(),
-            Type::Function(ty) => ty.free_ty_params(),
-            Type::Tuple(ty) => ty.free_ty_params(),
-            Type::Array(ty) => ty.free_ty_params(),
-            Type::Enum(ty) => ty.free_ty_params(),
         }
     }
 }
@@ -1896,10 +1804,6 @@ impl<FV> RefinedType<FV> {
         self.ty.strip_refinement()
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.ty.free_ty_params()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<FV>)
     where
         FV: chc::Var,
@@ -1946,57 +1850,6 @@ impl<FV> RefinedType<FV> {
         FV: chc::Var,
     {
         self.subst_ty_params(&params.into());
-    }
-
-    pub fn unify_ty_params(self, other: RefinedType<FV>) -> TypeParamSubst<FV>
-    where
-        FV: chc::Var,
-    {
-        match (self.ty, other.ty) {
-            (Type::Int, Type::Int)
-            | (Type::Bool, Type::Bool)
-            | (Type::String, Type::String)
-            | (Type::Never, Type::Never) => Default::default(),
-            (Type::Param(pty), ty) if !ty.free_ty_params().contains(&pty.type_param_index()) => {
-                TypeParamSubst::singleton(
-                    pty.type_param_index(),
-                    RefinedType::new(ty.clone(), other.refinement.clone()),
-                )
-            }
-            (ty, Type::Param(pty)) if !ty.free_ty_params().contains(&pty.type_param_index()) => {
-                TypeParamSubst::singleton(
-                    pty.type_param_index(),
-                    RefinedType::new(ty.clone(), self.refinement.clone()),
-                )
-            }
-            (Type::Pointer(ty1), Type::Pointer(ty2)) => ty1.unify_ty_params(ty2),
-            (Type::Function(ty1), Type::Function(ty2)) => {
-                // TODO: what should we do for in-function refinement substs?
-                ty1.unify_ty_params(ty2).strip_refinement().vacuous()
-            }
-            (Type::Tuple(ty1), Type::Tuple(ty2)) => ty1.unify_ty_params(ty2),
-            (Type::Array(ty1), Type::Array(ty2)) => ty1.unify_ty_params(ty2),
-            (Type::Enum(ty1), Type::Enum(ty2)) => ty1.unify_ty_params(ty2),
-            (Type::Alias(a1), Type::Alias(a2))
-                if a1.forall_sort_index() == a2.forall_sort_index() =>
-            {
-                assert_eq!(a1.args().len(), a2.args().len());
-                let args1: Vec<RefinedType<FV>> = a1
-                    .args()
-                    .iter()
-                    .cloned()
-                    .map(|ty| RefinedType::unrefined(ty).vacuous())
-                    .collect();
-                let args2: Vec<RefinedType<FV>> = a2
-                    .args()
-                    .iter()
-                    .cloned()
-                    .map(|ty| RefinedType::unrefined(ty).vacuous())
-                    .collect();
-                unify_tys_params(args1, args2)
-            }
-            (t1, t2) => panic!("unify_ty_params: mismatched types t1={:?}, t2={:?}", t1, t2),
-        }
     }
 }
 
@@ -2135,23 +1988,6 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
             subst_ty_params_in_sort(sort, subst);
         }
     }
-}
-
-pub fn unify_tys_params<I1, I2, T>(tys1: I1, tys2: I2) -> TypeParamSubst<T>
-where
-    T: chc::Var,
-    I1: IntoIterator<Item = RefinedType<T>>,
-    I2: IntoIterator<Item = RefinedType<T>>,
-{
-    tys1.into_iter()
-        .zip(tys2)
-        .fold(Default::default(), |s1, (mut t1, mut t2)| {
-            t1.subst_ty_params(&s1);
-            t2.subst_ty_params(&s1);
-            let mut s2 = t1.unify_ty_params(t2);
-            s2.compose(s1);
-            s2
-        })
 }
 
 #[cfg(test)]
