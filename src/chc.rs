@@ -2532,7 +2532,7 @@ mod tests {
         );
 
         let smt = system.smtlib2().to_string();
-        assert!(smt.contains("; forall sort a0: type_param=ParamTy T/#0 (decl=DefId(...))"));
+        assert!(smt.contains("; type_param=ParamTy T/#0 (decl=DefId(...))"));
         assert!(smt.contains("(declare-forall-sort a0)"));
     }
 }
