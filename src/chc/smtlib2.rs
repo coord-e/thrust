@@ -698,14 +698,17 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
 
-        for forall_sort_idx in &self.inner.forall_sorts {
-            writeln!(f, "(declare-forall-sort {})\n", forall_sort_idx)?;
+        for forall_sort_def in &self.inner.forall_sorts {
+            if !forall_sort_def.debug_info.is_empty() {
+                writeln!(f, "{}", forall_sort_def.debug_info.display("; "))?;
+            }
+            writeln!(f, "(declare-forall-sort {})\n", forall_sort_def.idx)?;
         }
-        for forall_sort_idx in &self.inner.forall_sorts {
+        for forall_sort_def in &self.inner.forall_sorts {
             writeln!(
                 f,
                 "(declare-const default_{} {})\n",
-                forall_sort_idx, forall_sort_idx
+                forall_sort_def.idx, forall_sort_def.idx
             )?;
         }
 

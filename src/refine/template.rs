@@ -180,13 +180,10 @@ impl<'tcx> TypeBuilder<'tcx> {
                 local_idx: param_local_idx,
             })
             .or_insert_with(|| {
-                let idx = self.system.borrow_mut().new_forall_sort();
-                tracing::debug!(
-                    "issue the new ForallSortIdx {} for ParamTy {:?} (decl={:?}).",
-                    idx,
-                    ty,
-                    param_def_id
-                );
+                let desc = format!("ParamTy {:?} (decl={:?})", ty, param_def_id);
+                let debug_info = chc::DebugInfo::default().with_context("type_param", desc.clone());
+                let idx = self.system.borrow_mut().new_forall_sort(debug_info);
+                tracing::debug!("issue the new ForallSortIdx {} for {desc}.", idx);
                 idx
             });
         rty::ParamType::new(rty::TypeParamIdx::from(param_local_idx), *forall_sort_idx).into()
@@ -214,8 +211,13 @@ impl<'tcx> TypeBuilder<'tcx> {
         let index = type_params
             .entry(TypeParam::AssocType(ty.def_id, args.clone()))
             .or_insert_with(|| {
-                let idx = self.system.borrow_mut().new_forall_sort();
-                tracing::debug!("issue the new ForallSortIdx {} for AliasTy {:?} with (def_id = {:?}, args = {:?}).", idx, ty, ty.def_id, args);
+                let desc = format!(
+                    "AliasTy {:?} with (def_id = {:?}, args = {:?})",
+                    ty, ty.def_id, args
+                );
+                let debug_info = chc::DebugInfo::default().with_context("type_param", desc.clone());
+                let idx = self.system.borrow_mut().new_forall_sort(debug_info);
+                tracing::debug!("issue the new ForallSortIdx {} for {desc}.", idx);
                 idx
             });
 

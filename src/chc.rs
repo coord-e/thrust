@@ -126,6 +126,23 @@ impl ForallSortIdx {
     }
 }
 
+/// A forall sort declaration, carrying debug information about the type
+/// parameter it was issued for.
+///
+/// [`System`] contains `Vec<ForallSortDef>` that manages the indices and the debug information
+/// of the sort-level variables.
+#[derive(Debug, Clone)]
+pub struct ForallSortDef {
+    pub idx: ForallSortIdx,
+    pub debug_info: DebugInfo,
+}
+
+impl ForallSortDef {
+    pub fn new(idx: ForallSortIdx, debug_info: DebugInfo) -> Self {
+        Self { idx, debug_info }
+    }
+}
+
 /// A sort is the type of a logical term.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Sort {
@@ -2191,7 +2208,7 @@ pub struct System {
     pub user_defined_pred_defs: Vec<UserDefinedPredDef>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
-    pub forall_sorts: Vec<ForallSortIdx>,
+    pub forall_sorts: Vec<ForallSortDef>,
     pub num_forall_sort_idx: ForallSortIdx,
     /// Reverse map from [`ForallSortIdx`] to the local index of the type
     /// parameter it was issued for, populated by the analyzer. Used during
@@ -2214,10 +2231,11 @@ impl System {
         self.forall_pred_vars.insert(pred);
     }
 
-    pub fn new_forall_sort(&mut self) -> ForallSortIdx {
+    pub fn new_forall_sort(&mut self, debug_info: DebugInfo) -> ForallSortIdx {
         let new_idx = self.num_forall_sort_idx;
         self.num_forall_sort_idx += 1;
-        self.forall_sorts.push(new_idx);
+        self.forall_sorts
+            .push(ForallSortDef::new(new_idx, debug_info));
         new_idx
     }
 
@@ -2411,7 +2429,7 @@ mod tests {
     #[test]
     fn declares_forall_default_once() {
         let mut system = System::default();
-        let idx = system.new_forall_sort();
+        let idx = system.new_forall_sort(DebugInfo::default());
         let default = Term::default_for(&Sort::forall(idx));
         let body = Atom::new(
             Pred::Known(KnownPred::EQUAL),
@@ -2427,5 +2445,17 @@ mod tests {
         let smt = system.smtlib2().to_string();
         assert_eq!(smt.matches("(declare-const default_a0 a0)").count(), 1);
         assert_eq!(smt.matches("default_a0").count(), 2);
+    }
+
+    #[test]
+    fn emits_forall_sort_debug_info() {
+        let mut system = System::default();
+        system.new_forall_sort(
+            DebugInfo::default().with_context("type_param", "ParamTy T/#0 (decl=DefId(...))"),
+        );
+
+        let smt = system.smtlib2().to_string();
+        assert!(smt.contains("; forall sort a0: type_param=ParamTy T/#0 (decl=DefId(...))"));
+        assert!(smt.contains("(declare-forall-sort a0)"));
     }
 }
