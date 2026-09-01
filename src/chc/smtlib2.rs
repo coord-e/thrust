@@ -712,10 +712,6 @@ impl<'a> std::fmt::Display for System<'a> {
             )?;
         }
 
-        for pred in &self.inner.forall_pred_vars {
-            writeln!(f, "{}\n", ForallPredDef::new(&self.ctx, pred))?;
-        }
-
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
@@ -744,6 +740,11 @@ impl<'a> std::fmt::Display for System<'a> {
                               (+ ({len} s) (- ({len} t) 1)) \
                               (select ({array} t) (- ({len} t) 1)))))\n",
             )?;
+        }
+        writeln!(f)?;
+
+        for pred in &self.inner.forall_pred_vars {
+            writeln!(f, "{}\n", ForallPredDef::new(&self.ctx, pred))?;
         }
 
         // insert command from #![thrust::raw_command()] here
