@@ -704,7 +704,11 @@ impl<'a> std::fmt::Display for System<'a> {
             }
             writeln!(f, "(declare-forall-sort {})\n", forall_sort_def.idx)?;
         }
+        let used_forall_defaults = self.inner.used_forall_default_sorts();
         for forall_sort_def in &self.inner.forall_sorts {
+            if !used_forall_defaults.contains(&forall_sort_def.idx) {
+                continue;
+            }
             writeln!(
                 f,
                 "(declare-const default_{} {})\n",

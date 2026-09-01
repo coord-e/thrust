@@ -2295,6 +2295,25 @@ impl System {
         }
     }
 
+    /// The set of forall sorts whose default value is referenced (via
+    /// [`Term::ForallDefault`]) in some clause. Only these need a
+    /// `declare-const default_` definition in the SMT-LIB2 output.
+    pub fn used_forall_default_sorts(&self) -> HashSet<ForallSortIdx> {
+        let mut used = HashSet::new();
+        for clause in &self.clauses {
+            for atom in clause
+                .body
+                .iter_atoms()
+                .chain(std::iter::once(&clause.head))
+            {
+                for arg in &atom.args {
+                    collect_forall_defaults(arg, &mut used);
+                }
+            }
+        }
+        used
+    }
+
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {
         if clause.is_nop() {
             return None;
@@ -2422,6 +2441,52 @@ impl System {
     }
 }
 
+/// Collects the forall sorts referenced via [`Term::ForallDefault`] in `term`
+/// into `used`.
+fn collect_forall_defaults(term: &Term<TermVarIdx>, used: &mut HashSet<ForallSortIdx>) {
+    match term {
+        Term::ForallDefault(idx) => {
+            used.insert(*idx);
+        }
+        Term::Box(t) | Term::BoxCurrent(t) | Term::MutCurrent(t) | Term::MutFinal(t) => {
+            collect_forall_defaults(t, used)
+        }
+        Term::Mut(t1, t2) => {
+            collect_forall_defaults(t1, used);
+            collect_forall_defaults(t2, used);
+        }
+        Term::App(_, args) => {
+            for t in args {
+                collect_forall_defaults(t, used);
+            }
+        }
+        Term::SeqConcat(_, t) => {
+            for arg in t.iter_args() {
+                collect_forall_defaults(arg, used);
+            }
+        }
+        Term::Tuple(ts) => {
+            for t in ts {
+                collect_forall_defaults(t, used);
+            }
+        }
+        Term::TupleProj(t, _) => collect_forall_defaults(t, used),
+        Term::DatatypeCtor(_, _, args) => {
+            for t in args {
+                collect_forall_defaults(t, used);
+            }
+        }
+        Term::DatatypeDiscr(_, t) => collect_forall_defaults(t, used),
+        Term::Null
+        | Term::Var(_)
+        | Term::Bool(_)
+        | Term::Int(_)
+        | Term::String(_)
+        | Term::ArrayEmpty(_, _)
+        | Term::FormulaQuantifiedVar(_, _) => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2445,6 +2510,18 @@ mod tests {
         let smt = system.smtlib2().to_string();
         assert_eq!(smt.matches("(declare-const default_a0 a0)").count(), 1);
         assert_eq!(smt.matches("default_a0").count(), 2);
+    }
+
+    #[test]
+    fn does_not_declare_default_for_unused_forall_sort() {
+        let mut system = System::default();
+        system.new_forall_sort(DebugInfo::default());
+        system.new_forall_sort(DebugInfo::default());
+
+        let smt = system.smtlib2().to_string();
+        assert_eq!(smt.matches("(declare-const default_").count(), 0);
+        assert_eq!(smt.matches("(declare-forall-sort a0)").count(), 1);
+        assert_eq!(smt.matches("(declare-forall-sort a1)").count(), 1);
     }
 
     #[test]
