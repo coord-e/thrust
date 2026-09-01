@@ -218,11 +218,6 @@ impl refine::EnumDefProvider for Rc<RefCell<EnumDefs>> {
 
 pub type Env = refine::Env<Rc<RefCell<EnumDefs>>>;
 
-#[derive(Debug, Clone)]
-struct DeferredFormulaFnDef<'tcx> {
-    cache: Rc<RefCell<HashMap<mir_ty::GenericArgsRef<'tcx>, annot_fn::FormulaFn<'tcx>>>>,
-}
-
 #[derive(Clone)]
 pub struct Analyzer<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -235,7 +230,7 @@ pub struct Analyzer<'tcx> {
     defs: HashMap<DefId, DefTy<'tcx>>,
 
     /// Collection of functions with `#[thrust::formula_fn]` attribute.
-    formula_fns: HashMap<LocalDefId, DeferredFormulaFnDef<'tcx>>,
+    formula_fns: HashMap<LocalDefId, annot_fn::FormulaFnDef<'tcx>>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -452,20 +447,10 @@ impl<'tcx> Analyzer<'tcx> {
         local_def_id: LocalDefId,
         generic_args: mir_ty::GenericArgsRef<'tcx>,
     ) -> Option<annot_fn::FormulaFn<'tcx>> {
-        let deferred_formula_fn = self.formula_fns.get(&local_def_id)?;
-
-        let deferred_formula_fn_cache = Rc::clone(&deferred_formula_fn.cache);
-        if let Some(formula_fn) = deferred_formula_fn_cache.borrow().get(&generic_args) {
-            return Some(formula_fn.clone());
-        }
-
-        let translator = annot_fn::AnnotFnTranslator::new(self, local_def_id, generic_args)
-            .with_def_id_cache(self.def_ids());
-        let formula_fn = translator.to_formula_fn();
-        deferred_formula_fn_cache
-            .borrow_mut()
-            .insert(generic_args, formula_fn.clone());
-
+        let formula_fn = self
+            .formula_fns
+            .get(&local_def_id)?
+            .instantiate(self, generic_args);
         tracing::info!(?local_def_id, formula_fn = %formula_fn.display(), ?generic_args, "formula_fn_with_args");
         Some(formula_fn)
     }
@@ -534,12 +519,9 @@ impl<'tcx> Analyzer<'tcx> {
 
     pub fn register_formula_fn(&mut self, local_def_id: LocalDefId) {
         tracing::info!(?local_def_id, "register_formula_fn");
-        self.formula_fns.insert(
-            local_def_id,
-            DeferredFormulaFnDef {
-                cache: Rc::new(RefCell::new(HashMap::new())),
-            },
-        );
+        let translator = annot_fn::AnnotFnTranslator::new(self.tcx, self.def_ids(), local_def_id);
+        self.formula_fns
+            .insert(local_def_id, translator.to_formula_fn_def());
     }
 
     pub fn register_basic_block_ty_with_precondition(

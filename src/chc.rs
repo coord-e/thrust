@@ -478,6 +478,12 @@ impl<V> SeqConcatTerm<V> {
             seq2: self.seq2.subst_var(f),
         }
     }
+
+    pub fn instantiate_sort_params(&mut self, args: &[Sort]) {
+        for arg in self.iter_args_mut() {
+            arg.instantiate_sort_params(args);
+        }
+    }
 }
 
 /// A logical term.
@@ -638,6 +644,48 @@ impl<V> Term<V> {
         F: FnMut(V) -> W,
     {
         self.subst_var(|v| Term::Var(f(v)))
+    }
+
+    /// Replaces every [`Sort::Param`] carried by this term with the corresponding entry of `args`.
+    pub fn instantiate_sort_params(&mut self, args: &[Sort]) {
+        match self {
+            Term::Null
+            | Term::Var(_)
+            | Term::Bool(_)
+            | Term::Int(_)
+            | Term::String(_)
+            | Term::DatatypeDiscr(_, _) => {}
+            Term::Box(t) | Term::BoxCurrent(t) | Term::MutCurrent(t) | Term::MutFinal(t) => {
+                t.instantiate_sort_params(args)
+            }
+            Term::Mut(t1, t2) => {
+                t1.instantiate_sort_params(args);
+                t2.instantiate_sort_params(args);
+            }
+            Term::App(_, ts) | Term::Tuple(ts) => {
+                for t in ts {
+                    t.instantiate_sort_params(args);
+                }
+            }
+            Term::ArrayEmpty(index, elem) => {
+                index.instantiate_params(args);
+                elem.instantiate_params(args);
+            }
+            Term::SeqConcat(elem, t) => {
+                elem.instantiate_params(args);
+                t.instantiate_sort_params(args);
+            }
+            Term::TupleProj(t, _) => t.instantiate_sort_params(args),
+            Term::DatatypeCtor(sort, _, ts) => {
+                for arg in sort.args_mut() {
+                    arg.instantiate_params(args);
+                }
+                for t in ts {
+                    t.instantiate_sort_params(args);
+                }
+            }
+            Term::FormulaQuantifiedVar(sort, _) => sort.instantiate_params(args),
+        }
     }
 
     fn sort<F>(&self, mut var_sort: F) -> Sort
@@ -1365,6 +1413,16 @@ impl<V> Atom<V> {
         self.args.iter().flat_map(|t| t.fv()).chain(guard_fvs)
     }
 
+    /// Replaces every [`Sort::Param`] carried by this atom with the corresponding entry of `args`.
+    pub fn instantiate_sort_params(&mut self, args: &[Sort]) {
+        if let Some(guard) = &mut self.guard {
+            guard.instantiate_sort_params(args);
+        }
+        for arg in &mut self.args {
+            arg.instantiate_sort_params(args);
+        }
+    }
+
     pub fn guarded(self, new_guard: Formula<V>) -> Atom<V> {
         let Atom {
             guard: self_guard,
@@ -1577,6 +1635,30 @@ impl<V> Formula<V> {
 
     pub fn forall(vars: Vec<(String, Sort)>, body: Self) -> Self {
         Formula::Forall(vars, Box::new(body))
+    }
+
+    /// Replaces every [`Sort::Param`] carried by this formula with the corresponding entry of
+    /// `args`.
+    pub fn instantiate_sort_params(&mut self, args: &[Sort]) {
+        match self {
+            Formula::Atom(atom) => atom.instantiate_sort_params(args),
+            Formula::Not(fo) => fo.instantiate_sort_params(args),
+            Formula::And(fs) | Formula::Or(fs) => {
+                for f in fs {
+                    f.instantiate_sort_params(args);
+                }
+            }
+            Formula::Implies(lhs, rhs) => {
+                lhs.instantiate_sort_params(args);
+                rhs.instantiate_sort_params(args);
+            }
+            Formula::Exists(vars, fo) | Formula::Forall(vars, fo) => {
+                for (_, sort) in vars {
+                    sort.instantiate_params(args);
+                }
+                fo.instantiate_sort_params(args);
+            }
+        }
     }
 
     pub fn subst_var<F, W>(self, f: F) -> Formula<W>

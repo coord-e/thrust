@@ -1,7 +1,12 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use pretty::{termcolor, Pretty};
-use rustc_hir::{def_id::LocalDefId, HirId};
+use rustc_hir::{
+    def_id::{DefId, LocalDefId},
+    HirId,
+};
 use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
@@ -10,6 +15,58 @@ use crate::chc;
 use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
+/// A `#[thrust::formula_fn]` definition, translated as the definition itself writes it.
+///
+/// The translation leaves the definition's type parameters standing, so what it yields is not yet
+/// a [`chc::Formula`]: every sort it mentions is left to be built from the type arguments, and
+/// both a `pre!`/`post!` application and a call to a predicate with several implementations only
+/// name a contract once those arguments are known. [`FormulaFnDef::instantiate`] supplies them and
+/// yields a [`FormulaFn`].
+#[derive(Debug, Clone)]
+pub struct FormulaFnDef<'tcx> {
+    def_id: LocalDefId,
+    params: IndexVec<rty::FunctionParamIdx, mir_ty::Ty<'tcx>>,
+    param_idents: IndexVec<rty::FunctionParamIdx, Option<rustc_span::symbol::Ident>>,
+    /// The type behind each sort the formula mentions, which names it as [`chc::Sort::Param`]
+    /// carrying the type's index here.
+    sort_tys: Vec<mir_ty::Ty<'tcx>>,
+    formula: PolyFormula<'tcx>,
+}
+
+impl<'tcx> FormulaFnDef<'tcx> {
+    pub fn instantiate(
+        &self,
+        analyzer: &analyze::Analyzer<'tcx>,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> FormulaFn<'tcx> {
+        let cx = Instantiation::new(analyzer, self.def_id, generic_args);
+        let params: IndexVec<_, _> = self
+            .params
+            .iter()
+            .map(|ty| cx.instantiate_ty(*ty))
+            .collect();
+        let sorts: Vec<_> = self.sort_tys.iter().map(|ty| cx.build_sort(*ty)).collect();
+
+        let mut formula = self.formula.clone();
+        formula.instantiate_sort_params(&sorts);
+        let param_values = cx.singleton_param_values(&params);
+        let formula = formula
+            .resolve(&cx)
+            .subst_var(|idx: rty::FunctionParamIdx| {
+                param_values[idx]
+                    .clone()
+                    .unwrap_or_else(|| chc::Term::var(idx))
+            });
+
+        FormulaFn {
+            params,
+            param_idents: self.param_idents.clone(),
+            formula,
+        }
+    }
+}
+
+/// A [`FormulaFnDef`] with its definition's type parameters instantiated.
 #[derive(Debug, Clone)]
 pub struct FormulaFn<'tcx> {
     params: IndexVec<rty::FunctionParamIdx, mir_ty::Ty<'tcx>>,
@@ -97,6 +154,381 @@ impl<'tcx> FormulaFn<'tcx> {
     }
 }
 
+/// A formula whose sorts and whose contract-naming leaves are still open, awaiting the type
+/// arguments of the definition it was translated from.
+#[derive(Debug, Clone)]
+enum PolyFormula<'tcx> {
+    Closed(chc::Formula<rty::FunctionParamIdx>),
+    ClosureSpec(ClosureSpec<'tcx>),
+    Predicate(PredicateCall<'tcx>),
+    Not(Box<PolyFormula<'tcx>>),
+    And(Box<PolyFormula<'tcx>>, Box<PolyFormula<'tcx>>),
+    Or(Box<PolyFormula<'tcx>>, Box<PolyFormula<'tcx>>),
+    Implies(Box<PolyFormula<'tcx>>, Box<PolyFormula<'tcx>>),
+    Exists(Vec<(String, chc::Sort)>, Box<PolyFormula<'tcx>>),
+    Forall(Vec<(String, chc::Sort)>, Box<PolyFormula<'tcx>>),
+}
+
+impl<'tcx> PolyFormula<'tcx> {
+    fn top() -> Self {
+        PolyFormula::Closed(chc::Formula::top())
+    }
+
+    fn bottom() -> Self {
+        PolyFormula::Closed(chc::Formula::bottom())
+    }
+
+    fn not(self) -> Self {
+        match self {
+            PolyFormula::Closed(fo) => PolyFormula::Closed(fo.not()),
+            fo => PolyFormula::Not(Box::new(fo)),
+        }
+    }
+
+    fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (PolyFormula::Closed(lhs), PolyFormula::Closed(rhs)) => {
+                PolyFormula::Closed(lhs.and(rhs))
+            }
+            (lhs, rhs) => PolyFormula::And(Box::new(lhs), Box::new(rhs)),
+        }
+    }
+
+    fn or(self, other: Self) -> Self {
+        match (self, other) {
+            (PolyFormula::Closed(lhs), PolyFormula::Closed(rhs)) => {
+                PolyFormula::Closed(lhs.or(rhs))
+            }
+            (lhs, rhs) => PolyFormula::Or(Box::new(lhs), Box::new(rhs)),
+        }
+    }
+
+    fn implies(self, other: Self) -> Self {
+        match (self, other) {
+            (PolyFormula::Closed(lhs), PolyFormula::Closed(rhs)) => {
+                PolyFormula::Closed(lhs.implies(rhs))
+            }
+            (lhs, rhs) => PolyFormula::Implies(Box::new(lhs), Box::new(rhs)),
+        }
+    }
+
+    fn exists(vars: Vec<(String, chc::Sort)>, body: Self) -> Self {
+        match body {
+            PolyFormula::Closed(body) => PolyFormula::Closed(chc::Formula::exists(vars, body)),
+            body => PolyFormula::Exists(vars, Box::new(body)),
+        }
+    }
+
+    fn forall(vars: Vec<(String, chc::Sort)>, body: Self) -> Self {
+        match body {
+            PolyFormula::Closed(body) => PolyFormula::Closed(chc::Formula::forall(vars, body)),
+            body => PolyFormula::Forall(vars, Box::new(body)),
+        }
+    }
+
+    fn instantiate_sort_params(&mut self, sorts: &[chc::Sort]) {
+        match self {
+            PolyFormula::Closed(fo) => fo.instantiate_sort_params(sorts),
+            PolyFormula::ClosureSpec(spec) => spec.instantiate_sort_params(sorts),
+            PolyFormula::Predicate(call) => call.instantiate_sort_params(sorts),
+            PolyFormula::Not(fo) => fo.instantiate_sort_params(sorts),
+            PolyFormula::And(lhs, rhs)
+            | PolyFormula::Or(lhs, rhs)
+            | PolyFormula::Implies(lhs, rhs) => {
+                lhs.instantiate_sort_params(sorts);
+                rhs.instantiate_sort_params(sorts);
+            }
+            PolyFormula::Exists(vars, fo) | PolyFormula::Forall(vars, fo) => {
+                for (_, sort) in vars {
+                    sort.instantiate_params(sorts);
+                }
+                fo.instantiate_sort_params(sorts);
+            }
+        }
+    }
+
+    fn resolve(&self, cx: &Instantiation<'_, 'tcx>) -> chc::Formula<rty::FunctionParamIdx> {
+        match self {
+            PolyFormula::Closed(fo) => fo.clone(),
+            PolyFormula::ClosureSpec(spec) => spec.resolve(cx),
+            PolyFormula::Predicate(call) => call.resolve(cx),
+            PolyFormula::Not(fo) => fo.resolve(cx).not(),
+            PolyFormula::And(lhs, rhs) => lhs.resolve(cx).and(rhs.resolve(cx)),
+            PolyFormula::Or(lhs, rhs) => lhs.resolve(cx).or(rhs.resolve(cx)),
+            PolyFormula::Implies(lhs, rhs) => lhs.resolve(cx).implies(rhs.resolve(cx)),
+            PolyFormula::Exists(vars, fo) => chc::Formula::exists(vars.clone(), fo.resolve(cx)),
+            PolyFormula::Forall(vars, fo) => chc::Formula::forall(vars.clone(), fo.resolve(cx)),
+        }
+    }
+}
+
+/// A `pre!(f(..))` or `post!(f(..), result)` application.
+///
+/// It stands for one side of the contract of the closure the receiver denotes, which is the
+/// closure the receiver's type names once the type parameters are instantiated.
+#[derive(Debug, Clone)]
+struct ClosureSpec<'tcx> {
+    receiver_ty: mir_ty::Ty<'tcx>,
+    receiver: chc::Term<rty::FunctionParamIdx>,
+    args: Vec<chc::Term<rty::FunctionParamIdx>>,
+    /// The value a postcondition constrains, or `None` for a precondition.
+    result: Option<chc::Term<rty::FunctionParamIdx>>,
+}
+
+impl<'tcx> ClosureSpec<'tcx> {
+    fn instantiate_sort_params(&mut self, sorts: &[chc::Sort]) {
+        self.receiver.instantiate_sort_params(sorts);
+        for arg in &mut self.args {
+            arg.instantiate_sort_params(sorts);
+        }
+        if let Some(result) = &mut self.result {
+            result.instantiate_sort_params(sorts);
+        }
+    }
+
+    fn resolve(&self, cx: &Instantiation<'_, 'tcx>) -> chc::Formula<rty::FunctionParamIdx> {
+        let side = if self.result.is_some() {
+            "postcondition"
+        } else {
+            "precondition"
+        };
+        let receiver_ty = cx.instantiate_ty(self.receiver_ty);
+        let fn_ty = cx
+            .closure_fn_type(receiver_ty)
+            .unwrap_or_else(|| panic!("{side} used on a non-closure parameter: {receiver_ty:?}"));
+        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[upvars, args..]`, where
+        // the upvars are the closure value itself.
+        assert_eq!(
+            self.args.len(),
+            fn_ty.params.len() - 1,
+            "closure {side} arity mismatch: closure takes {} argument(s)",
+            fn_ty.params.len() - 1
+        );
+        let param_args: Vec<_> =
+            std::iter::once(cx.closure_receiver_term(receiver_ty, &fn_ty, self.receiver.clone()))
+                .chain(self.args.iter().cloned())
+                .collect();
+        match &self.result {
+            Some(result) => fn_ty.postcondition_formula(&param_args, result.clone()),
+            None => fn_ty.precondition_formula(&param_args),
+        }
+    }
+}
+
+/// A call to a `#[thrust::predicate]` function.
+///
+/// A predicate declared by a trait has one definition per implementation, so the definition the
+/// call names follows from the type arguments it is applied to.
+#[derive(Debug, Clone)]
+struct PredicateCall<'tcx> {
+    def_id: DefId,
+    generic_args: mir_ty::GenericArgsRef<'tcx>,
+    args: Vec<chc::Term<rty::FunctionParamIdx>>,
+}
+
+impl<'tcx> PredicateCall<'tcx> {
+    fn instantiate_sort_params(&mut self, sorts: &[chc::Sort]) {
+        for arg in &mut self.args {
+            arg.instantiate_sort_params(sorts);
+        }
+    }
+
+    fn resolve(&self, cx: &Instantiation<'_, 'tcx>) -> chc::Formula<rty::FunctionParamIdx> {
+        let generic_args = cx.instantiate_generic_args(self.generic_args);
+        tracing::debug!(
+            def_id = ?self.def_id,
+            ?generic_args,
+            "resolving predicate call in formula"
+        );
+        let instance = mir_ty::Instance::try_resolve(
+            cx.tcx,
+            mir_ty::TypingEnv::fully_monomorphized(),
+            self.def_id,
+            generic_args,
+        )
+        .unwrap();
+        let def_id = instance.map_or(self.def_id, |instance| instance.def_id());
+        let pred = refine::user_defined_pred(cx.tcx, def_id);
+        chc::Formula::Atom(chc::Atom::new(pred.into(), self.args.clone()))
+    }
+}
+
+/// The type arguments a [`FormulaFnDef`] is instantiated with, and the surroundings needed to read
+/// the contracts they name.
+struct Instantiation<'a, 'tcx> {
+    analyzer: &'a analyze::Analyzer<'tcx>,
+    tcx: TyCtxt<'tcx>,
+    def_ids: DefIdCache<'tcx>,
+    type_builder: TypeBuilder<'tcx>,
+    generic_args: mir_ty::GenericArgsRef<'tcx>,
+}
+
+impl<'a, 'tcx> Instantiation<'a, 'tcx> {
+    fn new(
+        analyzer: &'a analyze::Analyzer<'tcx>,
+        def_id: LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> Self {
+        let tcx = analyzer.tcx();
+        let def_ids = analyzer.def_ids();
+        let type_builder = TypeBuilder::new(tcx, def_ids.clone(), def_id.to_def_id());
+        Self {
+            analyzer,
+            tcx,
+            def_ids,
+            type_builder,
+            generic_args,
+        }
+    }
+
+    fn instantiate_ty(&self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args)
+    }
+
+    fn build_sort(&self, ty: mir_ty::Ty<'tcx>) -> chc::Sort {
+        self.type_builder.build(self.instantiate_ty(ty)).to_sort()
+    }
+
+    fn instantiate_generic_args(
+        &self,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> mir_ty::GenericArgsRef<'tcx> {
+        mir_ty::EarlyBinder::bind(generic_args).instantiate(self.tcx, self.generic_args)
+    }
+
+    /// The value each parameter whose sort holds exactly one element takes.
+    ///
+    /// The analyzer does not give such a parameter a variable of its own, so a formula names its
+    /// value directly instead.
+    // FIXME: fix the analyzer side to uniformly accept all params
+    fn singleton_param_values(
+        &self,
+        params: &IndexVec<rty::FunctionParamIdx, mir_ty::Ty<'tcx>>,
+    ) -> IndexVec<rty::FunctionParamIdx, Option<chc::Term<rty::FunctionParamIdx>>> {
+        params
+            .iter()
+            .map(|ty| {
+                let ty = self
+                    .tcx
+                    .normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), *ty);
+                // `at_entry()` yields the `Inner` of a `FnParam<Inner>`; classify by it so
+                // a singleton wrapped argument collapses like any other singleton below.
+                let repr_ty = self.fn_param_wrapper_inner_ty(ty).unwrap_or(ty);
+                let ty = self.type_builder.build(repr_ty);
+                ty.to_sort()
+                    .is_singleton()
+                    .then(|| singleton_term_for_ty(&ty).unwrap())
+            })
+            .collect()
+    }
+
+    /// The `Inner` of a `thrust_models::FnParam<Inner>` wrapper type, if `ty` is one.
+    fn fn_param_wrapper_inner_ty(&self, ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
+        match ty.kind() {
+            mir_ty::TyKind::Adt(def, args)
+                if Some(def.did()) == self.def_ids.fn_param_wrapper() =>
+            {
+                Some(args.type_at(0))
+            }
+            _ => None,
+        }
+    }
+
+    /// The closure type a `pre!`/`post!` receiver of type `ty` reaches, if any.
+    fn closure_ty(&self, ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
+        let inner = match ty.kind() {
+            mir_ty::TyKind::Adt(adt, args) if Some(adt.did()) == self.def_ids.mut_model() => {
+                args.type_at(0)
+            }
+            mir_ty::TyKind::Ref(_, inner_ty, mir_ty::Mutability::Not) => *inner_ty,
+            _ => ty,
+        };
+        match inner.kind() {
+            mir_ty::TyKind::Adt(adt, args) if Some(adt.did()) == self.def_ids.closure_model() => {
+                Some(args.type_at(0))
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolves the [`rty::FunctionType`] of the closure contract referred to by a receiver of
+    /// type `ty`, as collected by the analyzer.
+    fn closure_fn_type(&self, ty: mir_ty::Ty<'tcx>) -> Option<rty::FunctionType> {
+        let closure_ty = self.closure_ty(ty)?;
+        let mir_ty::TyKind::Closure(def_id, args) = closure_ty.kind() else {
+            return None;
+        };
+        self.analyzer
+            .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
+    }
+
+    /// The receiver term as the closure's own body takes it.
+    ///
+    /// That body takes the upvars by `&`, by `&mut`, or by value, following the kind inferred
+    /// for the closure, while `pre!`/`post!` reach the closure through the parameter the
+    /// annotated function declares. A call bridges the two by borrowing the closure into the
+    /// receiver the body takes; the same borrow is taken here on the term.
+    fn closure_receiver_term(
+        &self,
+        receiver_ty: mir_ty::Ty<'tcx>,
+        fn_ty: &rty::FunctionType,
+        term: chc::Term<rty::FunctionParamIdx>,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        let held_as = match receiver_ty.kind() {
+            mir_ty::TyKind::Adt(adt, _) if Some(adt.did()) == self.def_ids.mut_model() => {
+                Some(rty::RefKind::Mut)
+            }
+            mir_ty::TyKind::Ref(_, _, mir_ty::Mutability::Not) => Some(rty::RefKind::Immut),
+            _ => None,
+        };
+        let upvars_ty = &fn_ty.params[rty::FunctionParamIdx::from(0usize)].ty;
+        let received_as = match upvars_ty.as_pointer().map(|ty| ty.kind) {
+            Some(rty::PointerKind::Ref(kind)) => Some(kind),
+            _ => None,
+        };
+
+        match (held_as, received_as) {
+            (None, Some(rty::RefKind::Immut)) => chc::Term::box_(term),
+            (None, Some(rty::RefKind::Mut)) => chc::Term::mut_(term.clone(), term),
+            (Some(rty::RefKind::Mut), Some(rty::RefKind::Immut)) => {
+                chc::Term::box_(term.mut_current())
+            }
+            _ => term,
+        }
+    }
+}
+
+/// The one value a type whose sort holds exactly one takes, or `None` for any other type.
+fn singleton_term_for_ty(ty: &rty::Type<rty::Closed>) -> Option<chc::Term<rty::FunctionParamIdx>> {
+    match ty {
+        rty::Type::String | rty::Type::Never | rty::Type::Function(_) => Some(chc::Term::null()),
+        rty::Type::Tuple(ty) => ty
+            .elems
+            .iter()
+            .map(|elem| singleton_term_for_ty(&elem.ty))
+            .collect::<Option<Vec<_>>>()
+            .map(chc::Term::tuple),
+        rty::Type::Pointer(ty) => {
+            let elem = singleton_term_for_ty(&ty.elem.ty)?;
+            match ty.kind {
+                rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut) => {
+                    Some(chc::Term::box_(elem))
+                }
+                rty::PointerKind::Ref(rty::RefKind::Mut) => {
+                    Some(chc::Term::mut_(elem.clone(), elem))
+                }
+            }
+        }
+        rty::Type::Array(ty) => {
+            if singleton_term_for_ty(&ty.elem.ty).is_some() {
+                panic!("singleton array type is not supported in formula: {:?}", ty);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum AmbiguousBinOp {
     Eq,
@@ -108,19 +540,23 @@ enum AmbiguousBinOp {
 }
 
 #[derive(Debug, Clone)]
-enum FormulaOrTerm<T> {
-    Formula(chc::Formula<T>),
-    Term(chc::Term<T>),
-    BinOp(chc::Term<T>, AmbiguousBinOp, chc::Term<T>),
-    And(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
-    Or(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
-    Implies(Box<FormulaOrTerm<T>>, Box<FormulaOrTerm<T>>),
-    Not(Box<FormulaOrTerm<T>>),
+enum FormulaOrTerm<'tcx> {
+    Formula(PolyFormula<'tcx>),
+    Term(chc::Term<rty::FunctionParamIdx>),
+    BinOp(
+        chc::Term<rty::FunctionParamIdx>,
+        AmbiguousBinOp,
+        chc::Term<rty::FunctionParamIdx>,
+    ),
+    And(Box<FormulaOrTerm<'tcx>>, Box<FormulaOrTerm<'tcx>>),
+    Or(Box<FormulaOrTerm<'tcx>>, Box<FormulaOrTerm<'tcx>>),
+    Implies(Box<FormulaOrTerm<'tcx>>, Box<FormulaOrTerm<'tcx>>),
+    Not(Box<FormulaOrTerm<'tcx>>),
     Literal(bool),
 }
 
-impl<T> FormulaOrTerm<T> {
-    fn into_formula(self) -> Option<chc::Formula<T>> {
+impl<'tcx> FormulaOrTerm<'tcx> {
+    fn into_formula(self) -> Option<PolyFormula<'tcx>> {
         let fo = match self {
             FormulaOrTerm::Formula(fo) => fo,
             FormulaOrTerm::Term { .. } => return None,
@@ -133,7 +569,10 @@ impl<T> FormulaOrTerm<T> {
                     AmbiguousBinOp::Gt => chc::KnownPred::GREATER_THAN,
                     AmbiguousBinOp::Lt => chc::KnownPred::LESS_THAN,
                 };
-                chc::Formula::Atom(chc::Atom::new(pred.into(), vec![lhs, rhs]))
+                PolyFormula::Closed(chc::Formula::Atom(chc::Atom::new(
+                    pred.into(),
+                    vec![lhs, rhs],
+                )))
             }
             FormulaOrTerm::And(lhs, rhs) => lhs.into_formula()?.and(rhs.into_formula()?),
             FormulaOrTerm::Or(lhs, rhs) => lhs.into_formula()?.or(rhs.into_formula()?),
@@ -141,16 +580,16 @@ impl<T> FormulaOrTerm<T> {
             FormulaOrTerm::Not(formula_or_term) => formula_or_term.into_formula()?.not(),
             FormulaOrTerm::Literal(b) => {
                 if b {
-                    chc::Formula::top()
+                    PolyFormula::top()
                 } else {
-                    chc::Formula::bottom()
+                    PolyFormula::bottom()
                 }
             }
         };
         Some(fo)
     }
 
-    fn into_term(self) -> Option<chc::Term<T>> {
+    fn into_term(self) -> Option<chc::Term<rty::FunctionParamIdx>> {
         let t = match self {
             FormulaOrTerm::Formula { .. } => return None,
             FormulaOrTerm::Term(t) => t,
@@ -170,55 +609,48 @@ impl<T> FormulaOrTerm<T> {
     }
 }
 
+/// Translates the body of a `#[thrust::formula_fn]` definition into a [`FormulaFnDef`].
 #[derive(Clone)]
-pub struct AnnotFnTranslator<'a, 'tcx> {
+pub struct AnnotFnTranslator<'tcx> {
     tcx: TyCtxt<'tcx>,
     local_def_id: LocalDefId,
-    analyzer: &'a analyze::Analyzer<'tcx>,
 
     typeck: &'tcx mir_ty::TypeckResults<'tcx>,
     body: &'tcx rustc_hir::Body<'tcx>,
-    generic_args: mir_ty::GenericArgsRef<'tcx>,
+    typing_env: mir_ty::TypingEnv<'tcx>,
 
     def_ids: DefIdCache<'tcx>,
-    type_builder: TypeBuilder<'tcx>,
+    /// The types the sorts handed out by [`AnnotFnTranslator::sort_of`] stand for, shared with
+    /// the translators of nested quantifier bodies.
+    sort_tys: Rc<RefCell<Vec<mir_ty::Ty<'tcx>>>>,
     env: HashMap<HirId, chc::Term<rty::FunctionParamIdx>>,
 }
 
-impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
-    pub fn new(
-        analyzer: &'a analyze::Analyzer<'tcx>,
-        local_def_id: LocalDefId,
-        generic_args: mir_ty::GenericArgsRef<'tcx>,
-    ) -> Self {
-        let tcx = analyzer.tcx();
+impl<'tcx> AnnotFnTranslator<'tcx> {
+    pub fn new(tcx: TyCtxt<'tcx>, def_ids: DefIdCache<'tcx>, local_def_id: LocalDefId) -> Self {
         let body = tcx.hir_body_owned_by(local_def_id);
         let typeck = tcx.typeck(local_def_id);
-        let def_ids = analyzer.def_ids();
-        let type_builder = TypeBuilder::new(tcx, def_ids.clone(), local_def_id.to_def_id());
+        let typing_env = mir_ty::TypingEnv::post_analysis(tcx, local_def_id);
         let mut translator = Self {
             tcx,
             local_def_id,
-            analyzer,
             typeck,
             body,
-            generic_args,
+            typing_env,
             def_ids,
-            type_builder,
+            sort_tys: Default::default(),
             env: HashMap::default(),
         };
         translator.build_env_from_params();
         translator
     }
 
-    pub fn with_def_id_cache(mut self, def_ids: DefIdCache<'tcx>) -> Self {
-        self.def_ids = def_ids;
-        self.type_builder = TypeBuilder::new(
-            self.tcx,
-            self.def_ids.clone(),
-            self.local_def_id.to_def_id(),
-        );
-        self
+    /// The sort of `ty`, which the formula names as a [`chc::Sort::Param`] so that it is built
+    /// once the definition's type arguments are known.
+    fn sort_of(&self, ty: mir_ty::Ty<'tcx>) -> chc::Sort {
+        let mut sort_tys = self.sort_tys.borrow_mut();
+        sort_tys.push(self.normalize(ty));
+        chc::Sort::param(sort_tys.len() - 1)
     }
 
     fn build_env_from_params(&mut self) {
@@ -228,19 +660,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 self.build_env_from_captures(chc::Term::var(param_idx), param.pat);
                 continue;
             }
-            let mir_ty = self.pat_ty(param.pat);
-            // `at_entry()` yields the `Inner` of a `FnParam<Inner>`; classify by it so
-            // a singleton wrapped argument collapses like any other singleton below.
-            let repr_ty = self.fn_param_wrapper_inner_ty(mir_ty).unwrap_or(mir_ty);
-            let ty = self.type_builder.build(repr_ty);
-            let term = if ty.to_sort().is_singleton() {
-                // the analyzer don't expect params with singleton sorts to be used in formula...
-                // FIXME: fix the analyzer side to uniformly accept all params
-                Self::singleton_term_for_ty(&ty).unwrap()
-            } else {
-                chc::Term::var(param_idx)
-            };
-            self.build_env_from_pat(term, param.pat);
+            self.build_env_from_pat(chc::Term::var(param_idx), param.pat);
         }
     }
 
@@ -305,52 +725,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
-    fn singleton_term_for_ty(
-        ty: &rty::Type<rty::Closed>,
-    ) -> Option<chc::Term<rty::FunctionParamIdx>> {
-        match ty {
-            rty::Type::String | rty::Type::Never | rty::Type::Function(_) => {
-                Some(chc::Term::null())
-            }
-            rty::Type::Tuple(ty) => ty
-                .elems
-                .iter()
-                .map(|elem| Self::singleton_term_for_ty(&elem.ty))
-                .collect::<Option<Vec<_>>>()
-                .map(chc::Term::tuple),
-            rty::Type::Pointer(ty) => {
-                let elem = Self::singleton_term_for_ty(&ty.elem.ty)?;
-                match ty.kind {
-                    rty::PointerKind::Own | rty::PointerKind::Ref(rty::RefKind::Immut) => {
-                        Some(chc::Term::box_(elem))
-                    }
-                    rty::PointerKind::Ref(rty::RefKind::Mut) => {
-                        Some(chc::Term::mut_(elem.clone(), elem))
-                    }
-                }
-            }
-            rty::Type::Array(ty) => {
-                if Self::singleton_term_for_ty(&ty.elem.ty).is_some() {
-                    panic!("singleton array type is not supported in formula: {:?}", ty);
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
-    /// The `Inner` of a `thrust_models::FnParam<Inner>` wrapper type, if `ty` is one.
-    fn fn_param_wrapper_inner_ty(&self, ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
-        match ty.kind() {
-            mir_ty::TyKind::Adt(def, args)
-                if Some(def.did()) == self.def_ids.fn_param_wrapper() =>
-            {
-                Some(args.type_at(0))
-            }
-            _ => None,
-        }
-    }
-
     fn build_env_from_pat(
         &mut self,
         param: chc::Term<rty::FunctionParamIdx>,
@@ -372,26 +746,24 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
+    /// Normalizes a type of this definition, which still mentions the definition's type
+    /// parameters, as far as they allow.
+    fn normalize(&self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        self.tcx
+            .try_normalize_erasing_regions(self.typing_env, ty)
+            .unwrap_or(ty)
+    }
+
     fn expr_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> mir_ty::Ty<'tcx> {
-        let ty = self.typeck.expr_ty(expr);
-        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
-        let typing_env = mir_ty::TypingEnv::fully_monomorphized();
-        self.tcx.normalize_erasing_regions(typing_env, instantiated)
+        self.normalize(self.typeck.expr_ty(expr))
     }
 
-    fn pat_ty(&self, pat: &'tcx rustc_hir::Pat<'tcx>) -> mir_ty::Ty<'tcx> {
-        let ty = self.typeck.pat_ty(pat);
-        let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
-        let typing_env = mir_ty::TypingEnv::fully_monomorphized();
-        self.tcx.normalize_erasing_regions(typing_env, instantiated)
-    }
-
-    pub fn to_formula_fn(&self) -> FormulaFn<'tcx> {
+    pub fn to_formula_fn_def(&self) -> FormulaFnDef<'tcx> {
         let formula = self.to_formula(self.body.value);
         let params = self
             .tcx
             .fn_sig(self.local_def_id.to_def_id())
-            .instantiate(self.tcx, self.generic_args)
+            .instantiate_identity()
             .skip_binder()
             .inputs()
             .to_vec();
@@ -401,14 +773,16 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .iter()
             .copied()
             .collect();
-        FormulaFn {
+        FormulaFnDef {
+            def_id: self.local_def_id,
             params: IndexVec::from_raw(params),
             param_idents,
+            sort_tys: self.sort_tys.borrow().clone(),
             formula,
         }
     }
 
-    fn to_formula(&self, hir: &'tcx rustc_hir::Expr<'tcx>) -> chc::Formula<rty::FunctionParamIdx> {
+    fn to_formula(&self, hir: &'tcx rustc_hir::Expr<'tcx>) -> PolyFormula<'tcx> {
         self.to_formula_or_term(hir)
             .into_formula()
             .expect("expected a formula")
@@ -418,70 +792,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self.to_formula_or_term(hir)
             .into_term()
             .expect("expected a term")
-    }
-
-    fn receiver_closure_ty(&self, ty: mir_ty::Ty<'tcx>) -> Option<mir_ty::Ty<'tcx>> {
-        let inner = match ty.kind() {
-            mir_ty::TyKind::Adt(adt, args) if Some(adt.did()) == self.def_ids.mut_model() => {
-                args.type_at(0)
-            }
-            mir_ty::TyKind::Ref(_, inner_ty, mir_ty::Mutability::Not) => *inner_ty,
-            _ => ty,
-        };
-        match inner.kind() {
-            mir_ty::TyKind::Adt(adt, args) if Some(adt.did()) == self.def_ids.closure_model() => {
-                Some(args.type_at(0))
-            }
-            _ => None,
-        }
-    }
-
-    /// The receiver term as the closure's own body takes it.
-    ///
-    /// That body takes the upvars by `&`, by `&mut`, or by value, following the kind inferred
-    /// for the closure, while `pre!`/`post!` reach the closure through the parameter the
-    /// annotated function declares. A call bridges the two by borrowing the closure into the
-    /// receiver the body takes; the same borrow is taken here on the term.
-    fn closure_receiver_term(
-        &self,
-        receiver: &'tcx rustc_hir::Expr<'tcx>,
-        fn_ty: &rty::FunctionType,
-    ) -> chc::Term<rty::FunctionParamIdx> {
-        let held_as = match self.expr_ty(receiver).kind() {
-            mir_ty::TyKind::Adt(adt, _) if Some(adt.did()) == self.def_ids.mut_model() => {
-                Some(rty::RefKind::Mut)
-            }
-            mir_ty::TyKind::Ref(_, _, mir_ty::Mutability::Not) => Some(rty::RefKind::Immut),
-            _ => None,
-        };
-        let upvars_ty = &fn_ty.params[rty::FunctionParamIdx::from(0usize)].ty;
-        let received_as = match upvars_ty.as_pointer().map(|ty| ty.kind) {
-            Some(rty::PointerKind::Ref(kind)) => Some(kind),
-            _ => None,
-        };
-
-        let term = self.to_term(receiver);
-        match (held_as, received_as) {
-            (None, Some(rty::RefKind::Immut)) => chc::Term::box_(term),
-            (None, Some(rty::RefKind::Mut)) => chc::Term::mut_(term.clone(), term),
-            (Some(rty::RefKind::Mut), Some(rty::RefKind::Immut)) => {
-                chc::Term::box_(term.mut_current())
-            }
-            _ => term,
-        }
-    }
-
-    /// Resolves the [`rty::FunctionType`] of the closure contract referred to by the receiver.
-    ///
-    /// The receiver type is instantiated to the actual closure type in the formula function; its
-    /// `DefId` is used to look up the contract collected by the analyzer.
-    fn receiver_closure_fn_type(&self, receiver_ty: mir_ty::Ty<'tcx>) -> Option<rty::FunctionType> {
-        let closure_ty = self.receiver_closure_ty(receiver_ty)?;
-        let mir_ty::TyKind::Closure(def_id, args) = closure_ty.kind() else {
-            return None;
-        };
-        self.analyzer
-            .known_function_ty_with_args(*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
     }
 
     /// Extracts the logical argument terms passed to `closure_precondition`/
@@ -497,85 +807,29 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         }
     }
 
-    /// The values of a closure's parameters: the closure's first (RustCall) parameter is its
-    /// upvars, which are the closure value itself, followed by the logical arguments.
-    fn translate_closure_precondition(
+    fn translate_closure_spec(
         &self,
         receiver: &'tcx rustc_hir::Expr<'tcx>,
         args: &'tcx rustc_hir::Expr<'tcx>,
-    ) -> FormulaOrTerm<rty::FunctionParamIdx> {
-        let receiver_ty = self.expr_ty(receiver);
-        let fn_ty = self
-            .receiver_closure_fn_type(receiver_ty)
-            .unwrap_or_else(|| {
-                panic!(
-                    "precondition used on a non-closure parameter: {:?}",
-                    receiver
-                )
-            });
-        let logical_args = self.closure_spec_args(args);
-        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[upvars, args..]`, where
-        // the upvars are the closure value itself.
-        assert_eq!(
-            logical_args.len(),
-            fn_ty.params.len() - 1,
-            "closure precondition arity mismatch: closure takes {} argument(s)",
-            fn_ty.params.len() - 1
-        );
-        let param_args: Vec<_> = std::iter::once(self.closure_receiver_term(receiver, &fn_ty))
-            .chain(logical_args)
-            .collect();
-        FormulaOrTerm::Formula(fn_ty.precondition_formula(&param_args))
+        result: Option<&'tcx rustc_hir::Expr<'tcx>>,
+    ) -> FormulaOrTerm<'tcx> {
+        FormulaOrTerm::Formula(PolyFormula::ClosureSpec(ClosureSpec {
+            receiver_ty: self.expr_ty(receiver),
+            receiver: self.to_term(receiver),
+            args: self.closure_spec_args(args),
+            result: result.map(|result| self.to_term(result)),
+        }))
     }
 
-    fn translate_closure_postcondition(
-        &self,
-        receiver: &'tcx rustc_hir::Expr<'tcx>,
-        args: &'tcx rustc_hir::Expr<'tcx>,
-        result: &'tcx rustc_hir::Expr<'tcx>,
-    ) -> FormulaOrTerm<rty::FunctionParamIdx> {
-        let receiver_ty = self.expr_ty(receiver);
-        let fn_ty = self
-            .receiver_closure_fn_type(receiver_ty)
-            .unwrap_or_else(|| {
-                panic!(
-                    "postcondition used on a non-closure parameter: {:?}",
-                    receiver
-                )
-            });
-        let logical_args = self.closure_spec_args(args);
-        // `fn_ty` is a closure (RustCall ABI), so its parameters are `[upvars, args..]`, where
-        // the upvars are the closure value itself.
-        assert_eq!(
-            logical_args.len(),
-            fn_ty.params.len() - 1,
-            "closure postcondition arity mismatch: closure takes {} argument(s)",
-            fn_ty.params.len() - 1
-        );
-        let param_args: Vec<_> = std::iter::once(self.closure_receiver_term(receiver, &fn_ty))
-            .chain(logical_args)
-            .collect();
-        let result = self.to_term(result);
-        FormulaOrTerm::Formula(fn_ty.postcondition_formula(&param_args, result))
+    fn node_arg_sort_at(&self, hir_id: HirId, idx: usize) -> chc::Sort {
+        self.sort_of(self.typeck.node_args(hir_id).type_at(idx))
     }
 
-    fn node_arg_type_at(&self, hir_id: HirId, idx: usize) -> rty::Type<rty::Closed> {
-        let generic_args = self.typeck.node_args(hir_id);
-        let generic_args =
-            mir_ty::EarlyBinder::bind(generic_args).instantiate(self.tcx, self.generic_args);
-        let elem_ty = generic_args.type_at(idx);
-        self.type_builder.build(elem_ty)
-    }
-
-    fn adt_arg_type_at(
-        &self,
-        expr: &'tcx rustc_hir::Expr<'tcx>,
-        idx: usize,
-    ) -> rty::Type<rty::Closed> {
+    fn adt_arg_sort_at(&self, expr: &'tcx rustc_hir::Expr<'tcx>, idx: usize) -> chc::Sort {
         let mir_ty::TyKind::Adt(_, args) = self.expr_ty(expr).kind() else {
             panic!("expected ADT");
         };
-        self.type_builder.build(args.type_at(idx))
+        self.sort_of(args.type_at(idx))
     }
 
     fn variant_ctor_term(
@@ -590,10 +844,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let variant_name = self.tcx.item_name(variant_did);
         let v_sym = chc::DatatypeSymbol::new(format!("{}.{}", d_sym, variant_name));
         let sort_args = if let mir_ty::TyKind::Adt(_, generic_args) = result_ty.kind() {
-            generic_args
-                .types()
-                .map(|ty| self.type_builder.build(ty).to_sort())
-                .collect()
+            generic_args.types().map(|ty| self.sort_of(ty)).collect()
         } else {
             panic!("expected an ADT type for variant constructor")
         };
@@ -603,10 +854,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
     fn to_formula_with_quantified_vars(
         &self,
         closure: &rustc_hir::Body<'tcx>,
-    ) -> (
-        Vec<(String, chc::Sort)>,
-        chc::Formula<rty::FunctionParamIdx>,
-    ) {
+    ) -> (Vec<(String, chc::Sort)>, PolyFormula<'tcx>) {
         let mut inner_translator = self.clone();
         let mut vars = Vec::new();
         for param in closure.params {
@@ -616,8 +864,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                     param.pat
                 );
             };
-            let param_ty = self.pat_ty(param.pat);
-            let sort = self.type_builder.build(param_ty).to_sort();
+            let sort = self.sort_of(self.typeck.pat_ty(param.pat));
             let var_term = chc::Term::FormulaQuantifiedVar(sort.clone(), ident.name.to_string());
             inner_translator.env.insert(hir_id, var_term);
             vars.push((ident.name.to_string(), sort));
@@ -626,10 +873,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         (vars, body_formula)
     }
 
-    fn to_formula_or_term(
-        &self,
-        hir: &'tcx rustc_hir::Expr<'tcx>,
-    ) -> FormulaOrTerm<rty::FunctionParamIdx> {
+    fn to_formula_or_term(&self, hir: &'tcx rustc_hir::Expr<'tcx>) -> FormulaOrTerm<'tcx> {
         use rustc_hir::ExprKind;
 
         match hir.kind {
@@ -840,7 +1084,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                     }
                     if Some(def_id) == self.def_ids.seq_concat() {
                         assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
-                        let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();
+                        let elem_sort = self.adt_arg_sort_at(receiver, 0);
                         let t = self.to_term(receiver);
                         let other = self.to_term(&args[0]);
                         let a_len = t.clone().tuple_proj(1);
@@ -862,7 +1106,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                     "closure_precondition takes a closure and a tuple of arguments"
                                 );
                             };
-                            return self.translate_closure_precondition(receiver, args);
+                            return self.translate_closure_spec(receiver, args, None);
                         }
                         if Some(def_id) == self.def_ids.closure_postcondition() {
                             let [receiver, args, result] = args else {
@@ -870,7 +1114,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                     "closure_postcondition takes a closure, a tuple of arguments, and a result"
                                 );
                             };
-                            return self.translate_closure_postcondition(receiver, args, result);
+                            return self.translate_closure_spec(receiver, args, Some(result));
                         }
                         if Some(def_id) == self.def_ids.exists() {
                             assert_eq!(args.len(), 1, "exists takes exactly 1 argument");
@@ -881,10 +1125,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
                             let (vars, body_formula) =
                                 self.to_formula_with_quantified_vars(closure_body);
-                            return FormulaOrTerm::Formula(chc::Formula::exists(
-                                vars,
-                                body_formula,
-                            ));
+                            return FormulaOrTerm::Formula(PolyFormula::exists(vars, body_formula));
                         }
                         if Some(def_id) == self.def_ids.forall() {
                             assert_eq!(args.len(), 1, "forall takes exactly 1 argument");
@@ -895,10 +1136,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
                             let (vars, body_formula) =
                                 self.to_formula_with_quantified_vars(closure_body);
-                            return FormulaOrTerm::Formula(chc::Formula::forall(
-                                vars,
-                                body_formula,
-                            ));
+                            return FormulaOrTerm::Formula(PolyFormula::forall(vars, body_formula));
                         }
                         if Some(def_id) == self.def_ids.fn_param_at_entry() {
                             assert_eq!(args.len(), 1, "FnParam::at_entry takes exactly 1 argument");
@@ -926,7 +1164,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         }
                         if Some(def_id) == self.def_ids.seq_empty() {
                             assert!(args.is_empty(), "Seq::empty does not take any arguments");
-                            let elem_sort = self.node_arg_type_at(func_expr.hir_id, 0).to_sort();
+                            let elem_sort = self.node_arg_sort_at(func_expr.hir_id, 0);
                             return FormulaOrTerm::Term(chc::Term::tuple(vec![
                                 chc::Term::array_empty(chc::Sort::int(), elem_sort),
                                 chc::Term::int(0),
@@ -935,7 +1173,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         if Some(def_id) == self.def_ids.seq_singleton() {
                             assert_eq!(args.len(), 1, "Seq::singleton takes exactly 1 argument");
                             let v = self.to_term(&args[0]);
-                            let elem_sort = self.node_arg_type_at(func_expr.hir_id, 0).to_sort();
+                            let elem_sort = self.node_arg_sort_at(func_expr.hir_id, 0);
                             let new_arr = chc::Term::array_empty(chc::Sort::int(), elem_sort)
                                 .store(chc::Term::int(0), v);
                             return FormulaOrTerm::Term(chc::Term::tuple(vec![
@@ -964,33 +1202,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             .next()
                             .is_some()
                         {
-                            let typing_env = mir_ty::TypingEnv::fully_monomorphized();
-                            let generic_args = self.typeck.node_args(func_expr.hir_id);
-                            tracing::debug!(
-                                lhs = ?def_id,
-                                lhs_generic_args = ?generic_args,
-                                outer = ?self.local_def_id,
-                                outer_generic_args = ?self.generic_args,
-                                "resolving predicate call in formula"
-                            );
-                            let generic_args = mir_ty::EarlyBinder::bind(generic_args)
-                                .instantiate(self.tcx, self.generic_args);
-                            let instance = mir_ty::Instance::try_resolve(
-                                self.tcx,
-                                typing_env,
+                            return FormulaOrTerm::Formula(PolyFormula::Predicate(PredicateCall {
                                 def_id,
-                                generic_args,
-                            )
-                            .unwrap();
-                            let pred_def_id = if let Some(instance) = instance {
-                                instance.def_id()
-                            } else {
-                                def_id
-                            };
-                            let pred = refine::user_defined_pred(self.tcx, pred_def_id);
-                            let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
-                            let atom = chc::Atom::new(pred.into(), arg_terms);
-                            return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
+                                generic_args: self.typeck.node_args(func_expr.hir_id),
+                                args: args.iter().map(|e| self.to_term(e)).collect(),
+                            }));
                         }
                     }
                 }
