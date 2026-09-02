@@ -104,7 +104,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
     };
 
     // Rewrites each assignment `lhs = rhs` (produced by [`desugar_arrows`] from
-    // `lhs ==> rhs`) into `thrust_models::implies(lhs, rhs)`. Visiting
+    // `lhs ==> rhs`) into `crate::thrust_models::implies(lhs, rhs)`. Visiting
     // post-order means nested implications are rewritten innermost-first, so the
     // right-associative chain `a ==> b ==> c` becomes `implies(a, implies(b, c))`.
     struct ImplicationRewriter;
@@ -115,7 +115,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             if let syn::Expr::Assign(assign) = expr {
                 let left = &assign.left;
                 let right = &assign.right;
-                *expr = syn::parse_quote!(thrust_models::implies((#left), (#right)));
+                *expr = syn::parse_quote!(crate::thrust_models::implies((#left), (#right)));
             }
         }
     }
@@ -215,22 +215,22 @@ mod tests {
     fn desugars_implication() {
         assert_eq!(
             expand_expr("a ==> b"),
-            expect("thrust_models::implies((a), (b))")
+            expect("crate::thrust_models::implies((a), (b))")
         );
         // right-associative
         assert_eq!(
             expand_expr("a ==> b ==> c"),
-            expect("thrust_models::implies((a), (thrust_models::implies((b), (c))))")
+            expect("crate::thrust_models::implies((a), (crate::thrust_models::implies((b), (c))))")
         );
         // lower precedence than `||` and `==`
         assert_eq!(
             expand_expr("a || b ==> c == d"),
-            expect("thrust_models::implies((a || b), (c == d))")
+            expect("crate::thrust_models::implies((a || b), (c == d))")
         );
         // nested inside a closure argument
         assert_eq!(
             expand_expr("exists(|x| a ==> b)"),
-            expect("exists(|x| thrust_models::implies((a), (b)))")
+            expect("exists(|x| crate::thrust_models::implies((a), (b)))")
         );
     }
 
