@@ -1,6 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
-
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 // `-1` violates the declared precondition `x > 0`. Were the precondition inferred
 // instead, it would be weak enough to admit the call.
 #[thrust_macros::requires(thrust_macros::pre!(f(x)))]

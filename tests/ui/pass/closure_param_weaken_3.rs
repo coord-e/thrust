@@ -1,6 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 fn apply<F>(f: F) -> i32
 where
     F: FnOnce(i32) -> i32,

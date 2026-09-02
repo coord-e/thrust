@@ -1,6 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 // A loop invariant refers to a closure parameter via `FnParam<F>`, whose
 // `f.at_entry()` yields `Closure<F>`. Here the invariant relates `acc` to the
 // entry closure's postcondition, from which the postcondition below is proven.

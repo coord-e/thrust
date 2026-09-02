@@ -9,7 +9,7 @@ use rustc_middle::mir::{
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 use rustc_span::def_id::{DefId, LocalDefId};
 
-use crate::analyze::{self, annot_fn::FormulaFn};
+use crate::analyze::{self, annot_fn::FormulaFn, TypeParam};
 use crate::chc;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
@@ -129,6 +129,11 @@ impl PrecondCapture {
         }
         rty::Refinement::new(self.existentials, body)
     }
+}
+
+enum ResolvedCallable<'tcx> {
+    Concrete(DefId, mir_ty::GenericArgsRef<'tcx>),
+    Generic(TypeParam),
 }
 
 pub struct Analyzer<'tcx, 'ctx> {
@@ -646,7 +651,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 _ty,
             ) => {
                 let func_ty = match operand.const_fn_def() {
-                    Some((def_id, args)) => self.fn_def_ty(def_id, args),
+                    Some((def_id, args)) => self.callable_ty(def_id, args),
                     _ => unimplemented!(),
                 };
                 PlaceType::with_ty_and_term(func_ty.vacuous(), chc::Term::null())
@@ -895,68 +900,114 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         });
     }
 
-    fn resolve_fn_def(
+    fn resolve_callable(
         &self,
         def_id: DefId,
         args: mir_ty::GenericArgsRef<'tcx>,
-    ) -> (DefId, mir_ty::GenericArgsRef<'tcx>) {
+    ) -> ResolvedCallable<'tcx> {
         if self.ctx.is_fn_trait_method(def_id) {
             // When calling a closure via `Fn`/`FnMut`/`FnOnce` trait,
             // we simply replace the def_id with the closure's function def_id.
             // This skips shims, and makes self arguments mismatch. visitor::RustCallVisitor
             // adjusts the arguments accordingly.
-            let mir_ty::TyKind::Closure(closure_def_id, closure_args) = args.type_at(0).kind()
-            else {
-                panic!("expected closure arg for fn trait");
-            };
-            tracing::debug!(?closure_def_id, "closure instance");
-            // closure_args contains [parent_generics..., upvars, return_ty, fn_sig_binder, ...].
-            // Only the parent generics are meaningful to def_ty_with_args; the rest are internal
-            // closure encoding that type_builder.build() cannot handle.
-            let parent_count = self.tcx.generics_of(*closure_def_id).parent_count;
-            let parent_args = self.tcx.mk_args(&closure_args[..parent_count]);
-            (*closure_def_id, parent_args)
+            match args.type_at(0).kind() {
+                mir_ty::TyKind::Closure(closure_def_id, closure_args) => {
+                    tracing::debug!(?closure_def_id, "closure instance");
+                    // closure_args contains [parent_generics..., upvars, return_ty, fn_sig_binder, ...].
+                    // Only the parent generics are meaningful to def_ty_with_args; the rest are internal
+                    // closure encoding that type_builder.build() cannot handle.
+                    let parent_count = self.tcx.generics_of(*closure_def_id).parent_count;
+                    let parent_args = self.tcx.mk_args(&closure_args[..parent_count]);
+                    ResolvedCallable::Concrete(*closure_def_id, parent_args)
+                }
+                mir_ty::TyKind::Param(ty) => ResolvedCallable::Generic(TypeParam::GenericType {
+                    param_def_id: self.type_builder.param_def_id(ty),
+                    local_idx: self.type_builder.param_local_idx(ty),
+                }),
+                kind => {
+                    panic!("expected closure arg for fn trait, got: {kind:?}");
+                }
+            }
         } else {
             let typing_env = self.body.typing_env(self.tcx);
             let instance =
                 mir_ty::Instance::try_resolve(self.tcx, typing_env, def_id, args).unwrap();
             if let Some(instance) = instance {
-                (instance.def_id(), instance.args)
+                ResolvedCallable::Concrete(instance.def_id(), instance.args)
             } else {
-                (def_id, args)
+                ResolvedCallable::Concrete(def_id, args)
             }
         }
     }
 
-    fn fn_def_ty(
+    fn callable_ty(
         &mut self,
         def_id: DefId,
         args: mir_ty::GenericArgsRef<'tcx>,
     ) -> rty::Type<rty::Closed> {
-        if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args) {
-            let (impl_def_id, impl_args) = self.resolve_fn_def(def_id, args);
-            // otherwise nothing asks for a deferred impl method's type and its body goes unchecked
-            if impl_def_id != def_id {
-                let _ = self.ctx.def_ty_with_args(impl_def_id, impl_args);
+        let caller_def_id = self.type_builder.owner_fn_id();
+        match self.resolve_callable(def_id, args) {
+            ResolvedCallable::Generic(type_param) => {
+                tracing::debug!(?type_param, ?self.ctx.closure_type_params);
+                self.ctx
+                    .get_closure_type(type_param)
+                    .expect("unknown closure type")
+                    .into()
             }
-            return def_ty.ty;
+            ResolvedCallable::Concrete(resolved_def_id, resolved_args) => {
+                if let Some(def_ty) = self.ctx.def_ty_with_args(def_id, args, caller_def_id) {
+                    // otherwise nothing asks for a deferred impl method's type and its body goes unchecked
+                    if resolved_def_id != def_id {
+                        let _ = self.ctx.def_ty_with_args(
+                            resolved_def_id,
+                            resolved_args,
+                            caller_def_id,
+                        );
+                    }
+                    return def_ty.ty;
+                }
+                if resolved_def_id == def_id {
+                    if self.ctx.is_trait_method(def_id) {
+                        tracing::debug!(?def_id, ?args, "using abstract trait method type");
+                        return self.abstract_callable_ty(def_id, args);
+                    }
+                    panic!(
+                        "unknown def (and not resolved): {:?}, args: {:?}",
+                        def_id, args
+                    );
+                }
+                tracing::info!(?def_id, ?resolved_def_id, ?resolved_args, "resolved");
+                let Some(def_ty) =
+                    self.ctx
+                        .def_ty_with_args(resolved_def_id, resolved_args, caller_def_id)
+                else {
+                    panic!(
+                        "unknown def (resolved): {:?}, args: {:?}",
+                        resolved_def_id, resolved_args
+                    );
+                };
+                def_ty.ty
+            }
         }
+    }
 
-        let (resolved_def_id, resolved_args) = self.resolve_fn_def(def_id, args);
-        if resolved_def_id == def_id {
-            panic!(
-                "unknown def (and not resolved): {:?}, args: {:?}",
-                def_id, args
-            );
-        }
-        tracing::info!(?def_id, ?resolved_def_id, ?resolved_args, "resolved");
-        let Some(def_ty) = self.ctx.def_ty_with_args(resolved_def_id, resolved_args) else {
-            panic!(
-                "unknown def (resolved): {:?}, args: {:?}",
-                resolved_def_id, resolved_args
-            );
-        };
-        def_ty.ty
+    fn abstract_callable_ty(
+        &self,
+        def_id: DefId,
+        args: mir_ty::GenericArgsRef<'tcx>,
+    ) -> rty::Type<rty::Closed> {
+        let sig = self
+            .tcx
+            .fn_sig(def_id)
+            .instantiate(self.tcx, args)
+            .skip_binder();
+        let params = sig
+            .inputs()
+            .iter()
+            .map(|ty| rty::RefinedType::unrefined(self.type_builder.build(*ty)).vacuous())
+            .collect();
+        let ret = rty::RefinedType::unrefined(self.type_builder.build(sig.output())).vacuous();
+        rty::FunctionType::new(params, ret).into()
     }
 
     fn type_call<I>(&mut self, func: Operand<'tcx>, args: I, expected_ret: &rty::RefinedType<Var>)
@@ -965,7 +1016,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     {
         // TODO: handle const_fn_def on Env side
         let func_ty = if let Some((def_id, args)) = func.const_fn_def() {
-            self.fn_def_ty(def_id, args).vacuous()
+            self.callable_ty(def_id, args).vacuous()
         } else {
             self.operand_type(func.clone()).ty
         };
@@ -1343,7 +1394,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if let Some((formula_def_id, generic_args)) = self.ghost_marker_formula_fn(func, args) {
                 let formula_fn = self
                     .ctx
-                    .formula_fn_with_args(formula_def_id, generic_args)
+                    .formula_fn_with_args(
+                        formula_def_id,
+                        generic_args,
+                        self.local_def_id.to_def_id(),
+                    )
                     .expect("ghost formula function is not registered");
                 self.type_ghost_value(formula_fn, &rty);
             } else {
@@ -1581,6 +1636,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ctx: &'ctx mut analyze::Analyzer<'tcx>,
         local_def_id: LocalDefId,
         basic_block: BasicBlock,
+        owner_fn_id: DefId,
     ) -> Self {
         let tcx = ctx.tcx;
         let drop_points = DropPoints::default();
@@ -1588,7 +1644,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let env = ctx.new_env();
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
-        let type_builder = TypeBuilder::new(tcx, ctx.def_ids(), local_def_id.to_def_id());
+        let type_builder = ctx.type_builder(ctx.def_ids(), owner_fn_id);
         Self {
             ctx,
             tcx,

@@ -1,6 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 // A closure that mutates a capture receives its upvars behind a `Mut`, while the
 // higher-order function names the closure by value in `pre!`/`post!`.
 #[thrust_macros::requires(thrust_macros::pre!(f()))]
