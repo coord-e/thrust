@@ -25,6 +25,7 @@ mod chc;
 mod rty;
 
 // utility
+mod output;
 mod pretty;
 
 pub use analyze::mir_borrowck_skip_formula_fn;

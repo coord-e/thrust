@@ -1154,6 +1154,23 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self
     }
 
+    /// Writes the MIR body as it is analyzed into the output directory, if one is configured.
+    fn write_mir_output(&self) {
+        let Some(dir) = crate::output::dir() else {
+            return;
+        };
+        let file_name: String = self
+            .tcx
+            .def_path_str(self.local_def_id)
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '_' })
+            .collect();
+        let mut file = std::fs::File::create(dir.join(format!("{file_name}.mir"))).unwrap();
+        mir::pretty::MirWriter::new(self.tcx)
+            .write_mir_fn(&self.body, &mut file)
+            .unwrap();
+    }
+
     pub fn run(&mut self, expected: &rty::RefinedType) {
         let span = tracing::info_span!("def", def = %self.tcx.def_path_str(self.local_def_id));
         let _guard = span.enter();
@@ -1161,6 +1178,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.unelaborate_derefs();
         analyze::reconstruct_slice_indexing::reconstruct(self.tcx, &mut self.body);
         self.reassign_local_mutabilities();
+        self.write_mir_output();
         self.refine_basic_blocks();
         self.analyze_basic_blocks(expected);
         self.assert_entry(expected);

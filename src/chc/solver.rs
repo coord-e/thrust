@@ -152,9 +152,7 @@ impl Config {
             preproc_config.load_timeout("THRUST_PREPROCESSOR_TIMEOUT_SECS");
             config.preprocessor = Some(preproc_config);
         }
-        if let Ok(dir) = std::env::var("THRUST_OUTPUT_DIR") {
-            config.output_dir = Some(dir.into());
-        }
+        config.output_dir = crate::output::dir();
         config
     }
 
