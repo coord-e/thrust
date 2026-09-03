@@ -2,13 +2,13 @@
 //!
 //! Makes the enclosing context available to the specifications written inside an item.
 //!
-//! On a function, every `thrust_macros::invariant!(...)` in the body is rewritten into
-//! its context-carrying counterpart, carrying the host signature and, for a method, the
-//! enclosing `impl`/`trait` header, so an invariant may refer to generic- and
-//! `Self`-typed variables that the standalone macro cannot see. That also extends the
-//! function's where clause with the `Model` predicates for every in-scope type parameter
-//! (and for `Self` when used), since each injected marker call instantiates a
-//! `Model`-bounded formula function with the host's own generics.
+//! On a function, every `thrust_macros::invariant!(...)` and `thrust_macros::ghost!(...)`
+//! in the body is rewritten into its context-carrying counterpart, carrying the host
+//! signature and, for a method, the enclosing `impl`/`trait` header, so a formula may
+//! refer to generic- and `Self`-typed variables that the standalone macros cannot see.
+//! That also extends the function's where clause with the `Model` predicates for every
+//! in-scope type parameter (and for `Self` when used), since each injected marker call
+//! instantiates a `Model`-bounded formula function with the host's own generics.
 //!
 //! On an `impl`/`trait`, each method is stamped with the enclosing header — which is what
 //! method-level `requires`/`ensures` read to recover the outer generics — and with this
@@ -80,9 +80,9 @@ fn expand_outer(mut outer_item: FnOuterItem) -> TokenStream {
     outer_item.into_token_stream().into()
 }
 
-/// Rewrites each `invariant!` in the body into its context-carrying counterpart and
-/// extends the where clause with the `Model` predicates those calls need. A body naming
-/// no invariant — or a trait method that has no body at all — is left as it is.
+/// Rewrites each spec macro in the body into its context-carrying counterpart and extends
+/// the where clause with the `Model` predicates those calls need. A body naming no spec
+/// macro — or a trait method that has no body at all — is left as it is.
 fn expand_fn(mut func: FnItemWithSignature) -> TokenStream {
     let outer = match crate::extract_outer_context(func.attrs()) {
         Ok(outer) => outer,
@@ -146,19 +146,25 @@ impl ContextInjector<'_> {
 
 impl VisitMut for ContextInjector<'_> {
     fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
-        if !is_invariant_macro(&mac.path) {
+        let Some(with_context) = context_carrying_form(&mac.path) else {
             return;
-        }
+        };
         self.injected = true;
         if crate::tokens_contain_ident(&mac.tokens, "Self") {
             self.self_used = true;
         }
         mac.tokens = self.inject_context(&mac.tokens);
-        mac.path = syn::parse_quote!(::thrust_macros::_invariant_with_context);
+        mac.path = with_context;
     }
 }
 
-fn is_invariant_macro(path: &syn::Path) -> bool {
+/// The context-carrying counterpart of a spec macro that takes a formula over live
+/// variables, or `None` for any other macro.
+fn context_carrying_form(path: &syn::Path) -> Option<syn::Path> {
     // TODO: identify the macro precisely
-    path.segments.last().is_some_and(|s| s.ident == "invariant")
+    match path.segments.last()?.ident.to_string().as_str() {
+        "invariant" => Some(syn::parse_quote!(::thrust_macros::_invariant_with_context)),
+        "ghost" => Some(syn::parse_quote!(::thrust_macros::_ghost_with_context)),
+        _ => None,
+    }
 }
