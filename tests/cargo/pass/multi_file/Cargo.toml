@@ -1,0 +1,10 @@
+# Detached from Thrust's own workspace.
+[workspace]
+
+[package]
+name = "multi_file"
+version = "0.0.0"
+edition = "2021"
+
+[profile.dev]
+debug-assertions = false

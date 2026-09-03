@@ -13,6 +13,12 @@ Add a test as a pair of files sharing one name: `tests/ui/pass/<name>.rs` headed
 The `fail` file is the `pass` file with the verified property broken as narrowly as
 possible, so that the pair pins down both directions of the check.
 
+A test that needs a whole cargo project rather than a single file goes under
+`tests/cargo/pass/<name>/` and `tests/cargo/fail/<name>/` as the same kind of pair, one
+cargo project per directory. `tests/cargo.rs` builds each with `thrust-rustc` in place of
+`rustc`. Such a project detaches itself from Thrust's own workspace with a bare
+`[workspace]` table, and turns off `debug-assertions`, which Thrust does not support.
+
 ## Panics on unsupported input
 
 Thrust is under active development, and it is fine for an unsupported or unexpected
