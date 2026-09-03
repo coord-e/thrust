@@ -98,7 +98,7 @@ impl<'tcx> FormulaFn<'tcx> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum AmbiguousBinOp {
     Eq,
     Ne,
@@ -108,7 +108,7 @@ enum AmbiguousBinOp {
     Lt,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum FormulaOrTerm<T> {
     Formula(chc::Formula<T>),
     Term(chc::Term<T>),
@@ -125,10 +125,26 @@ enum FormulaOrTerm<T> {
     Literal(bool),
 }
 
-impl<T: Clone> FormulaOrTerm<T> {
+impl<T: Clone + PartialEq> FormulaOrTerm<T> {
     /// A conditional on `cond`, recovering the connective a short-circuiting `&&` or `||`
     /// was compiled into rather than duplicating `cond` over both branches.
+    ///
+    /// `a && b || c` reaches `c` from both edges out of `a`, so the branches share it;
+    /// `ite(a, b || c, c)` is `(a && b) || c`.
     fn ite(cond: Self, then_: Self, else_: Self) -> Self {
+        if let FormulaOrTerm::Or(lhs, rhs) = &then_ {
+            if **rhs == else_ {
+                let lhs = FormulaOrTerm::And(cond.into(), lhs.clone());
+                return FormulaOrTerm::Or(lhs.into(), else_.into());
+            }
+        }
+        if let FormulaOrTerm::Or(lhs, rhs) = &else_ {
+            if **rhs == then_ {
+                let cond = FormulaOrTerm::Not(cond.into());
+                let lhs = FormulaOrTerm::And(cond.into(), lhs.clone());
+                return FormulaOrTerm::Or(lhs.into(), then_.into());
+            }
+        }
         match (&then_, &else_) {
             (FormulaOrTerm::Literal(true), _) => FormulaOrTerm::Or(cond.into(), else_.into()),
             (FormulaOrTerm::Literal(false), _) => {

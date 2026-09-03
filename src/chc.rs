@@ -436,7 +436,7 @@ impl Function {
     pub const ITE: Function = Function::new("ite");
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SeqConcatTerm<V = TermVarIdx> {
     pub seq1: Term<V>,
     pub seq2: Term<V>,
@@ -481,7 +481,7 @@ impl<V> SeqConcatTerm<V> {
 }
 
 /// A logical term.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Term<V = TermVarIdx> {
     Null,
     Var(V),
@@ -1250,7 +1250,7 @@ impl Pred {
 }
 
 /// An atom is a predicate applied to a list of terms.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Atom<V = TermVarIdx> {
     /// With `guard`, this represents `guard => pred(args)`.
     ///
@@ -1394,7 +1394,7 @@ impl<V> Atom<V> {
 /// While it allows arbitrary [`Atom`] in its `Atom` variant, we only expect atoms with known
 /// predicates (i.e., predicates other than `Pred::Var`) to appear in formulas. It is our TODO to
 /// enforce this restriction statically. Also see the definition of [`Body`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Formula<V = TermVarIdx> {
     Atom(Atom<V>),
     Not(Box<Formula<V>>),
