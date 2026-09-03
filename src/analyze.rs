@@ -459,8 +459,7 @@ impl<'tcx> Analyzer<'tcx> {
             return Some(formula_fn.clone());
         }
 
-        let translator = annot_fn::AnnotFnTranslator::new(self, local_def_id, generic_args)
-            .with_def_id_cache(self.def_ids());
+        let translator = annot_fn::AnnotFnTranslator::new(self, local_def_id, generic_args);
         let formula_fn = translator.to_formula_fn();
         deferred_formula_fn_cache
             .borrow_mut()

@@ -19,14 +19,24 @@ impl Callbacks for CompilerCalls {
         attrs.push("feature(register_tool)".to_owned());
         attrs.push("register_tool(thrust)".to_owned());
 
-        // Refinements live on MIR locals, and `RemoveZsts` rewrites reads of zero-sized
-        // locals into constants, losing the refinement of every value whose type carries
-        // no runtime data -- the model types and `Ghost<T>`.
+        // Refinements live on MIR locals, and `RemoveZsts` and `GVN` rewrite reads of
+        // zero-sized locals into constants, losing the refinement of every value whose type
+        // carries no runtime data -- the model types and `Ghost<T>`.
         config
             .opts
             .unstable_opts
             .mir_enable_passes
             .push(("RemoveZsts".to_owned(), false));
+        config
+            .opts
+            .unstable_opts
+            .mir_enable_passes
+            .push(("GVN".to_owned(), false));
+
+        // Annotations are read off the MIR of the `#[thrust::formula_fn]` they lower to, where
+        // inlining would replace a call to a model operation -- whose body is `unimplemented!()`
+        // -- with the panic it runs into.
+        config.opts.unstable_opts.inline_mir = Some(false);
 
         config.override_queries = Some(|_sess, providers| {
             providers.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;

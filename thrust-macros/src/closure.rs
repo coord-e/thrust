@@ -139,15 +139,15 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
     let upvars_model = type_lowering.lower_params([&upvars]);
     let arg_models = type_lowering.lower_params(&arg_params);
 
+    let capture_names = capture_names(&captures)?;
+
     let mut prelude: Vec<TokenStream2> = Vec::new();
     if let Some(body) = conjoin(requires) {
         prelude.push(quote! {
             #[allow(unused_variables, non_snake_case)]
             #[thrust::formula_fn]
-            fn _thrust_closure_requires(
-                #[thrust::closure_upvars] #upvars_model,
-                #arg_models
-            ) -> bool {
+            #[thrust::closure_upvars(0, #(#capture_names),*)]
+            fn _thrust_closure_requires(#upvars_model, #arg_models) -> bool {
                 #body
             }
 
@@ -160,9 +160,10 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
         prelude.push(quote! {
             #[allow(unused_variables, non_snake_case)]
             #[thrust::formula_fn]
+            #[thrust::closure_upvars(1, #(#capture_names),*)]
             fn _thrust_closure_ensures(
                 result: #ret_model,
-                #[thrust::closure_upvars] #upvars_model,
+                #upvars_model,
                 #arg_models
             ) -> bool {
                 #body
@@ -188,6 +189,29 @@ fn expand_closure(spec: ClosureSpec) -> syn::Result<syn::ExprClosure> {
     }));
 
     Ok(closure)
+}
+
+/// The names of the captures a clause restated, in the order its upvars tuple holds
+/// them. The plugin matches them up with the closure's real upvars.
+fn capture_names(captures: &[FnArg]) -> syn::Result<Vec<String>> {
+    captures
+        .iter()
+        .map(|capture| {
+            let FnArg::Typed(capture) = capture else {
+                return Err(syn::Error::new_spanned(
+                    capture,
+                    "closure! captures are written as `name: Type`",
+                ));
+            };
+            let syn::Pat::Ident(pat) = &*capture.pat else {
+                return Err(syn::Error::new_spanned(
+                    &capture.pat,
+                    "closure! captures are written as `name: Type`",
+                ));
+            };
+            Ok(pat.ident.to_string())
+        })
+        .collect()
 }
 
 /// The companion parameter holding the closure's upvars: a tuple of the captures a

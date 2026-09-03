@@ -765,6 +765,11 @@ impl<V> Term<V> {
     }
 
     pub fn box_current(self) -> Self {
+        // Boxing is erased before solving anyway, but leaving the pair in place hides the
+        // constructor underneath from the `tuple_proj` and `select` simplifiers below.
+        if let Term::Box(t) = self {
+            return *t;
+        }
         Term::BoxCurrent(Box::new(self))
     }
 

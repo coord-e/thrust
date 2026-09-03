@@ -252,6 +252,42 @@ pub fn extract_annot_tokens(attr: Attribute) -> TokenStream {
     d.tokens
 }
 
+/// Parses the tokens of a `#[thrust::closure_upvars(..)]` attribute into the index of
+/// the parameter holding a closure specification's captures and the names it gave them,
+/// in the order its tuple holds them.
+pub fn parse_closure_upvars(ts: &TokenStream) -> (usize, Vec<Symbol>) {
+    use rustc_ast::token::{LitKind, TokenKind};
+    use rustc_ast::tokenstream::TokenTree;
+
+    let mut lits = ts.iter().filter_map(|tt| match tt {
+        TokenTree::Token(t, _) => match &t.kind {
+            TokenKind::Literal(lit) => Some(*lit),
+            _ => None,
+        },
+        _ => panic!("unexpected token tree in closure_upvars"),
+    });
+
+    let index = lits.next().expect("closure_upvars takes a parameter index");
+    assert_eq!(
+        index.kind,
+        LitKind::Integer,
+        "closure_upvars takes a parameter index"
+    );
+    let index = index
+        .symbol
+        .as_str()
+        .parse()
+        .expect("invalid parameter index in closure_upvars");
+
+    let names = lits
+        .map(|lit| {
+            assert_eq!(lit.kind, LitKind::Str, "closure_upvars takes capture names");
+            lit.symbol
+        })
+        .collect();
+    (index, names)
+}
+
 /// Parses a [`rty::TypePosition`] from the tokens of a
 /// `#[thrust::refinement_path(..)]` attribute.
 ///
