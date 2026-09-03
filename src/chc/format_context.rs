@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::chc::{self, hoice::HoiceDatatypeRenamer};
+use crate::chc::{self, hoice::HoiceDatatypeRenamer, TermSortEnv as _};
 
 /// A context for formatting a CHC system.
 ///
