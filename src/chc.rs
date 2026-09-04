@@ -1365,6 +1365,11 @@ impl<V> Atom<V> {
         self.args.iter().flat_map(|t| t.fv()).chain(guard_fvs)
     }
 
+    /// Iterates over the variables bound by the quantifiers of the guard.
+    pub fn iter_quantified_vars(&self) -> impl Iterator<Item = &(String, Sort)> {
+        self.guard.iter().flat_map(|g| g.iter_quantified_vars())
+    }
+
     pub fn guarded(self, new_guard: Formula<V>) -> Atom<V> {
         let Atom {
             guard: self_guard,
@@ -1651,6 +1656,26 @@ impl<V> Formula<V> {
         }
     }
 
+    /// Iterates over the variables bound by the quantifiers occurring in this formula.
+    pub fn iter_quantified_vars(&self) -> impl Iterator<Item = &(String, Sort)> {
+        self.iter_quantified_vars_impl()
+    }
+
+    fn iter_quantified_vars_impl(&self) -> Box<dyn Iterator<Item = &(String, Sort)> + '_> {
+        match self {
+            Formula::Atom(atom) => Box::new(atom.iter_quantified_vars()),
+            Formula::Not(fo) => Box::new(fo.iter_quantified_vars()),
+            Formula::And(fs) => Box::new(fs.iter().flat_map(Formula::iter_quantified_vars)),
+            Formula::Or(fs) => Box::new(fs.iter().flat_map(Formula::iter_quantified_vars)),
+            Formula::Implies(lhs, rhs) => {
+                Box::new(lhs.iter_quantified_vars().chain(rhs.iter_quantified_vars()))
+            }
+            Formula::Exists(vars, fo) | Formula::Forall(vars, fo) => {
+                Box::new(vars.iter().chain(fo.iter_quantified_vars()))
+            }
+        }
+    }
+
     pub fn push_conj(&mut self, other: Self) {
         match self {
             Formula::And(fs) => {
@@ -1822,6 +1847,13 @@ impl<V> Body<V> {
 
     pub fn iter_atoms(&self) -> impl Iterator<Item = &Atom<V>> {
         self.formula.iter_atoms().chain(&self.atoms)
+    }
+
+    /// Iterates over the variables bound by the quantifiers occurring in this body.
+    pub fn iter_quantified_vars(&self) -> impl Iterator<Item = &(String, Sort)> {
+        self.formula
+            .iter_quantified_vars()
+            .chain(self.atoms.iter().flat_map(Atom::iter_quantified_vars))
     }
 }
 

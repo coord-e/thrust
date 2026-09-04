@@ -7,7 +7,7 @@
 //! CHC solver with the [`Analyzer::solve`] and subsequently reports the result.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use rustc_hir::lang_items::LangItem;
@@ -376,6 +376,45 @@ impl<'tcx> Analyzer<'tcx> {
         self.system.borrow_mut().datatypes.push(datatype);
 
         enum_def
+    }
+
+    /// Registers the definitions of the enums `ty` is built from, including the ones reachable
+    /// through the fields of the datatypes it mentions.
+    pub fn register_enum_defs_in_ty(&self, type_builder: &TypeBuilder<'tcx>, ty: mir_ty::Ty<'tcx>) {
+        use mir_ty::{TypeSuperVisitable as _, TypeVisitable as _};
+        struct EnumCollector<'a, 'tcx> {
+            tcx: TyCtxt<'tcx>,
+            builder: &'a TypeBuilder<'tcx>,
+            enums: HashSet<DefId>,
+            visited: HashSet<mir_ty::Ty<'tcx>>,
+        }
+        impl<'tcx> mir_ty::TypeVisitor<TyCtxt<'tcx>> for EnumCollector<'_, 'tcx> {
+            fn visit_ty(&mut self, ty: mir_ty::Ty<'tcx>) {
+                let ty = self.builder.resolve_model_ty(ty);
+                if let mir_ty::TyKind::Adt(def, args) = ty.kind() {
+                    if self.visited.insert(ty) {
+                        if def.is_enum() {
+                            self.enums.insert(def.did());
+                        }
+                        for field in def.all_fields() {
+                            field.ty(self.tcx, args).visit_with(self);
+                        }
+                    }
+                }
+                ty.super_visit_with(self);
+            }
+        }
+
+        let mut visitor = EnumCollector {
+            tcx: self.tcx,
+            builder: type_builder,
+            enums: HashSet::new(),
+            visited: HashSet::new(),
+        };
+        ty.visit_with(&mut visitor);
+        for def_id in visitor.enums {
+            self.get_or_register_enum_def(def_id);
+        }
     }
 
     pub fn register_def(&mut self, def_id: DefId, rty: rty::RefinedType) {

@@ -631,6 +631,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 );
             };
             let param_ty = self.pat_ty(param.pat);
+            self.analyzer
+                .register_enum_defs_in_ty(&self.type_builder, param_ty);
             let sort = self.type_builder.build(param_ty).to_sort();
             let var_term = chc::Term::FormulaQuantifiedVar(sort.clone(), ident.name.to_string());
             inner_translator.env.insert(hir_id, var_term);
