@@ -63,6 +63,6 @@ fn expand_ghost(closure: &syn::ExprClosure) -> syn::Result<syn::Expr> {
             #value == (#body)
         }
 
-        thrust_models::__ghost_marker::<_, #value_ty>(#name)
+        crate::thrust_models::__ghost_marker::<_, #value_ty>(#name)
     }))
 }

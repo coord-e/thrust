@@ -280,7 +280,7 @@ fn expand_invariant(
             #body
         }
 
-        thrust_models::__invariant_marker(#name #turbofish)
+        crate::thrust_models::__invariant_marker(#name #turbofish)
     }))
 }
 

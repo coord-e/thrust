@@ -448,7 +448,7 @@ fn build_formula_fn(
         #[allow(non_snake_case)]
         #[thrust::formula_fn]
         fn #name #def_generics(
-            #binder: <#binder_ty as thrust_models::Model>::Ty,
+            #binder: <#binder_ty as crate::thrust_models::Model>::Ty,
             #model_params
         ) -> bool #extended_where {
             #formula
