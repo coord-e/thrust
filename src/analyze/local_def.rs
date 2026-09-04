@@ -13,6 +13,21 @@ use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{self, BasicBlockType, TypeBuilder};
 use crate::rty;
 
+/// The local a statement assigns to, together with the assigned rvalue, if the statement is an
+/// assignment to a whole local.
+fn assignment_to_local<'a, 'tcx>(
+    stmt: &'a mir::Statement<'tcx>,
+) -> Option<(Local, &'a mir::Rvalue<'tcx>)> {
+    let mir::StatementKind::Assign(assign) = &stmt.kind else {
+        return None;
+    };
+    let (lhs, rvalue) = &**assign;
+    if !lhs.projection.is_empty() {
+        return None;
+    }
+    Some((lhs.local, rvalue))
+}
+
 fn stmt_str_literal(stmt: &rustc_hir::Stmt) -> Option<String> {
     use rustc_ast::LitKind;
     use rustc_hir::{Expr, ExprKind, Stmt, StmtKind};
@@ -401,19 +416,30 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn extract_elaborated_deref(
         &self,
         stmt: &mir::Statement<'tcx>,
+        box_deref_temps: &DenseBitSet<Local>,
     ) -> Option<(Local, mir::Place<'tcx>)> {
-        let mir::StatementKind::Assign(assign) = &stmt.kind else {
-            return None;
-        };
-        let (lhs, rvalue) = &**assign;
-        if !lhs.projection.as_ref().is_empty() {
-            return None;
-        }
-        let lhs_local = lhs.local;
+        let (lhs_local, rvalue) = assignment_to_local(stmt)?;
 
-        if let mir::Rvalue::CopyForDeref(place) = &rvalue {
+        if let mir::Rvalue::CopyForDeref(place) = rvalue {
             return Some((lhs_local, *place));
         }
+
+        // GVN rewrites the deref temp of a `Box` deref into a plain copy of the box. `Box` is
+        // modeled by value, so taking that copy at face value would bind the temp to an
+        // independent box and make the deref below it miss the original place.
+        if let mir::Rvalue::Use(mir::Operand::Copy(place)) = rvalue {
+            if box_deref_temps.contains(lhs_local) {
+                return Some((lhs_local, *place));
+            }
+        }
+
+        self.extract_box_deref(stmt)
+    }
+
+    /// The `ElaborateBoxDerefs` shape `_p = (_b.0.0 as *const T) Transmute`, as the local it
+    /// assigns and the `Box` place `_b` it dereferences.
+    fn extract_box_deref(&self, stmt: &mir::Statement<'tcx>) -> Option<(Local, mir::Place<'tcx>)> {
+        let (lhs_local, rvalue) = assignment_to_local(stmt)?;
 
         let unique_did = self.ctx.def_ids.unique()?;
         let nonnull_did = self.ctx.def_ids.nonnull()?;
@@ -425,7 +451,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // Box deref pattern: `(_box.0.0 as *const T) Transmute`
         //   projection = [..., Field(0, Unique<T>), Field(0, NonNull<T>)], transmuted to *const T
         let mir::Rvalue::Cast(mir::CastKind::Transmute, mir::Operand::Copy(place), cast_ty) =
-            &rvalue
+            rvalue
         else {
             return None;
         };
@@ -459,7 +485,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         Some((lhs_local, rest_place))
     }
 
+    /// Locals that an `ElaborateBoxDerefs` chain dereferences as a whole, which is the shape of
+    /// the temps `Derefer` hoists out of a `Box` deref.
+    fn box_deref_temps(&self) -> DenseBitSet<Local> {
+        let mut temps = DenseBitSet::new_empty(self.body.local_decls.len());
+        for data in self.body.basic_blocks.iter() {
+            for stmt in &data.statements {
+                if let Some((_, box_place)) = self.extract_box_deref(stmt) {
+                    if box_place.projection.is_empty() {
+                        temps.insert(box_place.local);
+                    }
+                }
+            }
+        }
+        temps
+    }
+
     fn unelaborate_derefs(&mut self) {
+        let box_deref_temps = self.box_deref_temps();
         let mut v = analyze::ReplacePlacesVisitor::new(self.tcx);
         for (block, data) in self.body.basic_blocks.clone().iter_enumerated() {
             for (idx, _stmt) in data.statements.iter().enumerate() {
@@ -467,7 +510,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     &mut self.body.basic_blocks.as_mut().as_mut_slice()[block].statements[idx];
                 v.visit_statement(stmt);
                 let stmt = stmt.clone();
-                let Some((dest_local, box_place)) = self.extract_elaborated_deref(&stmt) else {
+                let Some((dest_local, box_place)) =
+                    self.extract_elaborated_deref(&stmt, &box_deref_temps)
+                else {
                     continue;
                 };
                 self.body.basic_blocks.as_mut().as_mut_slice()[block].statements[idx].kind =
