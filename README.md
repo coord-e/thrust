@@ -141,6 +141,7 @@ Several environment variables are used by Thrust to configure its behavior:
 - `THRUST_SOLVER_ARGS`: Whitespace-separated command-line flags passed to the solver. The default is `fp.spacer.global=true fp.validate=true` when the solver is `z3`.
 - `THRUST_SOLVER_TIMEOUT_SECS`: Timeout for waiting on results from the solver. Default: `30`
 - `THRUST_OUTPUT_DIR`: When configured, Thrust outputs intermediate smtlib2 files into this directory.
+- `THRUST_PRETTY_OUTPUT`: When configured, Thrust writes the CHC clauses into this file in the notation used throughout the implementation, which is considerably more compact than smtlib2.
 - `THRUST_ENUM_EXPANSION_DEPTH_LIMIT`: When Thrust works with enums, it "expands" the structure of the enum value onto its environment. This configuration value sets the limit on the depth of recursion during this expansion to handle enums that are defined recursively. It is our future work to discover a sensible value for this automatically. Default: `2`
 
 ## Development
@@ -155,6 +156,8 @@ The implementation of the Thrust is largely divided into the following modules.
 The surface annotation syntax (`#[thrust_macros::requires]`, `ensures`, `param`, `ret`, `sig`, `predicate`, `invariant!`, `pre!`/`post!`, …) is implemented in the `thrust-macros` crate. These procedural macros expand into a small set of internal plugin attributes — chiefly `#[thrust::formula_fn]` companion functions (written as ordinary Rust over the `thrust_models` model types) together with `#[thrust::requires_path]`, `#[thrust::ensures_path]`, and `#[thrust::refinement_path(..)]` markers that link those companions to the function being specified. `analyze::annot_fn` then reads the type-checked HIR of each `formula_fn` to build the corresponding `chc::Formula`/`rty::Refinement`. The model types themselves are declared in `std.rs`, which Thrust injects into every crate it analyzes.
 
 The implementation generates subtyping constraints in the form of CHCs (`chc::System`). The entry point is `analyze::crate_::Analyzer::run`, followed by `analyze::local_def::Analyzer::run` and `analyze::basic_block::Analyzer::run`, while accumulating the necessary information in `analyze::Analyzer`. Once `chc::System` is collected for the entire input, it invokes an external CHC solver via the `chc::solver` module and subsequently reports the result.
+
+Every predicate variable and every clause in the dumps written by `THRUST_OUTPUT_DIR` and `THRUST_PRETTY_OUTPUT` is preceded by a comment recording where it was generated. `span` and the fields after it name the enclosing `tracing` spans in Thrust (the def, the basic block, the MIR statement or terminator being analyzed), and `src` is the location in the analyzed program that the constraint came from. Reading the goal clauses — the ones whose head is `false` — against their `src` is usually the quickest way to find which proof obligation an `Unsat` refers to.
 
 ## Publication
 

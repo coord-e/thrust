@@ -1275,8 +1275,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 tracing::warn!(%stmt_idx, ?stmt, "skip before std::ops::Drop");
                 continue;
             }
+            let span = tracing::info_span!(
+                "stmt",
+                stmt_idx,
+                src = %analyze::source_location(self.tcx, stmt.source_info.span),
+            );
+            let _guard = span.enter();
             self.reborrow_visitor().visit_statement(&mut stmt);
-            tracing::debug!(%stmt_idx, ?stmt);
+            tracing::debug!(?stmt);
             match &stmt.kind {
                 StatementKind::Assign(x) => {
                     let (lhs, rvalue) = &**x;
@@ -1318,7 +1324,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         term
     }
 
-    #[tracing::instrument(skip(self), fields(term = ?term.kind))]
+    #[tracing::instrument(
+        skip(self),
+        fields(term = ?term.kind, src = %analyze::source_location(self.tcx, term.source_info.span))
+    )]
     fn analyze_terminator_binds(&mut self, term: &mir::Terminator<'tcx>) {
         if let TerminatorKind::Call {
             func,
@@ -1358,7 +1367,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
-    #[tracing::instrument(skip(self, expected_fn, outer_fn_param_vars), fields(term = ?term.kind))]
+    #[tracing::instrument(
+        skip(self, expected_fn, outer_fn_param_vars),
+        fields(term = ?term.kind, src = %analyze::source_location(self.tcx, term.source_info.span))
+    )]
     fn analyze_terminator_goto(
         &mut self,
         term: &mir::Terminator<'tcx>,

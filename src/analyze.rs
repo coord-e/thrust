@@ -77,6 +77,11 @@ pub fn mir_borrowck_skip_formula_fn(
         .mir_borrowck)(tcx, local_def_id)
 }
 
+/// Renders `span` as the `file:line:column` location it points to in the analyzed program.
+pub fn source_location(tcx: TyCtxt<'_>, span: rustc_span::Span) -> String {
+    tcx.sess.source_map().span_to_diagnostic_string(span)
+}
+
 pub fn local_of_function_param(idx: rty::FunctionParamIdx) -> Local {
     Local::from(idx.index() + 1)
 }

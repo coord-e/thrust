@@ -3,7 +3,13 @@
 //! The [`DebugInfo`] struct captures contextual information (like `tracing` spans) at the time
 //! of a clause's creation. This information is then pretty-printed as comments in the
 //! generated SMT-LIB2 file, which helps in tracing a clause back to its origin in the
-//! Thrust codebase.
+//! Thrust codebase and in the analyzed program.
+//!
+//! The span fields it reads are recorded by [`DebugInfoLayer`], which has to be registered on the
+//! `tracing` subscriber without a level filter: the origin of a clause is wanted whether or not
+//! the user asked for any logging.
+
+use tracing_subscriber::registry::LookupSpan;
 
 #[derive(Debug, Clone)]
 pub struct Display<'a> {
@@ -32,23 +38,56 @@ pub struct DebugInfo {
     contexts: Vec<(String, String)>,
 }
 
-fn strip_ansi_colors(s: &str) -> String {
-    let mut line = s.to_owned();
-    let mut start = None;
-    let mut offset = 0;
-    for (i, b) in s.bytes().enumerate() {
-        if b == b'\x1b' {
-            start = Some(i);
-        }
-        if let Some(start_idx) = start {
-            if b == b'm' {
-                line.drain((start_idx - offset)..=(i - offset));
-                offset += i - start_idx + 1;
-                start = None;
-            }
-        }
+/// The fields of a single `tracing` span, kept in the span's extensions by [`DebugInfoLayer`].
+#[derive(Debug, Default)]
+struct SpanFields {
+    fields: Vec<(String, String)>,
+}
+
+impl tracing::field::Visit for SpanFields {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.fields
+            .push((field.name().to_owned(), value.to_owned()));
     }
-    line
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.fields
+            .push((field.name().to_owned(), format!("{:?}", value)));
+    }
+}
+
+/// A `tracing` layer that records span fields for [`DebugInfo::from_current_span`].
+pub struct DebugInfoLayer;
+
+impl<S> tracing_subscriber::Layer<S> for DebugInfoLayer
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut span_fields = SpanFields::default();
+        attrs.record(&mut span_fields);
+        let span = ctx.span(id).expect("span of a just-created id");
+        span.extensions_mut().insert(span_fields);
+    }
+
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let span = ctx.span(id).expect("span of a recorded id");
+        let mut extensions = span.extensions_mut();
+        let span_fields = extensions
+            .get_mut::<SpanFields>()
+            .expect("span fields inserted on creation");
+        values.record(span_fields);
+    }
 }
 
 impl DebugInfo {
@@ -58,6 +97,10 @@ impl DebugInfo {
         debug_info
     }
 
+    /// Records the name and the fields of the enclosing `tracing` spans.
+    ///
+    /// The spans are visited innermost first, and a field that several of them carry -- the source
+    /// location, for one -- is taken from the innermost, which describes the clause most closely.
     pub fn context_from_current_span(&mut self) {
         // XXX: hack
         tracing::dispatcher::get_default(|d| {
@@ -68,41 +111,27 @@ impl DebugInfo {
             let Some(registry) = d.downcast_ref::<tracing_subscriber::Registry>() else {
                 return;
             };
-            use tracing_subscriber::registry::{LookupSpan, SpanData};
-            type Extension = tracing_subscriber::fmt::FormattedFields<
-                tracing_subscriber::fmt::format::DefaultFields,
-            >;
+            use tracing_subscriber::registry::SpanData;
             let mut span_id = current_span.id().cloned();
             while let Some(id) = span_id {
                 let Some(data) = registry.span_data(&id) else {
                     break;
                 };
-                let exts = data.extensions();
-                if let Some(fields) = exts.get::<Extension>() {
-                    self.context_from_formatted_fields(&fields.fields);
+                let extensions = data.extensions();
+                if let Some(span_fields) = extensions.get::<SpanFields>() {
+                    for (key, value) in &span_fields.fields {
+                        if !self.has_context(key) {
+                            self.context(key, value.clone());
+                        }
+                    }
                 }
                 span_id = data.parent().cloned();
             }
         });
     }
 
-    fn context_from_formatted_fields(&mut self, fields: &str) {
-        let mut value = None;
-        for field in fields.rsplit("\x1b[2m=\x1b[0m") {
-            let field = strip_ansi_colors(field);
-            if let Some(prev_value) = value {
-                if let Some((next_value, key)) = field.rsplit_once(' ') {
-                    self.context(key, prev_value);
-                    value = Some(next_value.to_owned());
-                } else {
-                    self.context(&field, prev_value);
-                    break;
-                }
-            } else {
-                value = Some(field);
-                continue;
-            }
-        }
+    fn has_context(&self, key: &str) -> bool {
+        self.contexts.iter().any(|(k, _)| k == key)
     }
 
     pub fn is_empty(&self) -> bool {

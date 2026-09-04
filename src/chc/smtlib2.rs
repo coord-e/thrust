@@ -374,9 +374,6 @@ pub struct Clause<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if !self.inner.debug_info.is_empty() {
-            writeln!(f, "{}", self.inner.debug_info.display("; "))?;
-        }
         let body = Body::new(self.ctx, self.inner, &self.inner.body);
         let head = Atom::new(self.ctx, self.inner, &self.inner.head);
         if !self.inner.vars.is_empty() {
@@ -688,12 +685,11 @@ impl<'a> std::fmt::Display for System<'a> {
             )?;
         }
         for (id, clause) in self.inner.clauses.iter_enumerated() {
-            writeln!(
-                f,
-                "; {:?}\n(assert {})\n",
-                id,
-                Clause::new(&self.ctx, clause)
-            )?;
+            writeln!(f, "; {:?}", id)?;
+            if !clause.debug_info.is_empty() {
+                writeln!(f, "{}", clause.debug_info.display("; "))?;
+            }
+            writeln!(f, "(assert {})\n", Clause::new(&self.ctx, clause))?;
         }
         Ok(())
     }

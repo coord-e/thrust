@@ -29,3 +29,4 @@ mod pretty;
 
 pub use analyze::mir_borrowck_skip_formula_fn;
 pub use analyze::Analyzer;
+pub use chc::DebugInfoLayer;

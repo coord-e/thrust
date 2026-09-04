@@ -104,6 +104,7 @@ pub fn main() {
 
     use tracing_subscriber::{filter::EnvFilter, prelude::*};
     tracing_subscriber::registry()
+        .with(thrust::DebugInfoLayer)
         .with(
             tracing_subscriber::fmt::layer()
                 .with_writer(std::io::stderr)

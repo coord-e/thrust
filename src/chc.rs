@@ -14,7 +14,7 @@ mod solver;
 mod unbox;
 
 pub use clause_builder::{ClauseBuilder, Var};
-pub use debug::DebugInfo;
+pub use debug::{DebugInfo, DebugInfoLayer};
 pub use solver::{CheckSatError, Config};
 pub use unbox::unbox;
 
@@ -2048,6 +2048,9 @@ impl System {
             for (idx, c) in system.clauses.iter_enumerated() {
                 use crate::pretty::PrettyDisplayExt as _;
                 use std::io::Write as _;
+                if !c.debug_info.is_empty() {
+                    writeln!(f, "{}", c.debug_info.display("; ")).unwrap();
+                }
                 writeln!(f, "{:?}: {}", idx, c.display()).unwrap();
             }
         }
