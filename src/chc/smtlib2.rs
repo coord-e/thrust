@@ -177,11 +177,11 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 let default = chc::Term::default_for(elem);
                 write!(
                     f,
-                    "(lambda ((concat!idx Int)) \\
-                       (ite (and (<= 0 concat!idx) (< concat!idx (+ {len1} {len2}))) \\
-                            (ite (< concat!idx {len1}) \\
-                                 (select {arr1} concat!idx) \\
-                                 (select {arr2} (- concat!idx {len1}))) \\
+                    "(lambda ((concat!idx Int)) \
+                       (ite (and (<= 0 concat!idx) (< concat!idx (+ {len1} {len2}))) \
+                            (ite (< concat!idx {len1}) \
+                                 (select {arr1} concat!idx) \
+                                 (select {arr2} (- concat!idx {len1}))) \
                             {default}))",
                     arr1 = Term::new(self.ctx, self.clause, &arr1),
                     arr2 = Term::new(self.ctx, self.clause, &arr2),
