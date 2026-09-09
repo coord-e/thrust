@@ -169,6 +169,26 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, &default)
                 )
             }
+            chc::Term::Subarray(arr, start, length) => {
+                let elem = self
+                    .clause
+                    .term_sort(arr)
+                    .as_array_elem()
+                    .expect("Subarray applied to a non-array term")
+                    .clone();
+                let default = chc::Term::default_for(&elem);
+                write!(
+                    f,
+                    "(lambda ((sub!idx Int)) \
+                       (ite (and (<= 0 sub!idx) (< sub!idx {len})) \
+                            (select {arr} (+ {start} sub!idx)) \
+                            {default}))",
+                    len = Term::new(self.ctx, self.clause, length),
+                    arr = Term::new(self.ctx, self.clause, arr),
+                    start = Term::new(self.ctx, self.clause, start),
+                    default = Term::new(self.ctx, self.clause, &default),
+                )
+            }
             chc::Term::SeqConcat(elem, t) => {
                 let arr1 = t.seq1.clone().tuple_proj(0);
                 let arr2 = t.seq2.clone().tuple_proj(0);
