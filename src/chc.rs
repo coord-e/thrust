@@ -863,23 +863,6 @@ impl<V> Term<V> {
                 ],
             );
         }
-        if let Term::SeqConcat(elem, t) = self {
-            let SeqConcatTerm { seq1, seq2 } = *t;
-            let len1 = seq1.clone().tuple_proj(1);
-            let len2 = seq2.clone().tuple_proj(1);
-            let in_range = index
-                .clone()
-                .ge(Term::int(0))
-                .and(index.clone().lt(len1.clone().add(len2)));
-            let cond = index.clone().lt(len1.clone());
-            let then_ = seq1.tuple_proj(0).select(index.clone());
-            let else_ = seq2.tuple_proj(0).select(index.sub(len1));
-            return Term::ite(
-                in_range,
-                Term::ite(cond, then_, else_),
-                Term::default_for(&elem),
-            );
-        }
         Term::App(Function::SELECT, vec![self, index])
     }
 
