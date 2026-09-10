@@ -24,10 +24,14 @@ pub trait ClauseBuilderExt {
 impl ClauseBuilderExt for chc::ClauseBuilder {
     fn with_value_var<'a, T>(&'a mut self, ty: &Type<T>) -> RefinementClauseBuilder<'a> {
         let ty_sort = ty.to_sort();
-        let value_var = (!ty_sort.is_singleton()).then(|| self.add_var(ty_sort));
+        let value_term = if ty_sort.is_singleton() {
+            Some(chc::Term::default_for(&ty_sort))
+        } else {
+            Some(chc::Term::var(self.add_var(ty_sort)))
+        };
         RefinementClauseBuilder {
             builder: self,
-            value_var,
+            value_term,
         }
     }
 
@@ -38,7 +42,7 @@ impl ClauseBuilderExt for chc::ClauseBuilder {
         let value_var = self.find_mapped_var(v);
         RefinementClauseBuilder {
             builder: self,
-            value_var,
+            value_term: value_var.map(chc::Term::var),
         }
     }
 }
@@ -49,7 +53,7 @@ impl ClauseBuilderExt for chc::ClauseBuilder {
 /// will take care of mapping the variables appropriately.
 pub struct RefinementClauseBuilder<'a> {
     builder: &'a mut chc::ClauseBuilder,
-    value_var: Option<chc::TermVarIdx>,
+    value_term: Option<chc::Term<chc::TermVarIdx>>,
 }
 
 impl<'a> RefinementClauseBuilder<'a> {
@@ -68,8 +72,8 @@ impl<'a> RefinementClauseBuilder<'a> {
             let tv = self.builder.add_var(sort);
             instantiator.existential(ev, tv);
         }
-        if let Some(value_var) = self.value_var {
-            instantiator.value_var(value_var);
+        if let Some(value_term) = &self.value_term {
+            instantiator.value_term(value_term.clone());
         }
         let chc::Body { atoms, formula } = instantiator.instantiate();
         for atom in atoms {
@@ -89,8 +93,8 @@ impl<'a> RefinementClauseBuilder<'a> {
         let mut instantiator = refinement
             .map_free_var(|v| self.builder.mapped_var(v))
             .instantiate();
-        if let Some(value_var) = self.value_var {
-            instantiator.value_var(value_var);
+        if let Some(value_term) = &self.value_term {
+            instantiator.value_term(value_term.clone());
         }
         let chc::Body { atoms, formula } = instantiator.instantiate();
         let mut cs = atoms

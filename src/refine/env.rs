@@ -82,6 +82,7 @@ enum FlowBinding {
         discr: TempVarIdx,
         variants: IndexVec<VariantIdx, FlowBindingVariant>,
         sym: chc::DatatypeSymbol,
+        args: rty::RefinedTypeArgs<Var>,
     },
 }
 
@@ -822,6 +823,7 @@ where
             discr: discr_var,
             variants,
             sym: def.name.clone(),
+            args: ty.args.clone(),
         };
         match var {
             Var::Local(local) => {
@@ -968,6 +970,7 @@ where
                 discr,
                 variants,
                 sym,
+                args,
             }) => {
                 let field_tys: Vec<_> = variants
                     .iter()
@@ -975,18 +978,7 @@ where
                     .map(|&v| self.var_type(v.into()))
                     .collect();
 
-                let arg_rtys = {
-                    let def = self.enum_defs.enum_def(sym);
-                    let expected_tys = def
-                        .field_tys()
-                        .map(|ty| rty::RefinedType::unrefined(ty.clone().vacuous()).boxed());
-                    let got_tys = field_tys.iter().map(|ty| ty.clone().into());
-                    rty::unify_tys_params(expected_tys, got_tys).into_args(def.ty_params, |_| {
-                        panic!("var_type: should unify all params")
-                    })
-                };
-
-                let enum_ty = rty::EnumType::new(sym.clone(), arg_rtys);
+                let enum_ty = rty::EnumType::new(sym.clone(), args.clone());
                 let matcher_pred = chc::MatcherPred::new(sym.clone(), enum_ty.arg_sorts()).into();
                 PlaceType::enum_(enum_ty, matcher_pred, *discr, field_tys)
             }

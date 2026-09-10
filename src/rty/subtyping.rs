@@ -144,6 +144,10 @@ where
             let cs2 = relate_refined_type(scope, &got.elem, &expected.elem, relation);
             clauses.extend(cs2);
         }
+        (Type::Param(got), Type::Param(expected))
+            if got.forall_sort_idx == expected.forall_sort_idx => {}
+        (Type::Alias(got), Type::Alias(expected))
+            if got.forall_sort_index() == expected.forall_sort_index() => {}
         _ => panic!(
             "inconsistent types: got={}, expected={}",
             got.display(),

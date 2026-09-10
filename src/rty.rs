@@ -24,7 +24,6 @@
 //!
 //! - `subst_var`: Substitutes logical variables with logical terms.
 //! - `map_var`: Maps logical variables to other logical variables.
-//! - `free_ty_params`: Collects free type parameters [`TypeParamIdx`] in the type.
 //! - `subst_ty_params`: Substitutes type parameters with other types. Since this replaces
 //!   type parameters with refinement types, [`Type`] does not implement this, and
 //!   [`RefinedType::subst_ty_params`] handles the substitution logic instead.
@@ -37,13 +36,13 @@
 //! - [`subtyping`]: Generates CHC constraints [`crate::chc`] from subtyping relations between types.
 //! - [`clause_builder`]: Helper to build [`crate::chc::Clause`] from the refinement types.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use pretty::{termcolor, Pretty};
 use rustc_abi::VariantIdx;
 use rustc_index::IndexVec;
 
-use crate::chc;
+use crate::chc::{self, ForallSortIdx};
 
 mod template;
 pub use template::{Template, TemplateBuilder};
@@ -192,7 +191,7 @@ impl FunctionAbi {
 /// In Thrust, function types are closed. Because of that, function types, thus its parameters and
 /// return type only refer to the parameters of the function itself using [`FunctionParamIdx`] and
 /// do not accept other type of variables from the environment.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionType {
     pub params: IndexVec<FunctionParamIdx, RefinedType<FunctionParamIdx>>,
     pub ret: Box<RefinedType<FunctionParamIdx>>,
@@ -255,29 +254,12 @@ impl FunctionType {
         Type::Function(self)
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.params
-            .iter()
-            .flat_map(RefinedType::free_ty_params)
-            .chain(self.ret.free_ty_params())
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<Closed>) {
         let subst = subst.clone().vacuous();
         for param in &mut self.params {
             param.subst_ty_params(&subst);
         }
         self.ret.subst_ty_params(&subst);
-    }
-
-    pub fn unify_ty_params(self, other: FunctionType) -> TypeParamSubst<FunctionParamIdx> {
-        assert_eq!(self.params.len(), other.params.len());
-        let mut tys1 = self.params;
-        tys1.push(*self.ret);
-        let mut tys2 = other.params;
-        tys2.push(*other.ret);
-        unify_tys_params(tys1, tys2)
     }
 
     /// Removes the parameter at the given index from this function type.
@@ -409,7 +391,7 @@ where
 }
 
 /// The kind of a reference, which is either mutable or immutable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefKind {
     Mut,
     Immut,
@@ -434,7 +416,7 @@ where
 }
 
 /// The kind of a pointer, which is either a reference or an owned pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PointerKind {
     Ref(RefKind),
     Own,
@@ -474,7 +456,7 @@ impl PointerKind {
 }
 
 /// A pointer type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PointerType<T> {
     pub kind: PointerKind,
     pub elem: Box<RefinedType<T>>,
@@ -562,23 +544,11 @@ impl<T> PointerType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.elem.free_ty_params()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
     {
         self.elem.subst_ty_params(subst)
-    }
-
-    pub fn unify_ty_params(self, other: PointerType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        assert_eq!(self.kind, other.kind);
-        self.elem.unify_ty_params(*other.elem)
     }
 }
 
@@ -587,7 +557,7 @@ impl<T> PointerType<T> {
 /// Note that the current implementation uses tuples to represent structs. See
 /// implementation in `crate::refine::template` module for details.
 /// It is our TODO to improve the struct representation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TupleType<T> {
     pub elems: Vec<RefinedType<T>>,
 }
@@ -661,13 +631,6 @@ impl<T> TupleType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.elems
-            .iter()
-            .flat_map(RefinedType::free_ty_params)
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
@@ -675,14 +638,6 @@ impl<T> TupleType<T> {
         for elem in &mut self.elems {
             elem.subst_ty_params(subst);
         }
-    }
-
-    pub fn unify_ty_params(self, other: TupleType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        assert_eq!(self.elems.len(), other.elems.len());
-        unify_tys_params(self.elems, other.elems)
     }
 }
 
@@ -711,7 +666,7 @@ impl EnumDatatypeDef {
 /// An enum type.
 ///
 /// An enum type includes its type arguments and the argument types can refer to outer variables `T`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EnumType<T> {
     pub symbol: chc::DatatypeSymbol,
     pub args: IndexVec<TypeParamIdx, RefinedType<T>>,
@@ -787,13 +742,6 @@ impl<T> EnumType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.args
-            .iter()
-            .flat_map(RefinedType::free_ty_params)
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
@@ -802,20 +750,13 @@ impl<T> EnumType<T> {
             arg.subst_ty_params(subst);
         }
     }
-
-    pub fn unify_ty_params(self, other: EnumType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        assert_eq!(self.symbol, other.symbol);
-        unify_tys_params(self.args, other.args)
-    }
 }
 
 /// A type parameter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ParamType {
-    pub idx: TypeParamIdx,
+    type_param_idx: TypeParamIdx,
+    forall_sort_idx: ForallSortIdx,
 }
 
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &ParamType
@@ -823,17 +764,28 @@ where
     D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        self.idx.pretty(allocator)
+        self.type_param_idx
+            .pretty(allocator)
+            .append(allocator.text("(ForallSortIdx="))
+            .append(self.forall_sort_idx.pretty(allocator))
+            .append(allocator.text(")"))
     }
 }
 
 impl ParamType {
-    pub fn new(idx: TypeParamIdx) -> Self {
-        ParamType { idx }
+    pub fn new(type_param_idx: TypeParamIdx, forall_sort_idx: ForallSortIdx) -> Self {
+        ParamType {
+            type_param_idx,
+            forall_sort_idx,
+        }
     }
 
-    pub fn index(&self) -> TypeParamIdx {
-        self.idx
+    pub fn type_param_index(&self) -> TypeParamIdx {
+        self.type_param_idx
+    }
+
+    pub fn forall_sort_index(&self) -> ForallSortIdx {
+        self.forall_sort_idx
     }
 
     pub fn into_closed_ty(self) -> Type<Closed> {
@@ -841,8 +793,60 @@ impl ParamType {
     }
 }
 
+/// A projection type representing an unresolved associated type.
+///
+/// This preserves the structural identity of projections like `<T as Iterator>::Item`
+/// or `<Map<I, F> as Iterator>::Item`, keeping them distinct even before normalization.
+///
+/// The `args` field stores the generic arguments (Self type + other args), which can
+/// recursively contain other types including params, ADTs, and other projections.
+/// For example, `<Map<I, F> as Iterator>::Item` would have `args = [Map<I, F>]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AliasType {
+    forall_sort_idx: ForallSortIdx,
+    args: Vec<Type<Closed>>,
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &AliasType
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+    D::Doc: Clone,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        let sort = self.forall_sort_idx.pretty(allocator);
+        if self.args.is_empty() {
+            sort
+        } else {
+            let args = allocator.intersperse(
+                self.args.iter().map(|ty| ty.pretty(allocator)),
+                allocator.text(",").append(allocator.line()),
+            );
+            sort.append(allocator.line())
+                .append(args.nest(2).angles())
+                .group()
+        }
+    }
+}
+
+impl AliasType {
+    pub fn new(forall_sort_idx: ForallSortIdx, args: Vec<Type<Closed>>) -> Self {
+        AliasType {
+            forall_sort_idx,
+            args,
+        }
+    }
+
+    pub fn forall_sort_index(&self) -> ForallSortIdx {
+        self.forall_sort_idx
+    }
+
+    pub fn args(&self) -> &[Type<Closed>] {
+        &self.args
+    }
+}
+
 /// An array type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ArrayType<T> {
     pub index: Box<RefinedType<T>>,
     pub elem: Box<RefinedType<T>>,
@@ -900,14 +904,6 @@ impl<T> ArrayType<T> {
         }
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.index
-            .free_ty_params()
-            .into_iter()
-            .chain(self.elem.free_ty_params())
-            .collect()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<T>)
     where
         T: chc::Var,
@@ -915,23 +911,17 @@ impl<T> ArrayType<T> {
         self.index.subst_ty_params(subst);
         self.elem.subst_ty_params(subst);
     }
-
-    pub fn unify_ty_params(self, other: ArrayType<T>) -> TypeParamSubst<T>
-    where
-        T: chc::Var,
-    {
-        unify_tys_params([*self.index, *self.elem], [*other.index, *other.elem])
-    }
 }
 
 /// An underlying type of a refinement type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type<T> {
     Int,
     Bool,
     String,
     Never,
     Param(ParamType),
+    Alias(AliasType),
     Pointer(PointerType<T>),
     Function(FunctionType),
     Tuple(TupleType<T>),
@@ -942,6 +932,12 @@ pub enum Type<T> {
 impl<T> From<ParamType> for Type<T> {
     fn from(t: ParamType) -> Type<T> {
         Type::Param(t)
+    }
+}
+
+impl<T> From<AliasType> for Type<T> {
+    fn from(t: AliasType) -> Type<T> {
+        Type::Alias(t)
     }
 }
 
@@ -988,6 +984,7 @@ where
             Type::String => allocator.text("string"),
             Type::Never => allocator.text("!"),
             Type::Param(ty) => ty.pretty(allocator),
+            Type::Alias(ty) => ty.pretty(allocator),
             Type::Pointer(ty) => ty.pretty(allocator),
             Type::Function(ty) => ty.pretty(allocator),
             Type::Tuple(ty) => ty.pretty(allocator),
@@ -1120,7 +1117,8 @@ impl<T> Type<T> {
             //       currently String sort seems not available in HORN logic of Z3
             Type::String => chc::Sort::null(),
             Type::Never => chc::Sort::null(),
-            Type::Param(ty) => chc::Sort::param(ty.index().into()),
+            Type::Param(ty) => chc::Sort::forall(ty.forall_sort_index()),
+            Type::Alias(ty) => chc::Sort::Forall(ty.forall_sort_index()),
             Type::Pointer(ty) => {
                 let elem_sort = ty.elem.ty.to_sort();
 
@@ -1158,6 +1156,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.subst_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.subst_var(f)),
@@ -1176,6 +1175,7 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.map_var(f)),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.map_var(f)),
@@ -1195,23 +1195,12 @@ impl<T> Type<T> {
             Type::String => Type::String,
             Type::Never => Type::Never,
             Type::Param(ty) => Type::Param(ty),
+            Type::Alias(ty) => Type::Alias(ty),
             Type::Pointer(ty) => Type::Pointer(ty.strip_refinement()),
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
             Type::Array(ty) => Type::Array(ty.strip_refinement()),
             Type::Enum(ty) => Type::Enum(ty.strip_refinement()),
-        }
-    }
-
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        match self {
-            Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
-            Type::Param(ty) => std::iter::once(ty.index()).collect(),
-            Type::Pointer(ty) => ty.free_ty_params(),
-            Type::Function(ty) => ty.free_ty_params(),
-            Type::Tuple(ty) => ty.free_ty_params(),
-            Type::Array(ty) => ty.free_ty_params(),
-            Type::Enum(ty) => ty.free_ty_params(),
         }
     }
 }
@@ -1348,7 +1337,7 @@ impl<T> ShiftExistential for RefinedTypeVar<T> {
 /// A formula, potentially equipped with an existential quantifier.
 ///
 /// Note: This is not to be confused with [`crate::chc::Formula`] in the [`crate::chc`] module, which is a different notion.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Formula<V> {
     pub existentials: IndexVec<ExistentialVarIdx, chc::Sort>,
     pub body: chc::Body<V>,
@@ -1567,6 +1556,7 @@ impl<FV> Refinement<FV> {
     pub fn instantiate(self) -> Instantiator<FV> {
         Instantiator {
             value_var: None,
+            value_term: None,
             existentials: HashMap::new(),
             refinement: self,
         }
@@ -1587,6 +1577,7 @@ impl<FV> Refinement<FV> {
 #[derive(Debug, Clone)]
 pub struct Instantiator<T> {
     value_var: Option<T>,
+    value_term: Option<chc::Term<T>>,
     existentials: HashMap<ExistentialVarIdx, T>,
     refinement: Refinement<T>,
 }
@@ -1594,6 +1585,11 @@ pub struct Instantiator<T> {
 impl<T> Instantiator<T> {
     pub fn value_var(&mut self, value_var: T) -> &mut Self {
         self.value_var = Some(value_var);
+        self
+    }
+
+    pub fn value_term(&mut self, value_term: chc::Term<T>) -> &mut Self {
+        self.value_term = Some(value_term);
         self
     }
 
@@ -1608,19 +1604,22 @@ impl<T> Instantiator<T> {
     {
         let Instantiator {
             value_var,
+            value_term,
             existentials,
             refinement,
         } = self;
-        refinement.body.map_var(move |v| match v {
-            RefinedTypeVar::Value => value_var.clone().unwrap(),
-            RefinedTypeVar::Existential(v) => existentials[&v].clone(),
-            RefinedTypeVar::Free(v) => v,
+        refinement.body.subst_var(move |v| match v {
+            RefinedTypeVar::Value => value_term
+                .clone()
+                .unwrap_or_else(|| chc::Term::var(value_var.clone().unwrap())),
+            RefinedTypeVar::Existential(v) => chc::Term::var(existentials[&v].clone()),
+            RefinedTypeVar::Free(v) => chc::Term::var(v),
         })
     }
 }
 
 /// A refinement type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RefinedType<FV = Closed> {
     pub ty: Type<FV>,
     pub refinement: Refinement<FV>,
@@ -1805,10 +1804,6 @@ impl<FV> RefinedType<FV> {
         self.ty.strip_refinement()
     }
 
-    pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
-        self.ty.free_ty_params()
-    }
-
     pub fn subst_ty_params(&mut self, subst: &TypeParamSubst<FV>)
     where
         FV: chc::Var,
@@ -1817,7 +1812,7 @@ impl<FV> RefinedType<FV> {
         match &mut self.ty {
             Type::Int | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
-                if let Some(rty) = subst.get(ty.index()) {
+                if let Some(rty) = subst.get(ty.type_param_index()) {
                     let RefinedType {
                         ty: replacement_ty,
                         refinement,
@@ -1825,6 +1820,19 @@ impl<FV> RefinedType<FV> {
                     self.refinement.push_conj(refinement);
                     self.ty = replacement_ty;
                 }
+            }
+            Type::Alias(alias) => {
+                let subst_closed = subst.clone().strip_refinement();
+                let new_args: Vec<Type<Closed>> = alias
+                    .args()
+                    .iter()
+                    .map(|arg| {
+                        let mut arg_rty = RefinedType::unrefined(arg.clone());
+                        arg_rty.subst_ty_params(&subst_closed);
+                        arg_rty.ty
+                    })
+                    .collect();
+                self.ty = Type::Alias(AliasType::new(alias.forall_sort_index(), new_args));
             }
             Type::Pointer(ty) => ty.subst_ty_params(subst),
             Type::Function(ty) => {
@@ -1843,39 +1851,6 @@ impl<FV> RefinedType<FV> {
     {
         self.subst_ty_params(&params.into());
     }
-
-    pub fn unify_ty_params(self, other: RefinedType<FV>) -> TypeParamSubst<FV>
-    where
-        FV: chc::Var,
-    {
-        match (self.ty, other.ty) {
-            (Type::Int, Type::Int)
-            | (Type::Bool, Type::Bool)
-            | (Type::String, Type::String)
-            | (Type::Never, Type::Never) => Default::default(),
-            (Type::Param(pty), ty) if !ty.free_ty_params().contains(&pty.index()) => {
-                TypeParamSubst::singleton(
-                    pty.index(),
-                    RefinedType::new(ty.clone(), other.refinement.clone()),
-                )
-            }
-            (ty, Type::Param(pty)) if !ty.free_ty_params().contains(&pty.index()) => {
-                TypeParamSubst::singleton(
-                    pty.index(),
-                    RefinedType::new(ty.clone(), self.refinement.clone()),
-                )
-            }
-            (Type::Pointer(ty1), Type::Pointer(ty2)) => ty1.unify_ty_params(ty2),
-            (Type::Function(ty1), Type::Function(ty2)) => {
-                // TODO: what should we do for in-function refinement substs?
-                ty1.unify_ty_params(ty2).strip_refinement().vacuous()
-            }
-            (Type::Tuple(ty1), Type::Tuple(ty2)) => ty1.unify_ty_params(ty2),
-            (Type::Array(ty1), Type::Array(ty2)) => ty1.unify_ty_params(ty2),
-            (Type::Enum(ty1), Type::Enum(ty2)) => ty1.unify_ty_params(ty2),
-            (t1, t2) => panic!("unify_ty_params: mismatched types t1={:?}, t2={:?}", t1, t2),
-        }
-    }
 }
 
 impl RefinedType<Closed> {
@@ -1887,7 +1862,11 @@ impl RefinedType<Closed> {
 /// Substitutes type parameters in a sort.
 fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
     match sort {
-        chc::Sort::Null | chc::Sort::Int | chc::Sort::Bool | chc::Sort::String => {}
+        chc::Sort::Null
+        | chc::Sort::Int
+        | chc::Sort::Bool
+        | chc::Sort::String
+        | chc::Sort::Forall(_) => {}
         chc::Sort::Param(idx) => {
             let type_param_idx = TypeParamIdx::from_usize(*idx);
             if let Some(rty) = subst.get(type_param_idx) {
@@ -1965,6 +1944,7 @@ fn subst_ty_params_in_formula<T, V>(formula: &mut chc::Formula<V>, subst: &TypeP
 fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst<T>) {
     match term {
         chc::Term::Null
+        | chc::Term::ForallDefault(_)
         | chc::Term::Var(_)
         | chc::Term::Bool(_)
         | chc::Term::Int(_)
@@ -2010,19 +1990,16 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
     }
 }
 
-pub fn unify_tys_params<I1, I2, T>(tys1: I1, tys2: I2) -> TypeParamSubst<T>
-where
-    T: chc::Var,
-    I1: IntoIterator<Item = RefinedType<T>>,
-    I2: IntoIterator<Item = RefinedType<T>>,
-{
-    tys1.into_iter()
-        .zip(tys2)
-        .fold(Default::default(), |s1, (mut t1, mut t2)| {
-            t1.subst_ty_params(&s1);
-            t2.subst_ty_params(&s1);
-            let mut s2 = t1.unify_ty_params(t2);
-            s2.compose(s1);
-            s2
-        })
+#[cfg(test)]
+mod tests {
+    use super::{ParamType, TypeParamIdx};
+    use crate::chc::ForallSortIdx;
+    use crate::pretty::PrettyDisplayExt as _;
+
+    #[test]
+    fn param_type_display_includes_forall_sort() {
+        let param = ParamType::new(TypeParamIdx::from(0_usize), ForallSortIdx::from(2_usize));
+
+        assert_eq!(param.display().to_string(), "T0(ForallSortIdx=a2)");
+    }
 }

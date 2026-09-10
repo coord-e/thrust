@@ -98,6 +98,14 @@ pub fn closure_model_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn ghost_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("ghost_model"),
+    ]
+}
+
 pub fn mut_model_new_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

@@ -11,7 +11,12 @@ fn unbox_seq_concat_term(t: SeqConcatTerm) -> SeqConcatTerm {
 
 fn unbox_term(term: Term) -> Term {
     match term {
-        Term::Var(_) | Term::Bool(_) | Term::Int(_) | Term::String(_) | Term::Null => term,
+        Term::Var(_)
+        | Term::Bool(_)
+        | Term::Int(_)
+        | Term::String(_)
+        | Term::Null
+        | Term::ForallDefault(_) => term,
         Term::Box(t) => unbox_term(*t),
         Term::Mut(t1, t2) => Term::Mut(Box::new(unbox_term(*t1)), Box::new(unbox_term(*t2))),
         Term::BoxCurrent(t) => unbox_term(*t),
@@ -54,6 +59,7 @@ fn unbox_pred(pred: Pred) -> Pred {
         Pred::Var(pred) => Pred::Var(pred),
         Pred::Matcher(pred) => unbox_matcher_pred(pred),
         Pred::UserDefined(pred) => Pred::UserDefined(pred),
+        Pred::ForallPred(pred) => Pred::ForallPred(unbox_forall_pred_var_def(pred)),
     }
 }
 
@@ -83,6 +89,7 @@ fn unbox_sort(sort: Sort) -> Sort {
         Sort::Tuple(sorts) => Sort::Tuple(sorts.into_iter().map(unbox_sort).collect()),
         Sort::Array(s1, s2) => Sort::Array(Box::new(unbox_sort(*s1)), Box::new(unbox_sort(*s2))),
         Sort::Datatype(sort) => Sort::Datatype(unbox_datatype_sort(sort)),
+        Sort::Forall(i) => Sort::Forall(i),
     }
 }
 
@@ -172,12 +179,32 @@ fn unbox_datatype(datatype: Datatype) -> Datatype {
 }
 
 fn unbox_user_defined_pred_def(user_defined_pred_def: UserDefinedPredDef) -> UserDefinedPredDef {
-    let UserDefinedPredDef { symbol, sig, body } = user_defined_pred_def;
+    let UserDefinedPredDef {
+        symbol,
+        sig,
+        body,
+        dependencies,
+    } = user_defined_pred_def;
     let sig = sig
         .into_iter()
         .map(|(name, sort)| (name, unbox_sort(sort)))
         .collect();
-    UserDefinedPredDef { symbol, sig, body }
+    UserDefinedPredDef {
+        symbol,
+        sig,
+        body,
+        dependencies,
+    }
+}
+
+fn unbox_forall_pred_var_def(pred: ForallPred) -> ForallPred {
+    let type_parameters = pred.type_parameters.into_iter().map(unbox_sort).collect();
+    let params = pred.params.into_iter().map(unbox_sort).collect();
+    ForallPred {
+        inner: pred.inner,
+        type_parameters,
+        params,
+    }
 }
 
 /// Remove all `Box` sorts and `Box`/`BoxCurrent` terms from the system.
@@ -192,6 +219,10 @@ pub fn unbox(system: System) -> System {
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        forall_sorts,
+        num_forall_sort_idx,
+        type_params_reverse,
+        forall_pred_vars,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
@@ -200,11 +231,19 @@ pub fn unbox(system: System) -> System {
         .into_iter()
         .map(unbox_user_defined_pred_def)
         .collect();
+    let forall_pred_vars = forall_pred_vars
+        .into_iter()
+        .map(unbox_forall_pred_var_def)
+        .collect();
     System {
         raw_commands,
         datatypes,
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        forall_sorts,
+        num_forall_sort_idx,
+        type_params_reverse,
+        forall_pred_vars,
     }
 }

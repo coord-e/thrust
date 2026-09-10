@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 fn select<T, U, V>(a: T, b: U, c: V, which: i32) -> T {
     if which == 0 {

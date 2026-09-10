@@ -1,9 +1,10 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
-use thrust_models::{exists, model::{Mut, Int}};
+use thrust_models::{exists, forall, model::{Closure, Int, Mut}};
 
+#[thrust_macros::requires(forall(|c: Closure<F>| thrust_macros::pre!(c())))]
 #[thrust_macros::ensures(exists(|g, i: Int|
   thrust_macros::post!(Mut::new(*f, g)(), i)
   && thrust_macros::post!(Mut::new(g, !f)(), result)

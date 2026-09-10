@@ -415,6 +415,7 @@ mod thrust_models {
     /// Proof-only data, introduced by `thrust_macros::ghost!`. In the logic it is its
     /// content, so a specification refers to a `Ghost<T>` as if it were a `T`.
     #[allow(dead_code)]
+    #[thrust::def::ghost_model]
     pub struct Ghost<T: ?Sized>(std::marker::PhantomData<T>);
 
     impl<T: ?Sized> Clone for Ghost<T> {
@@ -426,6 +427,13 @@ mod thrust_models {
 
     impl<T: ?Sized> Copy for Ghost<T> {}
 
+    // TODO: keep this in step with the `ghost_model` arm of `model_adt` in
+    // `refine::template`, which resolves a `Ghost<T>` to its content as well.
+    //
+    // The other `#[thrust::def::*_model]` types are fixed points of `Model` and leave the
+    // meaning to `model_adt` alone. This one cannot be: a specification names a ghost value
+    // as its content (`s.len()` on a `Ghost<Seq<Int>>`), so the lifted formula function has
+    // to receive `<T as Model>::Ty` for the term to type-check.
     impl<T: ?Sized> Model for Ghost<T> where T: Model {
         type Ty = <T as Model>::Ty;
     }

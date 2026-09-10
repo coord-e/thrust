@@ -1,6 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 #[thrust_macros::requires(n >= 0)]
 #[thrust_macros::ensures(result == value)]
 fn repeat<T>(n: i32, value: T) -> T {
