@@ -2297,7 +2297,7 @@ impl System {
 
     /// The set of forall sorts whose default value is referenced (via
     /// [`Term::ForallDefault`]) in some clause. Only these need a
-    /// `declare-const default_` definition in the SMT-LIB2 output.
+    /// `declare-forall-fun default_` definition in the SMT-LIB2 output.
     pub fn used_forall_default_sorts(&self) -> HashSet<ForallSortIdx> {
         let mut used = HashSet::new();
         for clause in &self.clauses {
@@ -2511,7 +2511,10 @@ mod tests {
         });
 
         let smt = system.smtlib2().to_string();
-        assert_eq!(smt.matches("(declare-const default_a0 a0)").count(), 1);
+        assert_eq!(
+            smt.matches("(declare-forall-fun default_a0 () a0)").count(),
+            1
+        );
         assert_eq!(smt.matches("default_a0").count(), 2);
     }
 
@@ -2533,7 +2536,10 @@ mod tests {
         });
 
         let smt = system.smtlib2().to_string();
-        assert_eq!(smt.matches("(declare-const default_a0 a0)").count(), 1);
+        assert_eq!(
+            smt.matches("(declare-forall-fun default_a0 () a0)").count(),
+            1
+        );
     }
 
     #[test]
@@ -2543,7 +2549,7 @@ mod tests {
         system.new_forall_sort(DebugInfo::default());
 
         let smt = system.smtlib2().to_string();
-        assert_eq!(smt.matches("(declare-const default_").count(), 0);
+        assert_eq!(smt.matches("(declare-forall-fun default_").count(), 0);
         assert_eq!(smt.matches("(declare-forall-sort a0)").count(), 1);
         assert_eq!(smt.matches("(declare-forall-sort a1)").count(), 1);
     }
