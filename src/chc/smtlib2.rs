@@ -6,7 +6,7 @@
 //! such as naming convention and solver-specific workarounds.
 //! The output of this module is what gets passed to the external CHC solver.
 
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 use crate::chc::{self, format_context::FormatContext};
 
@@ -653,7 +653,11 @@ pub struct DepExistsPredVarDef<'ctx, 'a> {
     ctx: &'ctx FormatContext,
     id: &'a chc::PredVarId,
     def: &'a chc::PredVarDef,
-    dependencies: &'a HashSet<chc::ForallPred>,
+    // A `BTreeSet`, not a `HashSet`: `fmt` below iterates this directly to
+    // list a `declare-dep-exists-fun`'s dependencies, so whatever order it
+    // arrives in is the order emitted. It is ordered where it is built, in
+    // `chc::System::compute_dependency`, rather than sorted here.
+    dependencies: &'a BTreeSet<chc::ForallPred>,
 }
 
 impl<'ctx, 'a> std::fmt::Display for DepExistsPredVarDef<'ctx, 'a> {
@@ -676,7 +680,7 @@ impl<'ctx, 'a> DepExistsPredVarDef<'ctx, 'a> {
         ctx: &'ctx FormatContext,
         id: &'a chc::PredVarId,
         def: &'a chc::PredVarDef,
-        dependencies: &'a HashSet<chc::ForallPred>,
+        dependencies: &'a BTreeSet<chc::ForallPred>,
     ) -> Self {
         Self {
             ctx,

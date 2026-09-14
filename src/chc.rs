@@ -1,6 +1,6 @@
 //! A multi-sorted CHC system with tuples.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::Hash;
 
 use pretty::{termcolor, Pretty};
@@ -1234,7 +1234,13 @@ impl UserDefinedPred {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+// `Ord` orders by `inner` (a def-path-derived stable name, see
+// `refine::stable_def_id_symbol`) and then by the sort lists, so the
+// ordering is a function of the pred's own content rather than of any
+// hash or allocation order. `declare-forall-fun` emission order and the
+// `declare-dep-exists-fun` dependency lists rely on this to stay stable
+// across runs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ForallPred {
     inner: String,
     type_parameters: Vec<Sort>,
@@ -2219,7 +2225,10 @@ pub struct System {
     /// `analyze::TypeParam::AssocType` forall sorts are intentionally omitted
     /// and remain as opaque forall sorts in the SMT output.
     pub type_params_reverse: HashMap<ForallSortIdx, u32>,
-    forall_pred_vars: HashSet<ForallPred>,
+    // A `BTreeSet`, not a `HashSet`: iterated directly to emit
+    // `declare-forall-fun` blocks in `smtlib2::System::fmt`, so its
+    // iteration order is the emitted order.
+    forall_pred_vars: BTreeSet<ForallPred>,
 }
 
 impl System {
@@ -2342,9 +2351,13 @@ impl System {
             .collect()
     }
 
-    fn compute_dependency(&self) -> HashMap<PredVarId, HashSet<ForallPred>> {
+    // The value sets are `BTreeSet`, not `HashSet`: they end up as the
+    // `dependencies` of a `DepExistsPredVarDef`, which iterates them
+    // directly at print time to list a `declare-dep-exists-fun`'s
+    // dependencies, so their iteration order is the emitted order.
+    fn compute_dependency(&self) -> HashMap<PredVarId, BTreeSet<ForallPred>> {
         let mut exists_deps: HashMap<ExistsDep, HashSet<ExistsDep>> = HashMap::new();
-        let mut forall_deps: HashMap<ExistsDep, HashSet<ForallPred>> = HashMap::new();
+        let mut forall_deps: HashMap<ExistsDep, BTreeSet<ForallPred>> = HashMap::new();
 
         for (clause_idx, clause) in self.clauses.iter_enumerated() {
             let Pred::Var(head_id) = clause.head.pred else {
