@@ -63,7 +63,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // Prioritize trait method specs so that they are always available when refining trait impl
         // functions; see the partialeq_impl.rs case.
         let mut keys = self.tcx.mir_keys(()).clone();
-        let mut trait_method_spec_keys = HashSet::new();
+        // Refinement order decides how predicate variables are numbered, so collect these
+        // in the order `mir_keys` yields them rather than in a hash order.
+        let mut trait_method_spec_keys = Vec::new();
         for local_def_id in self.tcx.mir_keys(()) {
             if !self.tcx.def_kind(*local_def_id).is_fn_like() {
                 keys.swap_remove(local_def_id);
@@ -79,7 +81,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     self.tcx.def_kind(target_def_id),
                     rustc_hir::def::DefKind::AssocFn
                 ) {
-                    trait_method_spec_keys.insert(*local_def_id);
+                    trait_method_spec_keys.push(*local_def_id);
                     keys.swap_remove(local_def_id);
                 }
             }
