@@ -581,17 +581,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self.type_builder.build(elem_ty)
     }
 
-    fn adt_arg_type_at(
-        &self,
-        expr: &'tcx rustc_hir::Expr<'tcx>,
-        idx: usize,
-    ) -> rty::Type<rty::Closed> {
-        let mir_ty::TyKind::Adt(_, args) = self.expr_ty(expr).kind() else {
-            panic!("expected ADT");
-        };
-        self.type_builder.build(args.type_at(idx))
-    }
-
     fn variant_ctor_term(
         &self,
         ctor_did: rustc_span::def_id::DefId,
@@ -807,18 +796,17 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 FormulaOrTerm::Term(term.tuple_proj(index))
             }
             ExprKind::Index(array, index, _) => {
-                let array_ty = self.expr_ty(array);
-                let array_term = self.to_term(array);
                 let index_term = self.to_term(index);
-                let is_seq = array_ty
+                let is_seq = self
+                    .expr_ty(array)
                     .ty_adt_def()
                     .is_some_and(|adt| Some(adt.did()) == self.def_ids.seq_model());
-                let array_inner = if is_seq {
-                    array_term.tuple_proj(0)
+                let term = if is_seq {
+                    self.to_term(array).seq_nth(index_term)
                 } else {
-                    array_term
+                    self.to_term(array).select(index_term)
                 };
-                FormulaOrTerm::Term(array_inner.select(index_term))
+                FormulaOrTerm::Term(term)
             }
             ExprKind::MethodCall(method, receiver, args, _) => {
                 if let Some(def_id) = self.typeck.type_dependent_def_id(hir.hir_id) {
@@ -840,28 +828,34 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                     if Some(def_id) == self.def_ids.seq_len() {
                         assert!(args.is_empty(), "Seq::len does not take any arguments");
                         let t = self.to_term(receiver);
-                        return FormulaOrTerm::Term(t.tuple_proj(1));
+                        return FormulaOrTerm::Term(t.seq_len());
                     }
                     if Some(def_id) == self.def_ids.seq_push() {
                         assert_eq!(args.len(), 1, "Seq::push takes exactly 1 argument");
                         let t = self.to_term(receiver);
                         let v = self.to_term(&args[0]);
-                        let arr = t.clone().tuple_proj(0);
-                        let len = t.tuple_proj(1);
-                        let new_arr = arr.store(len.clone(), v);
-                        let new_len = len.add(chc::Term::int(1));
-                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                        return FormulaOrTerm::Term(t.seq_concat(v.seq_unit()));
+                    }
+                    if Some(def_id) == self.def_ids.seq_store() {
+                        assert_eq!(args.len(), 2, "Seq::store takes exactly 2 arguments");
+                        let seq = self.to_term(receiver);
+                        let index = self.to_term(&args[0]);
+                        let value = self.to_term(&args[1]);
+                        return FormulaOrTerm::Term(seq.seq_store(index, value));
+                    }
+                    if Some(def_id) == self.def_ids.seq_subsequence() {
+                        assert_eq!(args.len(), 2, "Seq::subsequence takes exactly 2 arguments");
+                        let seq = self.to_term(receiver);
+                        let start = self.to_term(&args[0]);
+                        let end = self.to_term(&args[1]);
+                        let length = end.sub(start.clone());
+                        return FormulaOrTerm::Term(seq.seq_extract(start, length));
                     }
                     if Some(def_id) == self.def_ids.seq_concat() {
                         assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
-                        let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();
-                        let t = self.to_term(receiver);
+                        let seq = self.to_term(receiver);
                         let other = self.to_term(&args[0]);
-                        let a_len = t.clone().tuple_proj(1);
-                        let b_len = other.clone().tuple_proj(1);
-                        let new_arr = chc::Term::seq_concat(elem_sort, t, other);
-                        let new_len = a_len.add(b_len);
-                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                        return FormulaOrTerm::Term(seq.seq_concat(other));
                     }
                 }
                 unimplemented!("unsupported method call in formula: {:?}", method)
@@ -941,21 +935,12 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         if Some(def_id) == self.def_ids.seq_empty() {
                             assert!(args.is_empty(), "Seq::empty does not take any arguments");
                             let elem_sort = self.node_arg_type_at(func_expr.hir_id, 0).to_sort();
-                            return FormulaOrTerm::Term(chc::Term::tuple(vec![
-                                chc::Term::array_empty(chc::Sort::int(), elem_sort),
-                                chc::Term::int(0),
-                            ]));
+                            return FormulaOrTerm::Term(chc::Term::seq_empty(elem_sort));
                         }
                         if Some(def_id) == self.def_ids.seq_singleton() {
                             assert_eq!(args.len(), 1, "Seq::singleton takes exactly 1 argument");
                             let v = self.to_term(&args[0]);
-                            let elem_sort = self.node_arg_type_at(func_expr.hir_id, 0).to_sort();
-                            let new_arr = chc::Term::array_empty(chc::Sort::int(), elem_sort)
-                                .store(chc::Term::int(0), v);
-                            return FormulaOrTerm::Term(chc::Term::tuple(vec![
-                                new_arr,
-                                chc::Term::int(1),
-                            ]));
+                            return FormulaOrTerm::Term(v.seq_unit());
                         }
                         if let rustc_hir::def::DefKind::Ctor(ctor_of, _) = def_kind {
                             let terms = args.iter().map(|e| self.to_term(e)).collect();
