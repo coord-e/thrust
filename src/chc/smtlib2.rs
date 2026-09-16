@@ -632,6 +632,19 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
         }
 
+        for elem_sort in self.ctx.seq_elem_sorts() {
+            let elem_sort = self.ctx.fmt_sort(elem_sort);
+            writeln!(
+                f,
+                "(define-fun seq.store ((s (Seq {elem_sort})) (i Int) (v {elem_sort})) (Seq {elem_sort})"
+            )?;
+            writeln!(f, "  (seq.++ (seq.++ (seq.extract s 0 i) (seq.unit v))")?;
+            writeln!(
+                f,
+                "          (seq.extract s (+ i 1) (- (seq.len s) (+ i 1)))))"
+            )?;
+        }
+
         // insert command from #![thrust::raw_command()] here
         for raw_command in &self.inner.raw_commands {
             writeln!(f, "{}\n", RawCommand::new(raw_command))?;
