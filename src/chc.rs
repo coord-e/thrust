@@ -415,7 +415,9 @@ impl Function {
             Self::OR => Sort::bool(),
             Self::NOT => Sort::bool(),
             Self::NEG => Sort::int(),
-            Self::STORE | Self::SEQ_CONCAT | Self::SEQ_EXTRACT => args.into_iter().next().unwrap(),
+            Self::STORE | Self::SEQ_CONCAT | Self::SEQ_EXTRACT | Self::SEQ_STORE => {
+                args.into_iter().next().unwrap()
+            }
             Self::SEQ_LEN => Sort::int(),
             Self::SEQ_UNIT => Sort::seq(args.into_iter().next().unwrap()),
             Self::SEQ_NTH => {
@@ -454,6 +456,7 @@ impl Function {
     pub const SEQ_LEN: Function = Function::new("seq.len");
     pub const SEQ_UNIT: Function = Function::new("seq.unit");
     pub const SEQ_NTH: Function = Function::new("seq.nth");
+    pub const SEQ_STORE: Function = Function::new("seq.store");
     pub const ITE: Function = Function::new("ite");
 }
 
@@ -758,15 +761,8 @@ impl<V> Term<V> {
         Term::App(Function::SEQ_NTH, vec![self, index])
     }
 
-    pub fn seq_store(self, index: Self, elem: Self) -> Self
-    where
-        V: Clone,
-    {
-        let prefix = self.clone().seq_extract(Self::int(0), index.clone());
-        let suffix_start = index.add(Self::int(1));
-        let suffix_length = self.clone().seq_len().sub(suffix_start.clone());
-        let suffix = self.seq_extract(suffix_start, suffix_length);
-        prefix.seq_concat(elem.seq_unit()).seq_concat(suffix)
+    pub fn seq_store(self, index: Self, elem: Self) -> Self {
+        Term::App(Function::SEQ_STORE, vec![self, index, elem])
     }
 
     pub fn boxed(self) -> Self {
