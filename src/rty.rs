@@ -690,7 +690,7 @@ impl<T> TupleType<T> {
 #[derive(Debug, Clone)]
 pub struct EnumVariantDef {
     pub name: chc::DatatypeSymbol,
-    pub discr: u32,
+    pub discr: i64,
     pub field_tys: Vec<Type<Closed>>,
 }
 
