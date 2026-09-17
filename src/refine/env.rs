@@ -770,7 +770,7 @@ where
                 field_ty.instantiate_ty_params(ty.args.clone());
                 let guarded_field_ty = field_ty.guarded(
                     chc::Term::var(discr_var.into())
-                        .equal_to(chc::Term::int(variant_def.discr as i64))
+                        .equal_to(chc::Term::int(variant_def.discr))
                         .into(),
                 );
                 self.bind_impl(x.into(), guarded_field_ty.boxed(), depth);
