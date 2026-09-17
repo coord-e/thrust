@@ -28,13 +28,12 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 10
-    env:
-      # see tests/thrust-pcsat-wrapper
-      COAR_IMAGE: ghcr.io/hiroshi-unno/coar@sha256:73144ed27a02b163d1a71b41b58f3b5414f12e91326015600cfdca64ff19f011
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-z3
-      - run: docker pull "$COAR_IMAGE"
+      - run: curl -fsS "$PCSAT_URL" -o tests/thrust-pcsat-wrapper
+        env:
+          PCSAT_URL: https://thrust-ci-public.s3.ap-northeast-1.amazonaws.com/pcsat/thrust-pcsat-wrapper-220cc85463
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
