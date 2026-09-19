@@ -1990,6 +1990,11 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
             subst_ty_params_in_sort(s1, subst);
             subst_ty_params_in_sort(s2, subst);
         }
+        chc::Term::Subarray(arr, start, length) => {
+            subst_ty_params_in_term(arr, subst);
+            subst_ty_params_in_term(start, subst);
+            subst_ty_params_in_term(length, subst);
+        }
         chc::Term::SeqConcat(sort, t) => {
             subst_ty_params_in_sort(sort, subst);
             for arg in t.iter_args_mut() {

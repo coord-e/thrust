@@ -221,6 +221,13 @@ impl Sort {
         }
     }
 
+    pub fn as_array_elem(&self) -> Option<&Sort> {
+        match self {
+            Sort::Array(_, elem) => Some(elem),
+            _ => None,
+        }
+    }
+
     pub fn null() -> Self {
         Sort::Null
     }
@@ -495,6 +502,9 @@ pub enum Term<V = TermVarIdx> {
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
     ArrayEmpty(Sort, Sort),
+    /// A view whose index `i` reads `array[start + i]` within `[0, length)`.
+    /// Outside the view, a shared default prevents equality from constraining the backing array.
+    Subarray(Box<Term<V>>, Box<Term<V>>, Box<Term<V>>),
     SeqConcat(Sort, Box<SeqConcatTerm<V>>),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
@@ -548,6 +558,17 @@ where
                 }
             }
             Term::ArrayEmpty(_, _) => allocator.text("[]"),
+            Term::Subarray(arr, start, length) => allocator
+                .text("subarray")
+                .append(allocator.line())
+                .append(arr.pretty_atom(allocator))
+                .append(allocator.text(","))
+                .append(allocator.line())
+                .append(start.pretty_atom(allocator))
+                .append(allocator.text(","))
+                .append(allocator.line())
+                .append(length.pretty_atom(allocator))
+                .parens(),
             Term::SeqConcat(_, t) => t.pretty(allocator),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
@@ -613,6 +634,11 @@ impl<V> Term<V> {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
             Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(s1, s2),
+            Term::Subarray(arr, start, length) => Term::Subarray(
+                Box::new(arr.subst_var(&mut f)),
+                Box::new(start.subst_var(&mut f)),
+                Box::new(length.subst_var(f)),
+            ),
             Term::SeqConcat(s, t) => Term::SeqConcat(s, Box::new(t.subst_var(f))),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
@@ -661,6 +687,7 @@ impl<V> Term<V> {
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
             Term::ArrayEmpty(index, elem) => Sort::array(index.clone(), elem.clone()),
+            Term::Subarray(arr, _, _) => arr.sort(var_sort),
             Term::SeqConcat(elem, _) => Sort::array(Sort::int(), elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
@@ -689,6 +716,9 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.fv_impl(),
             Term::MutFinal(t) => t.fv_impl(),
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
+            Term::Subarray(arr, start, length) => {
+                Box::new(arr.fv_impl().chain(start.fv_impl()).chain(length.fv_impl()))
+            }
             Term::SeqConcat(_, t) => Box::new(t.iter_args().flat_map(|t| t.fv_impl())),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
@@ -758,6 +788,10 @@ impl<V> Term<V> {
 
     pub fn seq_concat(elem_sort: Sort, seq1: Term<V>, seq2: Term<V>) -> Self {
         Term::SeqConcat(elem_sort, Box::new(SeqConcatTerm { seq1, seq2 }))
+    }
+
+    pub fn subarray(array: Term<V>, start: Term<V>, length: Term<V>) -> Self {
+        Term::Subarray(Box::new(array), Box::new(start), Box::new(length))
     }
 
     pub fn boxed(self) -> Self {
@@ -862,23 +896,6 @@ impl<V> Term<V> {
                     index,
                 ],
             );
-        }
-        // Peephole 2: inline one step of the `seq_concat` recursive definitions to reduce
-        // indexed access to terms over the underlying sequences. The SMT-defined functions are
-        // still emitted (so the rewrites use exactly their unfolded form), but pcsat can prove
-        // indexed properties against the inlined ITE for *any* recursion bound, where unfolding
-        // through `define-fun-rec` would require an inductive invariant pcsat can't find.
-        //
-        // `select(seq_concat(s, t), i)
-        //   ↦ ite(i < len(s), select(array(s), i), select(array(t), i - len(s)))`
-        // where `s`/`t` are `(array, length)` tuples.
-        if let Term::SeqConcat(_, t) = self {
-            let SeqConcatTerm { seq1, seq2 } = *t;
-            let len1 = seq1.clone().tuple_proj(1);
-            let cond = index.clone().lt(len1.clone());
-            let then_ = seq1.tuple_proj(0).select(index.clone());
-            let else_ = seq2.tuple_proj(0).select(index.sub(len1));
-            return Term::ite(cond, then_, else_);
         }
         Term::App(Function::SELECT, vec![self, index])
     }

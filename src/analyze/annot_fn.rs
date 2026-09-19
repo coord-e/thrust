@@ -852,6 +852,16 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let new_len = len.add(chc::Term::int(1));
                         return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
                     }
+                    if Some(def_id) == self.def_ids.seq_subsequence() {
+                        assert_eq!(args.len(), 2, "Seq::subsequence takes exactly 2 arguments");
+                        let t = self.to_term(receiver);
+                        let start = self.to_term(&args[0]);
+                        let end = self.to_term(&args[1]);
+                        let arr = t.tuple_proj(0);
+                        let new_len = end.sub(start.clone());
+                        let new_arr = chc::Term::subarray(arr, start, new_len.clone());
+                        return FormulaOrTerm::Term(chc::Term::tuple(vec![new_arr, new_len]));
+                    }
                     if Some(def_id) == self.def_ids.seq_concat() {
                         assert_eq!(args.len(), 1, "Seq::concat takes exactly 1 argument");
                         let elem_sort = self.adt_arg_type_at(receiver, 0).to_sort();

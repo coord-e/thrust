@@ -169,13 +169,45 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, &default)
                 )
             }
-            chc::Term::SeqConcat(elem, t) => {
-                let name = self.ctx.seq_concat(elem);
+            chc::Term::Subarray(arr, start, length) => {
+                let elem = self
+                    .clause
+                    .term_sort(arr)
+                    .as_array_elem()
+                    .expect("Subarray applied to a non-array term")
+                    .clone();
+                let default = chc::Term::default_for(&elem);
                 write!(
                     f,
-                    "({} {})",
-                    name,
-                    List::open(t.iter_args().map(|t| Term::new(self.ctx, self.clause, t)))
+                    "(lambda ((sub!idx Int)) \
+                       (ite (and (<= 0 sub!idx) (< sub!idx {len})) \
+                            (select {arr} (+ {start} sub!idx)) \
+                            {default}))",
+                    len = Term::new(self.ctx, self.clause, length),
+                    arr = Term::new(self.ctx, self.clause, arr),
+                    start = Term::new(self.ctx, self.clause, start),
+                    default = Term::new(self.ctx, self.clause, &default),
+                )
+            }
+            chc::Term::SeqConcat(elem, t) => {
+                let arr1 = t.seq1.clone().tuple_proj(0);
+                let arr2 = t.seq2.clone().tuple_proj(0);
+                let len1 = t.seq1.clone().tuple_proj(1);
+                let len2 = t.seq2.clone().tuple_proj(1);
+                let default = chc::Term::default_for(elem);
+                write!(
+                    f,
+                    "(lambda ((concat!idx Int)) \
+                       (ite (and (<= 0 concat!idx) (< concat!idx (+ {len1} {len2}))) \
+                            (ite (< concat!idx {len1}) \
+                                 (select {arr1} concat!idx) \
+                                 (select {arr2} (- concat!idx {len1}))) \
+                            {default}))",
+                    arr1 = Term::new(self.ctx, self.clause, &arr1),
+                    arr2 = Term::new(self.ctx, self.clause, &arr2),
+                    len1 = Term::new(self.ctx, self.clause, &len1),
+                    len2 = Term::new(self.ctx, self.clause, &len2),
+                    default = Term::new(self.ctx, self.clause, &default),
                 )
             }
             chc::Term::Tuple(ts) => {
@@ -636,30 +668,6 @@ impl<'a> std::fmt::Display for System<'a> {
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
-        }
-
-        for elem in self.ctx.int_array_elem_sorts() {
-            let name = self.ctx.seq_concat(elem);
-            let elem_ty = self.ctx.fmt_sort(elem);
-            // The sequences are passed as `(array, length)` tuples
-            let seq_fields = [
-                chc::Sort::array(chc::Sort::int(), elem.clone()),
-                chc::Sort::int(),
-            ];
-            let seq_ty = self.ctx.fmt_sort(&chc::Sort::tuple(seq_fields.to_vec()));
-            let ctor = self.ctx.tuple_ctor(&seq_fields);
-            let array = self.ctx.tuple_proj(&seq_fields, 0);
-            let len = self.ctx.tuple_proj(&seq_fields, 1);
-            writeln!(
-                f,
-                "(define-fun-rec {name} \
-                  ((s {seq_ty}) (t {seq_ty})) \
-                  (Array Int {elem_ty}) \
-                  (ite (<= ({len} t) 0) ({array} s) \
-                       (store ({name} s ({ctor} ({array} t) (- ({len} t) 1))) \
-                              (+ ({len} s) (- ({len} t) 1)) \
-                              (select ({array} t) (- ({len} t) 1)))))\n",
-            )?;
         }
 
         // insert command from #![thrust::raw_command()] here
