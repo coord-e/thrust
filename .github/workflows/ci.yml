@@ -33,7 +33,7 @@ jobs:
       - uses: ./.github/actions/setup-z3
       - run: curl -fsS "$PCSAT_URL" -o tests/thrust-pcsat-wrapper
         env:
-          PCSAT_URL: https://thrust-ci-public.s3.ap-northeast-1.amazonaws.com/pcsat/thrust-pcsat-wrapper-7c44bec755
+          PCSAT_URL: https://thrust-ci-public.s3.ap-northeast-1.amazonaws.com/pcsat/thrust-pcsat-wrapper-873d558c6a
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
