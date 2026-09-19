@@ -21,7 +21,6 @@ use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 pub struct FormatContext {
     renamer: HoiceDatatypeRenamer,
     datatypes: Vec<chc::Datatype>,
-    seq_elem_sorts: Vec<chc::Sort>,
 }
 
 // FIXME: this is obviously ineffective and should be replaced
@@ -299,13 +298,6 @@ impl FormatContext {
             }
         }
 
-        let seq_elem_sorts = sorts
-            .iter()
-            .filter_map(|sort| match sort {
-                chc::Sort::Seq(elem) => Some((**elem).clone()),
-                _ => None,
-            })
-            .collect();
         let datatypes: Vec<_> = sorts
             .into_iter()
             .flat_map(builtin_sort_datatype)
@@ -313,19 +305,11 @@ impl FormatContext {
             .filter(|d| d.params == 0)
             .collect();
         let renamer = HoiceDatatypeRenamer::new(&datatypes);
-        FormatContext {
-            renamer,
-            datatypes,
-            seq_elem_sorts,
-        }
+        FormatContext { renamer, datatypes }
     }
 
     pub fn datatypes(&self) -> &[chc::Datatype] {
         &self.datatypes
-    }
-
-    pub fn seq_elem_sorts(&self) -> &[chc::Sort] {
-        &self.seq_elem_sorts
     }
 
     pub fn box_ctor(&self, sort: &chc::Sort) -> impl std::fmt::Display {

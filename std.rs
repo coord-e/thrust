@@ -235,6 +235,9 @@ mod thrust_models {
                 unimplemented!()
             }
 
+            /// Returns `self` with the element at `index` replaced by `value`.
+            ///
+            /// The result is unspecified when `index` is out of range.
             #[allow(dead_code)]
             #[thrust::def::seq_store]
             #[thrust::ignored]
