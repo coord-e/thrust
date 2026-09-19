@@ -66,6 +66,14 @@ pub fn int_model_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn uint_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("uint_model"),
+    ]
+}
+
 pub fn mut_model_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

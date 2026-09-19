@@ -170,9 +170,10 @@ impl BasicBlockType {
             };
             mapping.insert(idx, mapped_idx);
 
-            // to be sure
+            // to be sure: only the last parameter carries the predicate variable of the
+            // precondition; the others carry at most what their model says about them.
             if idx != last_param_idx {
-                assert!(param_ty.refinement.is_top());
+                assert!(!param_ty.refinement.has_pred_var());
             }
         }
 

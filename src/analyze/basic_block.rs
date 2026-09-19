@@ -549,7 +549,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         //
                         // TODO: Stop embedding knowledge of `<[T; N] as Model>::Ty` in the analyzer
                         let mut builder = PlaceTypeBuilder::default();
-                        let elem_ty = self.type_builder.build(mir_elem_ty).vacuous();
+                        let elem_ty = self.type_builder.build(mir_elem_ty).vacuous().ty;
                         let mut arr_term =
                             chc::Term::array_empty(chc::Sort::int(), elem_ty.to_sort());
                         for (i, field) in fields.iter().enumerate() {
@@ -583,7 +583,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                             .field_tys
                             .clone()
                             .into_iter()
-                            .map(|ty| rty::RefinedType::unrefined(ty.vacuous()));
+                            .map(|rty| rty.vacuous());
 
                         let rty_args: IndexVec<_, _> = args
                             .types()
@@ -658,7 +658,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             ) => {
                 // Only treat unsizing as identity when both sides resolve to the same model.
                 let mut op_pty = self.operand_type(operand);
-                let expected_ty = self.type_builder.build(ty).vacuous();
+                let expected_ty = self.type_builder.build(ty).vacuous().ty;
                 if op_pty.ty.to_sort() != expected_ty.to_sort() {
                     unimplemented!("unsize cast: {:?} -> {:?}", op_pty.ty, expected_ty);
                 }
@@ -1049,17 +1049,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             .expect("ghost formula function takes the ghost value as its first parameter");
         let mut params: IndexVec<_, _> = param_tys
             .iter()
-            .map(|ty| rty::RefinedType::unrefined(self.type_builder.build(*ty)).vacuous())
+            .map(|ty| self.type_builder.build(*ty).vacuous())
             .collect();
         if params.is_empty() {
             // elaboration: we need at least one predicate variable in parameter
             params.push(rty::RefinedType::unrefined(rty::Type::unit()).vacuous());
         }
-        let value_ty = self.type_builder.build(*value_ty);
-        let func_ty = rty::FunctionType::new(
-            params,
-            rty::RefinedType::new(value_ty.vacuous(), formula_fn.to_refinement()),
-        );
+        let mut value_rty = self.type_builder.build(*value_ty).vacuous();
+        value_rty.refinement.push_conj(formula_fn.to_refinement());
+        let func_ty = rty::FunctionType::new(params, value_rty);
 
         let args = formula_fn
             .param_idents()
@@ -1133,7 +1131,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn add_prophecy_var(&mut self, statement_index: usize, ty: mir_ty::Ty<'tcx>) {
         let ty = self.type_builder.build(ty);
-        let temp_var = self.env.push_temp_var(ty.vacuous());
+        let temp_var = self.env.push_temp_var(ty.vacuous().ty);
         self.prophecy_vars.insert(statement_index, temp_var);
         tracing::debug!(stmt_idx = %statement_index, temp_var = ?temp_var, "add_prophecy_var");
     }
@@ -1154,7 +1152,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         prophecy_ty: mir_ty::Ty<'tcx>,
     ) -> rty::RefinedType<Var> {
         let prophecy_ty = self.type_builder.build(prophecy_ty);
-        let prophecy = self.env.push_temp_var(prophecy_ty.vacuous());
+        let prophecy = self.env.push_temp_var(prophecy_ty.vacuous().ty);
         let place = self.elaborate_place_for_borrow(&referent);
         self.env.borrow_place(place, prophecy).into()
     }

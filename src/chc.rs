@@ -1781,6 +1781,10 @@ impl<V> Body<V> {
         self.formula.is_bottom() || self.atoms.iter().any(|a| a.is_bottom())
     }
 
+    pub fn has_pred_var(&self) -> bool {
+        self.atoms.iter().any(|a| matches!(a.pred, Pred::Var(_)))
+    }
+
     pub fn push_conj(&mut self, other: impl Into<Body<V>>) {
         let Body { atoms, formula } = other.into();
         self.atoms.extend(atoms);

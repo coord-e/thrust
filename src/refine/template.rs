@@ -60,13 +60,14 @@ where
     }
 }
 
-/// Translates [`mir_ty::Ty`] to [`rty::Type`].
+/// Translates [`mir_ty::Ty`] to [`rty::RefinedType`].
 ///
 /// This struct implements a translation from Rust MIR types to Thrust types.
-/// Thrust types may contain refinement predicates which do not exist in MIR types,
-/// and [`TypeBuilder`] solely builds types with null refinement (true) in
-/// [`TypeBuilder::build`]. This also provides [`TypeBuilder::for_template`] to build
-/// refinement types by filling unknown predicates with templates with predicate variables.
+/// Thrust types may contain refinement predicates which do not exist in MIR types, and
+/// [`TypeBuilder::build`] fills them with what the model of the type says about its values
+/// (an unsigned integer is non-negative, and nothing for the other models). This also provides
+/// [`TypeBuilder::for_template`] to build refinement types by filling unknown predicates with
+/// templates with predicate variables.
 #[derive(Clone)]
 pub struct TypeBuilder<'tcx> {
     tcx: mir_ty::TyCtxt<'tcx>,
@@ -174,49 +175,79 @@ impl<'tcx> TypeBuilder<'tcx> {
         adt: &mir_ty::AdtDef<'tcx>,
         args: &'tcx mir_ty::List<mir_ty::GenericArg<'tcx>>,
     ) -> Option<rty::Type<rty::Closed>> {
-        if Some(adt.did()) == self.def_ids.int_model() {
+        if Some(adt.did()) == self.def_ids.int_model()
+            || Some(adt.did()) == self.def_ids.uint_model()
+        {
             return Some(rty::Type::int());
         }
 
         if Some(adt.did()) == self.def_ids.mut_model() {
-            let elem_ty = self.build(args.type_at(0));
+            let elem_ty = self.build_ty(args.type_at(0));
             return Some(rty::PointerType::mut_to(elem_ty).into());
         }
 
         if Some(adt.did()) == self.def_ids.box_model() {
-            let elem_ty = self.build(args.type_at(0));
+            let elem_ty = self.build_ty(args.type_at(0));
             return Some(rty::PointerType::own(elem_ty).into());
         }
 
         if Some(adt.did()) == self.def_ids.array_model() {
-            let idx_ty = self.build(args.type_at(0));
-            let elem_ty = self.build(args.type_at(1));
+            let idx_ty = self.build_ty(args.type_at(0));
+            let elem_ty = self.build_ty(args.type_at(1));
             return Some(rty::ArrayType::new(idx_ty, elem_ty).into());
         }
 
         if Some(adt.did()) == self.def_ids.closure_model() {
             let tupled_upvars_ty = args.type_at(0);
-            return Some(self.build(tupled_upvars_ty));
+            return Some(self.build_ty(tupled_upvars_ty));
         }
 
         None
     }
 
+    /// What the model of `ty` says about every value of that type: an unsigned integer is
+    /// non-negative, and nothing for the other models.
+    ///
+    /// This describes the value as a whole. A refinement nested in a type (a field of a
+    /// tuple, an element of an array) is out of reach of the analyzer, which carries the
+    /// facts about the parts of a value in the formula of its [`refine::PlaceType`] instead.
+    fn model_refinement<V>(&self, ty: mir_ty::Ty<'tcx>) -> rty::Refinement<V> {
+        let is_unsigned = match self.resolve_model_ty(ty).kind() {
+            mir_ty::TyKind::Adt(def, _) => Some(def.did()) == self.def_ids.uint_model(),
+            _ => false,
+        };
+        if !is_unsigned {
+            return rty::Refinement::top();
+        }
+        chc::Atom::new(
+            chc::KnownPred::GREATER_THAN_OR_EQUAL.into(),
+            vec![
+                chc::Term::var(rty::RefinedTypeVar::Value),
+                chc::Term::int(0),
+            ],
+        )
+        .into()
+    }
+
+    pub fn build(&self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<rty::Closed> {
+        rty::RefinedType::new(self.build_ty(ty), self.model_refinement(ty))
+    }
+
     // TODO: consolidate two impls
-    pub fn build(&self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
+    fn build_ty(&self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
         let ty = self.resolve_model_ty(ty);
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
             mir_ty::TyKind::Str => rty::Type::string(),
             mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Not) => {
-                let elem_ty = self.build(*elem_ty);
+                let elem_ty = self.build_ty(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
                 let elems = ts
                     .iter()
-                    .map(|ty| rty::PointerType::own(self.build(ty)).into())
+                    .map(|ty| rty::PointerType::own(self.build_ty(ty)).into())
                     .collect();
                 rty::TupleType::new(elems).into()
             }
@@ -228,9 +259,9 @@ impl<'tcx> TypeBuilder<'tcx> {
                 let params = sig
                     .inputs()
                     .iter()
-                    .map(|ty| rty::RefinedType::unrefined(self.build(*ty)).vacuous())
+                    .map(|ty| self.build(*ty).vacuous())
                     .collect();
-                let ret = rty::RefinedType::unrefined(self.build(sig.output()));
+                let ret = self.build(sig.output());
                 rty::FunctionType::new(params, ret.vacuous()).into()
             }
             mir_ty::TyKind::Adt(def, params) => {
@@ -239,10 +270,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                 }
                 if def.is_enum() {
                     let sym = refine::datatype_symbol(self.tcx, def.did());
-                    let args: IndexVec<_, _> = params
-                        .types()
-                        .map(|ty| rty::RefinedType::unrefined(self.build(ty)))
-                        .collect();
+                    let args: IndexVec<_, _> = params.types().map(|ty| self.build(ty)).collect();
                     rty::EnumType::new(sym, args).into()
                 } else if def.is_struct() {
                     let elem_tys = def
@@ -250,7 +278,7 @@ impl<'tcx> TypeBuilder<'tcx> {
                         .map(|field| {
                             let ty = field.ty(self.tcx, params);
                             // elaboration: all fields are boxed
-                            rty::PointerType::own(self.build(ty)).into()
+                            rty::PointerType::own(self.build_ty(ty)).into()
                         })
                         .collect();
                     rty::TupleType::new(elem_tys).into()
@@ -327,7 +355,7 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 }
 
-/// Translates [`mir_ty::Ty`] to [`rty::Type`] using templates for refinements.
+/// Translates [`mir_ty::Ty`] to [`rty::RefinedType`] using templates for unknown refinements.
 ///
 /// [`rty::Template`] is a refinement type in the form of `{ T | P(x1, ..., xn) }` where `P` is a
 /// predicate variable. When constructing a template, we need to know which variables can affect the
@@ -361,48 +389,54 @@ where
         adt: &mir_ty::AdtDef<'tcx>,
         args: &'tcx mir_ty::List<mir_ty::GenericArg<'tcx>>,
     ) -> Option<rty::Type<S::Var>> {
-        if Some(adt.did()) == self.inner.def_ids.int_model() {
+        if Some(adt.did()) == self.inner.def_ids.int_model()
+            || Some(adt.did()) == self.inner.def_ids.uint_model()
+        {
             return Some(rty::Type::int());
         }
 
         if Some(adt.did()) == self.inner.def_ids.mut_model() {
-            let elem_ty = self.build(args.type_at(0));
+            let elem_ty = self.build_ty(args.type_at(0));
             return Some(rty::PointerType::mut_to(elem_ty).into());
         }
 
         if Some(adt.did()) == self.inner.def_ids.box_model() {
-            let elem_ty = self.build(args.type_at(0));
+            let elem_ty = self.build_ty(args.type_at(0));
             return Some(rty::PointerType::own(elem_ty).into());
         }
 
         if Some(adt.did()) == self.inner.def_ids.array_model() {
-            let idx_ty = self.build(args.type_at(0));
-            let elem_ty = self.build(args.type_at(1));
+            let idx_ty = self.build_ty(args.type_at(0));
+            let elem_ty = self.build_ty(args.type_at(1));
             return Some(rty::ArrayType::new(idx_ty, elem_ty).into());
         }
 
         if Some(adt.did()) == self.inner.def_ids.closure_model() {
             let tupled_upvars_ty = args.type_at(0);
-            return Some(self.build(tupled_upvars_ty));
+            return Some(self.build_ty(tupled_upvars_ty));
         }
 
         None
     }
 
-    pub fn build(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<S::Var> {
+    pub fn build(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<S::Var> {
+        rty::RefinedType::new(self.build_ty(ty), self.inner.model_refinement(ty))
+    }
+
+    fn build_ty(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<S::Var> {
         let ty = self.inner.resolve_model_ty(ty);
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
             mir_ty::TyKind::Str => rty::Type::string(),
             mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Not) => {
-                let elem_ty = self.build(*elem_ty);
+                let elem_ty = self.build_ty(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
                 let elems = ts
                     .iter()
-                    .map(|ty| rty::PointerType::own(self.build(ty)).into())
+                    .map(|ty| rty::PointerType::own(self.build_ty(ty)).into())
                     .collect();
                 rty::TupleType::new(elems).into()
             }
@@ -429,7 +463,7 @@ where
                         .map(|field| {
                             let ty = field.ty(self.inner.tcx, params);
                             // elaboration: all fields are boxed
-                            rty::PointerType::own(self.build(ty)).into()
+                            rty::PointerType::own(self.build_ty(ty)).into()
                         })
                         .collect();
                     rty::TupleType::new(elem_tys).into()
@@ -441,11 +475,15 @@ where
         }
     }
 
+    /// Builds a refinement type whose refinement is an unknown predicate, conjoined with
+    /// what the model of `ty` already tells us about its values.
     pub fn build_refined(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::RefinedType<S::Var> {
         // TODO: consider building ty with scope
-        let ty = self.inner.for_template(self.registry).build(ty).vacuous();
-        let tmpl = self.scope.build_template().build(ty);
-        self.registry.register_template(tmpl)
+        let known = self.inner.for_template(self.registry).build(ty).vacuous();
+        let tmpl = self.scope.build_template().build(known.ty);
+        let mut rty = self.registry.register_template(tmpl);
+        rty.refinement.push_conj(known.refinement);
+        rty
     }
 
     fn build_basic_block_with_precondition(
@@ -481,9 +519,7 @@ where
             param_rtys: Default::default(),
             param_refinement: precondition,
             // not generating pvar of BB post
-            ret_rty: Some(rty::RefinedType::unrefined(
-                self.inner.build(ret_ty).vacuous(),
-            )),
+            ret_rty: Some(self.inner.build(ret_ty).vacuous()),
             abi: Default::default(),
         }
         .build();
@@ -547,8 +583,9 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         &mut self,
         refinement: rty::Refinement<rty::FunctionParamIdx>,
     ) -> &mut Self {
-        let ty = self.inner.build(self.ret_ty);
-        self.ret_rty = Some(rty::RefinedType::new(ty.vacuous(), refinement));
+        let mut rty = self.inner.build(self.ret_ty).vacuous();
+        rty.refinement.push_conj(refinement);
+        self.ret_rty = Some(rty);
         self
     }
 
@@ -569,9 +606,8 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
         match first {
             rty::TypePositionStep::Param(idx) => {
                 if !self.param_rtys.contains_key(idx) {
-                    let ty = self.inner.build(self.param_tys[idx.index()].ty).vacuous();
-                    self.param_rtys
-                        .insert(*idx, rty::RefinedType::unrefined(ty));
+                    let rty = self.inner.build(self.param_tys[idx.index()].ty).vacuous();
+                    self.param_rtys.insert(*idx, rty);
                 }
                 self.param_rtys
                     .get_mut(idx)
@@ -580,8 +616,7 @@ impl<'tcx, 'a, R> FunctionTemplateTypeBuilder<'tcx, 'a, R> {
             }
             rty::TypePositionStep::Return => {
                 if self.ret_rty.is_none() {
-                    let ty = self.inner.build(self.ret_ty).vacuous();
-                    self.ret_rty = Some(rty::RefinedType::unrefined(ty));
+                    self.ret_rty = Some(self.inner.build(self.ret_ty).vacuous());
                 }
                 self.ret_rty
                     .as_mut()
@@ -611,8 +646,9 @@ where
                 .unwrap_or_else(|| {
                     if idx == self.param_tys.len() - 1 {
                         if let Some(param_refinement) = &self.param_refinement {
-                            let ty = self.inner.build(param_ty.ty);
-                            rty::RefinedType::new(ty.vacuous(), param_refinement.clone())
+                            let mut rty = self.inner.build(param_ty.ty).vacuous();
+                            rty.refinement.push_conj(param_refinement.clone());
+                            rty
                         } else {
                             self.inner
                                 .for_template(self.registry)
@@ -620,14 +656,12 @@ where
                                 .build_refined(param_ty.ty)
                         }
                     } else if self.param_refinement.is_some() {
-                        rty::RefinedType::unrefined(self.inner.build(param_ty.ty).vacuous())
+                        self.inner.build(param_ty.ty).vacuous()
                     } else {
-                        rty::RefinedType::unrefined(
-                            self.inner
-                                .for_template(self.registry)
-                                .build(param_ty.ty)
-                                .vacuous(),
-                        )
+                        self.inner
+                            .for_template(self.registry)
+                            .build(param_ty.ty)
+                            .vacuous()
                     }
                 });
             let param_rty = if param_ty.mutbl.is_mut() {

@@ -691,7 +691,7 @@ impl<T> TupleType<T> {
 pub struct EnumVariantDef {
     pub name: chc::DatatypeSymbol,
     pub discr: u32,
-    pub field_tys: Vec<Type<Closed>>,
+    pub field_tys: Vec<RefinedType<Closed>>,
 }
 
 /// A definition of an enum datatype.
@@ -703,7 +703,7 @@ pub struct EnumDatatypeDef {
 }
 
 impl EnumDatatypeDef {
-    pub fn field_tys(&self) -> impl Iterator<Item = &Type<Closed>> {
+    pub fn field_tys(&self) -> impl Iterator<Item = &RefinedType<Closed>> {
         self.variants.iter().flat_map(|v| &v.field_tys)
     }
 }
@@ -1469,6 +1469,10 @@ impl<V> Formula<V> {
         self.body.is_bottom()
     }
 
+    pub fn has_pred_var(&self) -> bool {
+        self.body.has_pred_var()
+    }
+
     pub fn top() -> Self {
         Formula::new(IndexVec::new(), chc::Body::top())
     }
@@ -1653,7 +1657,7 @@ where
 impl RefinedType<FunctionParamIdx> {
     /// Installs `refinement` at the sub-type addressed by `steps`.
     ///
-    /// An empty `steps` slice replaces the refinement at this node; otherwise
+    /// An empty `steps` slice conjoins the refinement to the one at this node; otherwise
     /// each step navigates one level deeper per [`TypePositionStep`].
     pub fn install_refinement_at(
         &mut self,
@@ -1661,7 +1665,7 @@ impl RefinedType<FunctionParamIdx> {
         refinement: Refinement<FunctionParamIdx>,
     ) {
         let Some((step, rest)) = steps.split_first() else {
-            self.refinement = refinement;
+            self.refinement.push_conj(refinement);
             return;
         };
         match step {
@@ -1713,6 +1717,10 @@ impl<FV> RefinedType<FV> {
 
     pub fn new(ty: Type<FV>, refinement: Refinement<FV>) -> Self {
         RefinedType { ty, refinement }
+    }
+
+    pub fn to_sort(&self) -> chc::Sort {
+        self.ty.to_sort()
     }
 
     pub fn refined_with_term(ty: Type<FV>, term: chc::Term<FV>) -> Self {

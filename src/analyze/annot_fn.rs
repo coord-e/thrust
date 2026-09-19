@@ -250,7 +250,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             let term = if ty.to_sort().is_singleton() {
                 // the analyzer don't expect params with singleton sorts to be used in formula...
                 // FIXME: fix the analyzer side to uniformly accept all params
-                Self::singleton_term_for_ty(&ty).unwrap()
+                Self::singleton_term_for_ty(&ty.ty).unwrap()
             } else {
                 chc::Term::var(param_idx)
             };
@@ -578,7 +578,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let generic_args =
             mir_ty::EarlyBinder::bind(generic_args).instantiate(self.tcx, self.generic_args);
         let elem_ty = generic_args.type_at(idx);
-        self.type_builder.build(elem_ty)
+        self.type_builder.build(elem_ty).ty
     }
 
     fn adt_arg_type_at(
@@ -589,7 +589,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         let mir_ty::TyKind::Adt(_, args) = self.expr_ty(expr).kind() else {
             panic!("expected ADT");
         };
-        self.type_builder.build(args.type_at(idx))
+        self.type_builder.build(args.type_at(idx)).ty
     }
 
     fn variant_ctor_term(
