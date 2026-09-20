@@ -713,9 +713,16 @@ impl<'a> std::fmt::Display for System<'a> {
             if !used_forall_defaults.contains(&forall_sort_def.idx) {
                 continue;
             }
+            // The padding of an empty array at an abstract element sort: an arbitrary but
+            // fixed value that nothing is allowed to observe. Under `(set-logic HORN)` a
+            // top-level `declare-const` names something the solver must *build*, and an
+            // abstract sort has no value the solver can build, so that spelling stops the
+            // query at the parser. A nullary `declare-forall-fun` is the universal reading:
+            // the clauses have to hold whatever the padding is, which is what "nothing may
+            // observe it" means.
             writeln!(
                 f,
-                "(declare-const default_{} {})\n",
+                "(declare-forall-fun default_{} () {})\n",
                 forall_sort_def.idx, forall_sort_def.idx
             )?;
         }

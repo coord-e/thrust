@@ -47,7 +47,9 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
                 term_sorts(clause, arg, sorts);
             }
         }
-        chc::Term::ArrayEmpty(_, _) => {}
+        // The writer synthesises `default_for(elem)` for an empty array at print time, so the
+        // sorts that term mentions have to be declared even though no clause spells it out.
+        chc::Term::ArrayEmpty(_, elem) => term_sorts(clause, &chc::Term::default_for(elem), sorts),
         chc::Term::SeqConcat(_, t) => {
             for arg in t.iter_args() {
                 term_sorts(clause, arg, sorts);
