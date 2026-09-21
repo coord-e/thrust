@@ -392,7 +392,7 @@ impl Sort {
                     s.instantiate_params(args, forall_sort_resolver);
                 }
             }
-            _ => {}
+            Sort::Null | Sort::Int | Sort::Bool | Sort::String => {}
         }
     }
 }
