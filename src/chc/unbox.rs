@@ -2,13 +2,6 @@
 
 use super::*;
 
-fn unbox_seq_concat_term(t: SeqConcatTerm) -> SeqConcatTerm {
-    let SeqConcatTerm { seq1, seq2 } = t;
-    let seq1 = unbox_term(seq1);
-    let seq2 = unbox_term(seq2);
-    SeqConcatTerm { seq1, seq2 }
-}
-
 fn unbox_term(term: Term) -> Term {
     match term {
         Term::Var(_)
@@ -24,9 +17,7 @@ fn unbox_term(term: Term) -> Term {
         Term::MutFinal(t) => Term::MutFinal(Box::new(unbox_term(*t))),
         Term::App(fun, args) => Term::App(fun, args.into_iter().map(unbox_term).collect()),
         Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(unbox_sort(s1), unbox_sort(s2)),
-        Term::SeqConcat(s, t) => {
-            Term::SeqConcat(unbox_sort(s), Box::new(unbox_seq_concat_term(*t)))
-        }
+        Term::SeqEmpty(s) => Term::SeqEmpty(unbox_sort(s)),
         Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(unbox_term).collect()),
         Term::TupleProj(t, i) => Term::TupleProj(Box::new(unbox_term(*t)), i),
         Term::DatatypeCtor(s1, s2, args) => Term::DatatypeCtor(
@@ -88,6 +79,7 @@ fn unbox_sort(sort: Sort) -> Sort {
         Sort::Mut(inner) => Sort::Mut(Box::new(unbox_sort(*inner))),
         Sort::Tuple(sorts) => Sort::Tuple(sorts.into_iter().map(unbox_sort).collect()),
         Sort::Array(s1, s2) => Sort::Array(Box::new(unbox_sort(*s1)), Box::new(unbox_sort(*s2))),
+        Sort::Seq(elem) => Sort::seq(unbox_sort(*elem)),
         Sort::Datatype(sort) => Sort::Datatype(unbox_datatype_sort(sort)),
         Sort::Forall(i) => Sort::Forall(i),
     }

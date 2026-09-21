@@ -170,6 +170,22 @@ pub fn seq_push_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn seq_store_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_store"),
+    ]
+}
+
+pub fn seq_subsequence_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("seq_subsequence"),
+    ]
+}
+
 pub fn seq_concat_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

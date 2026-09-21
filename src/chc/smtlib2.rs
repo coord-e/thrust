@@ -172,14 +172,8 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.clause, &default)
                 )
             }
-            chc::Term::SeqConcat(elem, t) => {
-                let name = self.ctx.seq_concat(elem);
-                write!(
-                    f,
-                    "({} {})",
-                    name,
-                    List::open(t.iter_args().map(|t| Term::new(self.ctx, self.clause, t)))
-                )
+            chc::Term::SeqEmpty(elem) => {
+                write!(f, "(as seq.empty (Seq {}))", self.ctx.fmt_sort(elem))
             }
             chc::Term::Tuple(ts) => {
                 let ss: Vec<_> = ts.iter().map(|t| self.clause.term_sort(t)).collect();
@@ -732,31 +726,6 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
         }
-
-        for elem in self.ctx.int_array_elem_sorts() {
-            let name = self.ctx.seq_concat(elem);
-            let elem_ty = self.ctx.fmt_sort(elem);
-            // The sequences are passed as `(array, length)` tuples
-            let seq_fields = [
-                chc::Sort::array(chc::Sort::int(), elem.clone()),
-                chc::Sort::int(),
-            ];
-            let seq_ty = self.ctx.fmt_sort(&chc::Sort::tuple(seq_fields.to_vec()));
-            let ctor = self.ctx.tuple_ctor(&seq_fields);
-            let array = self.ctx.tuple_proj(&seq_fields, 0);
-            let len = self.ctx.tuple_proj(&seq_fields, 1);
-            writeln!(
-                f,
-                "(define-fun-rec {name} \
-                  ((s {seq_ty}) (t {seq_ty})) \
-                  (Array Int {elem_ty}) \
-                  (ite (<= ({len} t) 0) ({array} s) \
-                       (store ({name} s ({ctor} ({array} t) (- ({len} t) 1))) \
-                              (+ ({len} s) (- ({len} t) 1)) \
-                              (select ({array} t) (- ({len} t) 1)))))\n",
-            )?;
-        }
-        writeln!(f)?;
 
         for pred in &self.inner.forall_pred_vars {
             writeln!(f, "{}\n", ForallPredDef::new(&self.ctx, pred))?;

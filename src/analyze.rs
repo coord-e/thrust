@@ -86,13 +86,12 @@ pub fn function_param_of_local(local: Local) -> rty::FunctionParamIdx {
     rty::FunctionParamIdx::from(local.as_usize() - 1)
 }
 
-pub fn resolve_discr(tcx: TyCtxt<'_>, discr: mir_ty::VariantDiscr) -> u32 {
-    match discr {
-        mir_ty::VariantDiscr::Relative(i) => i,
-        mir_ty::VariantDiscr::Explicit(did) => {
-            let val = tcx.const_eval_poly(did).unwrap();
-            val.try_to_scalar_int().unwrap().to_u32()
-        }
+fn discr_value<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::util::Discr<'tcx>) -> i64 {
+    let (size, signed) = discr.ty.int_size_and_signed(tcx);
+    if signed {
+        size.sign_extend(discr.val).try_into().unwrap()
+    } else {
+        discr.val.try_into().unwrap()
     }
 }
 
@@ -381,9 +380,9 @@ impl<'tcx> Analyzer<'tcx> {
         let variants: IndexVec<_, _> = adt
             .variants()
             .iter()
-            .map(|variant| {
-                // TODO: consider using TyCtxt::tag_for_variant
-                let discr = resolve_discr(self.tcx, variant.discr);
+            .zip(adt.discriminants(self.tcx))
+            .map(|(variant, (_, discr))| {
+                let discr = discr_value(self.tcx, discr);
                 let field_tys = variant
                     .fields
                     .iter()

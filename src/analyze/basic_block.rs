@@ -550,29 +550,19 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             Rvalue::Aggregate(kind, fields) => {
                 match *kind {
                     mir::AggregateKind::Array(mir_elem_ty) => {
-                        // Build Seq<T> = (Box<Array<Int,T>>, Box<Int>) from array literal elements,
-                        // pinning each element at its index via store folds.
-                        //
                         // TODO: Stop embedding knowledge of `<[T; N] as Model>::Ty` in the analyzer
                         let mut builder = PlaceTypeBuilder::default();
                         let elem_ty = self.type_builder.build(mir_elem_ty).vacuous();
-                        let mut arr_term =
-                            chc::Term::array_empty(chc::Sort::int(), elem_ty.to_sort());
-                        for (i, field) in fields.iter().enumerate() {
+                        let mut seq = chc::Term::seq_empty(elem_ty.to_sort());
+                        for field in fields.iter() {
                             let pty = self.operand_type(field.clone());
                             let (_, elem_term) = builder.subsume(pty);
-                            arr_term = arr_term.store(chc::Term::int(i as i64), elem_term);
+                            seq = seq.seq_concat(elem_term.seq_unit());
                         }
-                        let arr_pty = builder.build(
-                            rty::ArrayType::new(rty::Type::int(), elem_ty).into(),
-                            arr_term,
-                        );
-                        let size = fields.len();
-                        let size_pty = PlaceType::with_ty_and_term(
-                            rty::Type::int(),
-                            chc::Term::int(size as i64),
-                        );
-                        PlaceType::tuple(vec![arr_pty.boxed(), size_pty.boxed()])
+                        builder.build(
+                            rty::Type::Seq(Box::new(rty::RefinedType::unrefined(elem_ty))),
+                            seq,
+                        )
                     }
                     mir::AggregateKind::Adt(did, variant_idx, args, _, _)
                         if self.tcx.def_kind(did) == DefKind::Enum =>

@@ -66,6 +66,45 @@ safe
 
 Integration test examples are located under `tests/ui/` and can be executed using `cargo test`. You can review these examples to understand what the current Thrust implementation can handle.
 
+### Using Thrust with Cargo
+
+Thrust can check Cargo projects that have no dependencies. External crates are not supported yet (#255).
+
+First, build Thrust in its source directory:
+
+```sh
+cargo build --bin thrust-rustc
+```
+
+Set up a project using the same Rust toolchain as Thrust (currently `nightly-2025-09-08`):
+
+```sh
+cargo +nightly-2025-09-08 new --edition 2021 thrust-example
+cd thrust-example
+```
+
+Add assertions to your code. For example, write the following in `src/main.rs`:
+
+```rust
+fn add(x: i64, y: i64) -> i64 {
+    x + y
+}
+
+fn main() {
+    assert!(add(1, 2) == 3);
+}
+```
+
+With Z3 on your `PATH`, set `RUSTC` to the absolute path of the built `thrust-rustc` binary and run:
+
+```sh
+RUSTC=/absolute/path/to/thrust/target/debug/thrust-rustc \
+RUSTFLAGS='-C debug-assertions=false' \
+cargo +nightly-2025-09-08 check
+```
+
+For the example above, the check succeeds. Changing the assertion to `add(1, 2) == 2` makes it fail with `verification error: Unsat` and a nonzero exit status.
+
 ## Annotation
 
 Thrust can verify a wide range of programs without explicit annotations, but you can use `#[thrust_macros::requires(expr)]` and `#[thrust_macros::ensures(expr)]` to annotate the precondition and postcondition of a function, aiding in verification or specifying the intended behavior. Here, `expr` is an ordinary Rust expression that Thrust interprets as a logical formula. It supports the usual integer, boolean, and comparison operators, calls to functions declared with `#[thrust_macros::predicate]`, and the model operations described below.
@@ -143,6 +182,10 @@ Several environment variables are used by Thrust to configure its behavior:
 - `THRUST_OUTPUT_DIR`: When configured, Thrust outputs intermediate smtlib2 files into this directory.
 - `THRUST_ENUM_EXPANSION_DEPTH_LIMIT`: When Thrust works with enums, it "expands" the structure of the enum value onto its environment. This configuration value sets the limit on the depth of recursion during this expansion to handle enums that are defined recursively. It is our future work to discover a sensible value for this automatically. Default: `2`
 
+### PCSat
+
+Thrust is developed alongside [CoAR](https://github.com/hiroshi-unno/coar), which provides the PCSat solver. Some Thrust features require PCSat. Set `THRUST_SOLVER=tests/thrust-pcsat-wrapper` to use PCSat through Docker.
+
 ## Development
 
 The implementation of the Thrust is largely divided into the following modules.
@@ -159,6 +202,10 @@ The implementation generates subtyping constraints in the form of CHCs (`chc::Sy
 ## Publication
 
 Hiromi Ogawa, Taro Sekiyama, and Hiroshi Unno. Thrust: A Prophecy-based Refinement Type System for Rust. PLDI 2025.
+
+## Acknowledgments
+
+This work is supported by JSPS KAKENHI Grant Number [25K24739](https://kaken.nii.ac.jp/en/grant/KAKENHI-PROJECT-25K24739/).
 
 ## License
 

@@ -155,6 +155,7 @@ pub enum Sort {
     Mut(Box<Sort>),
     Tuple(Vec<Sort>),
     Array(Box<Sort>, Box<Sort>),
+    Seq(Box<Sort>),
     Datatype(DatatypeSort),
     Forall(ForallSortIdx),
 }
@@ -213,6 +214,9 @@ where
                     )
                 }
             }
+            Sort::Seq(elem) => allocator
+                .text("Seq")
+                .append(elem.pretty(allocator).angles()),
             Sort::Datatype(sort) => sort.pretty(allocator),
             Sort::Forall(idx) => idx.pretty(allocator),
         }
@@ -247,7 +251,7 @@ impl Sort {
             | Sort::String
             | Sort::Param(_)
             | Sort::Forall(_) => {}
-            Sort::Box(s) | Sort::Mut(s) => s.walk(Box::new(&mut f)),
+            Sort::Box(s) | Sort::Mut(s) | Sort::Seq(s) => s.walk(Box::new(&mut f)),
             Sort::Tuple(ss) => {
                 for s in ss {
                     s.walk(Box::new(&mut f));
@@ -323,6 +327,10 @@ impl Sort {
         Sort::Array(Box::new(from), Box::new(to))
     }
 
+    pub fn seq(elem: Sort) -> Self {
+        Sort::Seq(Box::new(elem))
+    }
+
     pub fn datatype(symbol: DatatypeSymbol, args: Vec<Sort>) -> Self {
         Sort::Datatype(DatatypeSort { symbol, args })
     }
@@ -369,6 +377,7 @@ impl Sort {
             }
             Sort::Box(s) => s.instantiate_params(args, forall_sort_resolver),
             Sort::Mut(s) => s.instantiate_params(args, forall_sort_resolver),
+            Sort::Seq(s) => s.instantiate_params(args, forall_sort_resolver),
             Sort::Tuple(ss) => {
                 for s in ss {
                     s.instantiate_params(args, forall_sort_resolver);
@@ -485,7 +494,17 @@ impl Function {
             Self::OR => Sort::bool(),
             Self::NOT => Sort::bool(),
             Self::NEG => Sort::int(),
-            Self::STORE => args.into_iter().next().unwrap(),
+            Self::STORE | Self::SEQ_CONCAT | Self::SEQ_EXTRACT | Self::SEQ_STORE => {
+                args.into_iter().next().unwrap()
+            }
+            Self::SEQ_LEN => Sort::int(),
+            Self::SEQ_UNIT => Sort::seq(args.into_iter().next().unwrap()),
+            Self::SEQ_NTH => {
+                let Sort::Seq(elem) = args.into_iter().next().unwrap() else {
+                    panic!("invalid SEQ_NTH sort");
+                };
+                *elem
+            }
             Self::SELECT => {
                 let Sort::Array(_, elem) = args.into_iter().next().unwrap() else {
                     panic!("invalid SELECT sort");
@@ -511,51 +530,13 @@ impl Function {
     pub const NEG: Function = Function::new("-");
     pub const STORE: Function = Function::new("store");
     pub const SELECT: Function = Function::new("select");
+    pub const SEQ_CONCAT: Function = Function::new("seq.++");
+    pub const SEQ_EXTRACT: Function = Function::new("seq.extract");
+    pub const SEQ_LEN: Function = Function::new("seq.len");
+    pub const SEQ_UNIT: Function = Function::new("seq.unit");
+    pub const SEQ_NTH: Function = Function::new("seq.nth");
+    pub const SEQ_STORE: Function = Function::new("seq.store");
     pub const ITE: Function = Function::new("ite");
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SeqConcatTerm<V = TermVarIdx> {
-    pub seq1: Term<V>,
-    pub seq2: Term<V>,
-}
-
-impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &SeqConcatTerm<V>
-where
-    V: Var,
-    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
-    D::Doc: Clone,
-{
-    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        allocator
-            .text("concat")
-            .append(allocator.line())
-            .append(self.seq1.pretty_atom(allocator))
-            .append(allocator.text(","))
-            .append(allocator.line())
-            .append(self.seq2.pretty_atom(allocator))
-            .parens()
-    }
-}
-
-impl<V> SeqConcatTerm<V> {
-    pub fn iter_args(&self) -> impl Iterator<Item = &Term<V>> {
-        std::iter::once(&self.seq1).chain(std::iter::once(&self.seq2))
-    }
-
-    pub fn iter_args_mut(&mut self) -> impl Iterator<Item = &mut Term<V>> {
-        std::iter::once(&mut self.seq1).chain(std::iter::once(&mut self.seq2))
-    }
-
-    pub fn subst_var<F, W>(self, mut f: F) -> SeqConcatTerm<W>
-    where
-        F: FnMut(V) -> Term<W>,
-    {
-        SeqConcatTerm {
-            seq1: self.seq1.subst_var(&mut f),
-            seq2: self.seq2.subst_var(f),
-        }
-    }
 }
 
 /// A logical term.
@@ -574,7 +555,7 @@ pub enum Term<V = TermVarIdx> {
     MutFinal(Box<Term<V>>),
     App(Function, Vec<Term<V>>),
     ArrayEmpty(Sort, Sort),
-    SeqConcat(Sort, Box<SeqConcatTerm<V>>),
+    SeqEmpty(Sort),
     Tuple(Vec<Term<V>>),
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
@@ -628,7 +609,7 @@ where
                 }
             }
             Term::ArrayEmpty(_, _) => allocator.text("[]"),
-            Term::SeqConcat(_, t) => t.pretty(allocator),
+            Term::SeqEmpty(_) => allocator.text("seq.empty"),
             Term::Tuple(ts) => {
                 let separator = allocator.text(",").append(allocator.line());
                 if ts.len() == 1 {
@@ -694,7 +675,7 @@ impl<V> Term<V> {
                 Term::App(fun, args.into_iter().map(|t| t.subst_var(&mut f)).collect())
             }
             Term::ArrayEmpty(s1, s2) => Term::ArrayEmpty(s1, s2),
-            Term::SeqConcat(s, t) => Term::SeqConcat(s, Box::new(t.subst_var(f))),
+            Term::SeqEmpty(s) => Term::SeqEmpty(s),
             Term::Tuple(ts) => Term::Tuple(ts.into_iter().map(|t| t.subst_var(&mut f)).collect()),
             Term::TupleProj(t, i) => Term::TupleProj(Box::new(t.subst_var(f)), i),
             Term::DatatypeCtor(sort, c_sym, args) => Term::DatatypeCtor(
@@ -743,7 +724,7 @@ impl<V> Term<V> {
                 fun.sort(args.iter().map(|t| t.sort(&mut var_sort)))
             }
             Term::ArrayEmpty(index, elem) => Sort::array(index.clone(), elem.clone()),
-            Term::SeqConcat(elem, _) => Sort::array(Sort::int(), elem.clone()),
+            Term::SeqEmpty(elem) => Sort::seq(elem.clone()),
             Term::Tuple(ts) => {
                 // TODO: remove this
                 let mut var_sort: Box<dyn FnMut(&V) -> Sort> = Box::new(var_sort);
@@ -772,7 +753,7 @@ impl<V> Term<V> {
             Term::MutCurrent(t) => t.fv_impl(),
             Term::MutFinal(t) => t.fv_impl(),
             Term::App(_, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
-            Term::SeqConcat(_, t) => Box::new(t.iter_args().flat_map(|t| t.fv_impl())),
+            Term::SeqEmpty(_) => Box::new(std::iter::empty()),
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
@@ -821,6 +802,7 @@ impl<V> Term<V> {
             ),
             Sort::Tuple(ts) => Term::Tuple(ts.iter().map(Self::default_for).collect()),
             Sort::Array(i, e) => Term::ArrayEmpty((**i).clone(), (**e).clone()),
+            Sort::Seq(elem) => Term::SeqEmpty((**elem).clone()),
             // TODO: defaults for Datatype and Param.
             Sort::Datatype(_) | Sort::Param(_) => {
                 unimplemented!("no default value for sort {sort:?}")
@@ -840,8 +822,32 @@ impl<V> Term<V> {
         Term::ArrayEmpty(index, elem)
     }
 
-    pub fn seq_concat(elem_sort: Sort, seq1: Term<V>, seq2: Term<V>) -> Self {
-        Term::SeqConcat(elem_sort, Box::new(SeqConcatTerm { seq1, seq2 }))
+    pub fn seq_empty(elem: Sort) -> Self {
+        Term::SeqEmpty(elem)
+    }
+
+    pub fn seq_unit(self) -> Self {
+        Term::App(Function::SEQ_UNIT, vec![self])
+    }
+
+    pub fn seq_concat(self, other: Self) -> Self {
+        Term::App(Function::SEQ_CONCAT, vec![self, other])
+    }
+
+    pub fn seq_extract(self, start: Self, length: Self) -> Self {
+        Term::App(Function::SEQ_EXTRACT, vec![self, start, length])
+    }
+
+    pub fn seq_len(self) -> Self {
+        Term::App(Function::SEQ_LEN, vec![self])
+    }
+
+    pub fn seq_nth(self, index: Self) -> Self {
+        Term::App(Function::SEQ_NTH, vec![self, index])
+    }
+
+    pub fn seq_store(self, index: Self, elem: Self) -> Self {
+        Term::App(Function::SEQ_STORE, vec![self, index, elem])
     }
 
     pub fn boxed(self) -> Self {
@@ -946,23 +952,6 @@ impl<V> Term<V> {
                     index,
                 ],
             );
-        }
-        // Peephole 2: inline one step of the `seq_concat` recursive definitions to reduce
-        // indexed access to terms over the underlying sequences. The SMT-defined functions are
-        // still emitted (so the rewrites use exactly their unfolded form), but pcsat can prove
-        // indexed properties against the inlined ITE for *any* recursion bound, where unfolding
-        // through `define-fun-rec` would require an inductive invariant pcsat can't find.
-        //
-        // `select(seq_concat(s, t), i)
-        //   ↦ ite(i < len(s), select(array(s), i), select(array(t), i - len(s)))`
-        // where `s`/`t` are `(array, length)` tuples.
-        if let Term::SeqConcat(_, t) = self {
-            let SeqConcatTerm { seq1, seq2 } = *t;
-            let len1 = seq1.clone().tuple_proj(1);
-            let cond = index.clone().lt(len1.clone());
-            let then_ = seq1.tuple_proj(0).select(index.clone());
-            let else_ = seq2.tuple_proj(0).select(index.sub(len1));
-            return Term::ite(cond, then_, else_);
         }
         Term::App(Function::SELECT, vec![self, index])
     }
@@ -2122,7 +2111,7 @@ pub struct DatatypeSelector {
 pub struct DatatypeCtor {
     pub symbol: DatatypeSymbol,
     pub selectors: Vec<DatatypeSelector>,
-    pub discriminant: u32,
+    pub discriminant: i64,
 }
 
 /// A datatype definition.

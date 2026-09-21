@@ -21,7 +21,6 @@ use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 pub struct FormatContext {
     renamer: HoiceDatatypeRenamer,
     datatypes: Vec<chc::Datatype>,
-    int_array_elem_sorts: BTreeSet<chc::Sort>,
 }
 
 // FIXME: this is obviously ineffective and should be replaced
@@ -50,11 +49,7 @@ fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sor
         // The writer synthesises `default_for(elem)` for an empty array at print time, so the
         // sorts that term mentions have to be declared even though no clause spells it out.
         chc::Term::ArrayEmpty(_, elem) => term_sorts(clause, &chc::Term::default_for(elem), sorts),
-        chc::Term::SeqConcat(_, t) => {
-            for arg in t.iter_args() {
-                term_sorts(clause, arg, sorts);
-            }
-        }
+        chc::Term::SeqEmpty(_) => {}
         chc::Term::Tuple(ts) => {
             for t in ts {
                 term_sorts(clause, t, sorts);
@@ -92,6 +87,7 @@ impl<'a> std::fmt::Display for SortSymbol<'a> {
             chc::Sort::Param(i) => write!(f, "T{}", i),
             chc::Sort::Box(s) => write!(f, "Box{}", SortSymbol::new(s).sorts()),
             chc::Sort::Mut(s) => write!(f, "Mut{}", SortSymbol::new(s).sorts()),
+            chc::Sort::Seq(elem) => write!(f, "Seq{}", SortSymbol::new(elem).sorts()),
             chc::Sort::Tuple(ss) => write!(f, "Tuple{}", SortSymbols::new(ss)),
             chc::Sort::Array(s1, s2) => {
                 write!(f, "Array{}", SortSymbols::new(&[*s1.clone(), *s2.clone()]))
@@ -335,21 +331,6 @@ impl FormatContext {
             }
         }
 
-        let int_array_elem_sorts: BTreeSet<_> = sorts
-            .iter()
-            .filter_map(|s| match s {
-                chc::Sort::Array(index, elem) if **index == chc::Sort::int() => Some(*elem.clone()),
-                _ => None,
-            })
-            .collect();
-        // The `seq_concat` definitions operate on `(array, length)` sequence tuples, so
-        // make sure that tuple datatype is declared for every element sort we emit one for
-        for elem in &int_array_elem_sorts {
-            sorts.insert(chc::Sort::tuple(vec![
-                chc::Sort::array(chc::Sort::int(), elem.clone()),
-                chc::Sort::int(),
-            ]));
-        }
         let datatypes: Vec<_> = sorts
             .into_iter()
             .flat_map(builtin_sort_datatype)
@@ -357,19 +338,11 @@ impl FormatContext {
             .filter(|d| d.params == 0)
             .collect();
         let renamer = HoiceDatatypeRenamer::new(&datatypes);
-        FormatContext {
-            renamer,
-            datatypes,
-            int_array_elem_sorts,
-        }
+        FormatContext { renamer, datatypes }
     }
 
     pub fn datatypes(&self) -> &[chc::Datatype] {
         &self.datatypes
-    }
-
-    pub fn int_array_elem_sorts(&self) -> &BTreeSet<chc::Sort> {
-        &self.int_array_elem_sorts
     }
 
     pub fn box_ctor(&self, sort: &chc::Sort) -> impl std::fmt::Display {
@@ -440,13 +413,9 @@ impl FormatContext {
         format_forall_pred_name(p)
     }
 
-    pub fn seq_concat(&self, elem: &chc::Sort) -> impl std::fmt::Display {
-        let elem = SortSymbol::new(elem);
-        format!("seq_concat<{}>", elem)
-    }
-
     fn fmt_sort_impl(&self, sort: &chc::Sort) -> Box<dyn std::fmt::Display> {
         match sort {
+            chc::Sort::Seq(elem) => Box::new(format!("(Seq {})", self.fmt_sort(elem))),
             chc::Sort::Array(s1, s2) => {
                 let s1 = self.fmt_sort(s1);
                 let s2 = self.fmt_sort(s2);

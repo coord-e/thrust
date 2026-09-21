@@ -360,6 +360,13 @@ impl<'tcx> TypeBuilder<'tcx> {
             return Some(rty::PointerType::own(elem_ty).into());
         }
 
+        if Some(adt.did()) == self.def_ids.seq_model() {
+            let elem_ty = self.build(args.type_at(0));
+            return Some(rty::Type::Seq(Box::new(rty::RefinedType::unrefined(
+                elem_ty,
+            ))));
+        }
+
         if Some(adt.did()) == self.def_ids.array_model() {
             let idx_ty = self.build(args.type_at(0));
             let elem_ty = self.build(args.type_at(1));
@@ -793,6 +800,13 @@ where
         if Some(adt.did()) == self.inner.def_ids.box_model() {
             let elem_ty = self.build(args.type_at(0));
             return Some(rty::PointerType::own(elem_ty).into());
+        }
+
+        if Some(adt.did()) == self.inner.def_ids.seq_model() {
+            let elem_ty = self.build(args.type_at(0));
+            return Some(rty::Type::Seq(Box::new(rty::RefinedType::unrefined(
+                elem_ty,
+            ))));
         }
 
         if Some(adt.did()) == self.inner.def_ids.array_model() {
