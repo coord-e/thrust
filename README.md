@@ -143,6 +143,10 @@ Several environment variables are used by Thrust to configure its behavior:
 - `THRUST_OUTPUT_DIR`: When configured, Thrust outputs intermediate smtlib2 files into this directory.
 - `THRUST_ENUM_EXPANSION_DEPTH_LIMIT`: When Thrust works with enums, it "expands" the structure of the enum value onto its environment. This configuration value sets the limit on the depth of recursion during this expansion to handle enums that are defined recursively. It is our future work to discover a sensible value for this automatically. Default: `2`
 
+### PCSat
+
+Thrust is developed alongside [CoAR](https://github.com/hiroshi-unno/coar), which provides the PCSat solver. Some Thrust features require PCSat. Set `THRUST_SOLVER=tests/thrust-pcsat-wrapper` to use PCSat through Docker.
+
 ## Development
 
 The implementation of the Thrust is largely divided into the following modules.
@@ -159,6 +163,10 @@ The implementation generates subtyping constraints in the form of CHCs (`chc::Sy
 ## Publication
 
 Hiromi Ogawa, Taro Sekiyama, and Hiroshi Unno. Thrust: A Prophecy-based Refinement Type System for Rust. PLDI 2025.
+
+## Acknowledgments
+
+This work is supported by JSPS KAKENHI Grant Number [25K24739](https://kaken.nii.ac.jp/en/grant/KAKENHI-PROJECT-25K24739/).
 
 ## License
 
