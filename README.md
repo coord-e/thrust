@@ -66,6 +66,45 @@ safe
 
 Integration test examples are located under `tests/ui/` and can be executed using `cargo test`. You can review these examples to understand what the current Thrust implementation can handle.
 
+### Using Thrust with Cargo
+
+Thrust can check Cargo projects that have no dependencies. External crates are not supported yet (#255).
+
+First, build Thrust in its source directory:
+
+```sh
+cargo build --bin thrust-rustc
+```
+
+Set up a project using the same Rust toolchain as Thrust (currently `nightly-2025-09-08`):
+
+```sh
+cargo +nightly-2025-09-08 new --edition 2021 thrust-example
+cd thrust-example
+```
+
+Add assertions to your code. For example, write the following in `src/main.rs`:
+
+```rust
+fn add(x: i64, y: i64) -> i64 {
+    x + y
+}
+
+fn main() {
+    assert!(add(1, 2) == 3);
+}
+```
+
+With Z3 on your `PATH`, set `RUSTC` to the absolute path of the built `thrust-rustc` binary and run:
+
+```sh
+RUSTC=/absolute/path/to/thrust/target/debug/thrust-rustc \
+RUSTFLAGS='-C debug-assertions=false' \
+cargo +nightly-2025-09-08 check
+```
+
+For the example above, the check succeeds. Changing the assertion to `add(1, 2) == 2` makes it fail with `verification error: Unsat` and a nonzero exit status.
+
 ## Annotation
 
 Thrust can verify a wide range of programs without explicit annotations, but you can use `#[thrust_macros::requires(expr)]` and `#[thrust_macros::ensures(expr)]` to annotate the precondition and postcondition of a function, aiding in verification or specifying the intended behavior. Here, `expr` is an ordinary Rust expression that Thrust interprets as a logical formula. It supports the usual integer, boolean, and comparison operators, calls to functions declared with `#[thrust_macros::predicate]`, and the model operations described below.
