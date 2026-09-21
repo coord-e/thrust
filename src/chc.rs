@@ -2462,11 +2462,6 @@ fn collect_forall_defaults(term: &Term<TermVarIdx>, used: &mut HashSet<ForallSor
                 collect_forall_defaults(t, used);
             }
         }
-        Term::SeqConcat(_, t) => {
-            for arg in t.iter_args() {
-                collect_forall_defaults(arg, used);
-            }
-        }
         Term::Tuple(ts) => {
             for t in ts {
                 collect_forall_defaults(t, used);
@@ -2477,6 +2472,7 @@ fn collect_forall_defaults(term: &Term<TermVarIdx>, used: &mut HashSet<ForallSor
         // writer synthesises `default_for(elem)` for it at print time, so ask the
         // same function which defaults that will reference.
         Term::ArrayEmpty(_, elem) => collect_forall_defaults(&Term::default_for(elem), used),
+        Term::SeqEmpty(_) => {}
         Term::DatatypeCtor(_, _, args) => {
             for t in args {
                 collect_forall_defaults(t, used);
