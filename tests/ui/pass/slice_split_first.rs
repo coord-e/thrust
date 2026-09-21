@@ -15,7 +15,8 @@ fn slice() -> &'static [i32] {
 
 fn main() {
     let slice = slice();
-    assert!(slice.len() == 2);
-    assert!(slice[0] == 10);
-    assert!(slice[1] == 20);
+    let (boundary, rest) = slice.split_first().unwrap();
+    assert!(*boundary == 10);
+    assert!(rest.len() == 1);
+    assert!(*rest.first().unwrap() == 20);
 }

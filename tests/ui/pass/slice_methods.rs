@@ -1,14 +1,15 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(
-    (*result).length == 4
-        && (*result).array[0] == 10
-        && (*result).array[1] == 20
-        && (*result).array[2] == 30
-        && (*result).array[3] == 40
+    (*result).len() == 4
+        && (*result)[0] == 10
+        && (*result)[1] == 20
+        && (*result)[2] == 30
+        && (*result)[3] == 40
 )]
 fn slice() -> &'static [i32] {
     unimplemented!()

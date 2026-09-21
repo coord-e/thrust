@@ -936,6 +936,7 @@ pub enum Type<T> {
     Function(FunctionType),
     Tuple(TupleType<T>),
     Array(ArrayType<T>),
+    Seq(Box<RefinedType<T>>),
     Enum(EnumType<T>),
 }
 
@@ -992,6 +993,9 @@ where
             Type::Function(ty) => ty.pretty(allocator),
             Type::Tuple(ty) => ty.pretty(allocator),
             Type::Array(ty) => ty.pretty(allocator),
+            Type::Seq(elem) => allocator
+                .text("Seq")
+                .append(elem.pretty(allocator).angles()),
             Type::Enum(ty) => ty.pretty(allocator),
         }
     }
@@ -1136,6 +1140,7 @@ impl<T> Type<T> {
                 let elem_sorts = ty.elems.iter().map(|ty| ty.ty.to_sort()).collect();
                 chc::Sort::tuple(elem_sorts)
             }
+            Type::Seq(elem) => chc::Sort::seq(elem.ty.to_sort()),
             Type::Array(ty) => {
                 let index_sort = ty.index.ty.to_sort();
                 let elem_sort = ty.elem.ty.to_sort();
@@ -1162,6 +1167,7 @@ impl<T> Type<T> {
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.subst_var(f)),
             Type::Array(ty) => Type::Array(ty.subst_var(f)),
+            Type::Seq(elem) => Type::Seq(Box::new(elem.subst_var(f))),
             Type::Enum(ty) => Type::Enum(ty.subst_var(f)),
         }
     }
@@ -1180,6 +1186,7 @@ impl<T> Type<T> {
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.map_var(f)),
             Type::Array(ty) => Type::Array(ty.map_var(f)),
+            Type::Seq(elem) => Type::Seq(Box::new(elem.map_var(f))),
             Type::Enum(ty) => Type::Enum(ty.map_var(f)),
         }
     }
@@ -1199,6 +1206,7 @@ impl<T> Type<T> {
             Type::Function(ty) => Type::Function(ty),
             Type::Tuple(ty) => Type::Tuple(ty.strip_refinement()),
             Type::Array(ty) => Type::Array(ty.strip_refinement()),
+            Type::Seq(elem) => Type::Seq(Box::new(RefinedType::unrefined(elem.strip_refinement()))),
             Type::Enum(ty) => Type::Enum(ty.strip_refinement()),
         }
     }
@@ -1211,6 +1219,7 @@ impl<T> Type<T> {
             Type::Function(ty) => ty.free_ty_params(),
             Type::Tuple(ty) => ty.free_ty_params(),
             Type::Array(ty) => ty.free_ty_params(),
+            Type::Seq(elem) => elem.free_ty_params(),
             Type::Enum(ty) => ty.free_ty_params(),
         }
     }
@@ -1833,6 +1842,7 @@ impl<FV> RefinedType<FV> {
             }
             Type::Tuple(ty) => ty.subst_ty_params(subst),
             Type::Array(ty) => ty.subst_ty_params(subst),
+            Type::Seq(elem) => elem.subst_ty_params(subst),
             Type::Enum(ty) => ty.subst_ty_params(subst),
         }
     }
@@ -1872,6 +1882,7 @@ impl<FV> RefinedType<FV> {
             }
             (Type::Tuple(ty1), Type::Tuple(ty2)) => ty1.unify_ty_params(ty2),
             (Type::Array(ty1), Type::Array(ty2)) => ty1.unify_ty_params(ty2),
+            (Type::Seq(elem1), Type::Seq(elem2)) => elem1.unify_ty_params(*elem2),
             (Type::Enum(ty1), Type::Enum(ty2)) => ty1.unify_ty_params(ty2),
             (t1, t2) => panic!("unify_ty_params: mismatched types t1={:?}, t2={:?}", t1, t2),
         }
@@ -1894,7 +1905,7 @@ fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
                 *sort = rty.ty.to_sort();
             }
         }
-        chc::Sort::Box(s) | chc::Sort::Mut(s) => {
+        chc::Sort::Box(s) | chc::Sort::Mut(s) | chc::Sort::Seq(s) => {
             subst_ty_params_in_sort(s, subst);
         }
         chc::Sort::Tuple(sorts) => {
@@ -1990,12 +2001,7 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
             subst_ty_params_in_sort(s1, subst);
             subst_ty_params_in_sort(s2, subst);
         }
-        chc::Term::SeqConcat(sort, t) => {
-            subst_ty_params_in_sort(sort, subst);
-            for arg in t.iter_args_mut() {
-                subst_ty_params_in_term(arg, subst);
-            }
-        }
+        chc::Term::SeqEmpty(sort) => subst_ty_params_in_sort(sort, subst),
         chc::Term::DatatypeCtor(s, _, args) => {
             for arg in s.args_mut() {
                 subst_ty_params_in_sort(arg, subst);

@@ -1,8 +1,9 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(result.length == v.length + 2)]
+#[thrust_macros::ensures(result.len() == v.len() + 2)]
 #[thrust_macros::context]
 fn push_two(v: Vec<i64>) -> Vec<i64> {
     let mut w = v;
@@ -10,7 +11,7 @@ fn push_two(v: Vec<i64>) -> Vec<i64> {
     while i < 2 {
         thrust_macros::invariant!(
             |i: i64, w: Vec<i64>, v: thrust_models::FnParam<Vec<i64>>|
-                w.length == v.at_entry().length + i && i <= 2
+                w.len() == v.at_entry().len() + i && i <= 2
         );
         w.push(i);
         i += 1;

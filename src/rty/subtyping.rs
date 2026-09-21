@@ -138,6 +138,9 @@ where
             let cs = relate_refined_type(&builder, &got.ret, &expected.ret, relation);
             clauses.extend(cs);
         }
+        (Type::Seq(got), Type::Seq(expected)) => {
+            clauses.extend(relate_refined_type(scope, got, expected, relation));
+        }
         (Type::Array(got), Type::Array(expected)) => {
             let cs1 = relate_refined_type(scope, &got.index, &expected.index, relation);
             clauses.extend(cs1);
