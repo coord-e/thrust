@@ -6,17 +6,15 @@ use rustc_index::IndexVec;
 use crate::pretty::PrettyDisplayExt as _;
 
 mod clause_builder;
-mod debug;
+pub mod debug;
 mod format_context;
 mod hoice;
-mod origin;
 mod smtlib2;
 mod solver;
 mod unbox;
 
 pub use clause_builder::{ClauseBuilder, Var};
 pub use debug::DebugInfo;
-pub use origin::{ClauseOrigin, EnvironmentBinding, RefinementOrigin, RefinementSource, VarOrigin};
 pub use solver::{CheckSatError, Config};
 pub use unbox::unbox;
 
@@ -1870,7 +1868,7 @@ where
 /// atoms and underlying logical formula, and `head` is an atom.
 #[derive(Debug, Clone)]
 pub struct Clause {
-    pub origin: ClauseOrigin,
+    pub origin: debug::origin::ClauseOrigin,
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
     pub body: Body<TermVarIdx>,

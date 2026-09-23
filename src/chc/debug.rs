@@ -5,6 +5,8 @@
 //! generated SMT-LIB2 file, which helps in tracing a clause back to its origin in the
 //! Thrust codebase.
 
+pub mod origin;
+
 #[derive(Debug, Clone)]
 pub struct Display<'a> {
     inner: &'a DebugInfo,

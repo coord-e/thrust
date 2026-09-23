@@ -11,6 +11,7 @@ use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze::{self, annot_fn::FormulaFn};
 use crate::chc;
+use crate::chc::debug::origin::Entry;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
     Assumption, BasicBlockType, BasicBlockTypeParamKind, PlaceType, PlaceTypeBuilder, PlaceTypeVar,
@@ -296,7 +297,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for (param_idx, param_rty) in got_args.iter_enumerated() {
             let param_sort = param_rty.ty.to_sort();
             if !param_sort.is_singleton() {
-                builder.add_mapped_var(param_idx, param_sort);
+                let target = builder.add_mapped_var(param_idx, param_sort.clone());
+                builder.add_environment_origin(Entry::parameter(param_idx, &param_sort, target));
             }
         }
         for ((param_idx, got_ty), expected_ty) in got_args.iter_enumerated().zip(&expected_args) {
@@ -715,8 +717,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if sort.is_singleton() {
                 continue;
             }
-            builder.add_mapped_var(param_idx, sort);
-            let tv_param_idx = builder.mapped_var(param_idx);
+            let tv_param_idx = builder.add_mapped_var(param_idx, sort.clone());
+            builder.add_environment_origin(Entry::parameter(param_idx, &sort, tv_param_idx));
             let tv_param_var = builder.mapped_var(param_var);
             builder.add_body(chc::Term::var(tv_param_idx).equal_to(chc::Term::var(tv_param_var)));
         }

@@ -7,7 +7,6 @@
 //! The output of this module is what gets passed to the external CHC solver.
 
 use crate::chc::{self, format_context::FormatContext};
-use crate::pretty::PrettyDisplayExt;
 
 /// A helper struct to display a list of items.
 #[derive(Debug, Clone)]
@@ -409,26 +408,16 @@ fn write_comment(
     Ok(())
 }
 
-impl ClauseComments<'_> {
-    fn existential_mappings(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        source: chc::RefinementSource,
-        indent: usize,
-    ) -> std::fmt::Result {
-        for (var, origin) in self.clause.origin.vars.iter_enumerated() {
-            if let chc::VarOrigin::Existential {
-                variable,
-                refinement,
-            } = origin
-            {
-                if *refinement == source {
-                    write_comment(f, indent, format_args!("{variable} -> {var}"))?;
-                }
-            }
-        }
-        Ok(())
+fn write_origin_entry(
+    f: &mut std::fmt::Formatter<'_>,
+    indent: usize,
+    entry: &chc::debug::origin::Entry,
+) -> std::fmt::Result {
+    write_comment(f, indent, entry)?;
+    for mapping in entry.mappings() {
+        write_comment(f, indent + 2, mapping)?;
     }
+    Ok(())
 }
 
 impl std::fmt::Display for ClauseComments<'_> {
@@ -437,69 +426,21 @@ impl std::fmt::Display for ClauseComments<'_> {
             writeln!(f, "{}", self.clause.debug_info.display("; "))?;
         }
         let origin = &self.clause.origin;
-        let has_environment = !origin.environment.is_empty()
-            || !origin.assumptions.is_empty()
-            || origin
-                .vars
-                .iter()
-                .any(|var| matches!(var, chc::VarOrigin::Mapped(_)));
-        if has_environment {
+        if !origin.environment.is_empty() {
             write_comment(f, 0, "Γ")?;
-        }
-        for binding in &origin.environment {
-            write_comment(
-                f,
-                2,
-                format_args!("{}: {}", binding.variable, binding.refined_type),
-            )?;
-            for (var, source) in origin.vars.iter_enumerated() {
-                if let chc::VarOrigin::Mapped(name) = source {
-                    if *name == binding.variable {
-                        write_comment(f, 4, format_args!("{name} -> {var}"))?;
-                    }
-                }
+            for entry in &origin.environment {
+                write_origin_entry(f, 2, entry)?;
             }
-            self.existential_mappings(
-                f,
-                chc::RefinementSource::Environment(binding.variable.clone()),
-                4,
-            )?;
-        }
-        for (var, source) in origin.vars.iter_enumerated() {
-            if let chc::VarOrigin::Mapped(name) = source {
-                if !origin
-                    .environment
-                    .iter()
-                    .any(|binding| binding.variable == *name)
-                {
-                    write_comment(
-                        f,
-                        2,
-                        format_args!("{name}: {}", self.clause.vars[var].display()),
-                    )?;
-                    write_comment(f, 4, format_args!("{name} -> {var}"))?;
-                }
-            }
-        }
-        for (index, assumption) in origin.assumptions.iter().enumerate() {
-            write_comment(f, 2, format_args!("_: {{ {assumption} }}"))?;
-            self.existential_mappings(f, chc::RefinementSource::Assumption(index), 4)?;
         }
         if !origin.body.is_empty() {
             write_comment(f, 0, "body:")?;
-        }
-        for (index, body) in origin.body.iter().enumerate() {
-            write_comment(f, 2, &body.formula)?;
-            if let Some(var) = body.value_var {
-                write_comment(f, 4, format_args!("ν -> {var}"))?;
+            for entry in &origin.body {
+                write_origin_entry(f, 2, entry)?;
             }
-            self.existential_mappings(f, chc::RefinementSource::Body(index), 4)?;
         }
-        if let Some(head) = &origin.head {
-            write_comment(f, 0, format_args!("head: {}", head.formula))?;
-            if let Some(var) = head.value_var {
-                write_comment(f, 2, format_args!("ν -> {var}"))?;
-            }
+        write_comment(f, 0, format_args!("head: {}", origin.head))?;
+        for mapping in origin.head.mappings() {
+            write_comment(f, 2, mapping)?;
         }
         Ok(())
     }

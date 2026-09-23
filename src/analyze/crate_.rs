@@ -8,6 +8,7 @@ use rustc_span::def_id::LocalDefId;
 
 use crate::analyze;
 use crate::chc;
+use crate::chc::debug::origin::Entry;
 use crate::rty::{self, ClauseBuilderExt as _};
 
 /// An implementation of local crate analysis.
@@ -255,7 +256,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             for (param_idx, param_ty) in entry_ty.params.iter_enumerated() {
                 let param_sort = param_ty.ty.to_sort();
                 if !param_sort.is_singleton() {
-                    builder.add_mapped_var(param_idx, param_sort);
+                    let target = builder.add_mapped_var(param_idx, param_sort.clone());
+                    builder.add_environment_origin(Entry::parameter(
+                        param_idx,
+                        &param_sort,
+                        target,
+                    ));
                 }
             }
             builder.add_body(chc::Atom::top());

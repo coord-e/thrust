@@ -6,6 +6,7 @@ use rustc_index::IndexVec;
 use rustc_middle::mir::{Local, Place, PlaceElem};
 
 use crate::chc;
+use crate::chc::debug::origin::Entry;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine;
 use crate::rty::{self, ShiftExistential as _};
@@ -546,11 +547,9 @@ where
             builder.add_mapped_var(v, sort);
         }
         for (var, rty) in self.bindings() {
-            builder.origin.environment.push(chc::EnvironmentBinding {
-                variable: var.to_string(),
-                refined_type: rty.display().to_string(),
-            });
+            let mut origin = Entry::binding(var, rty, builder.find_mapped_var(var));
             if !rty.is_refined() {
+                builder.add_environment_origin(origin);
                 continue;
             }
             let mut instantiator = rty
@@ -559,13 +558,8 @@ where
                 .map_free_var(|v| builder.mapped_var(v))
                 .instantiate();
             for (ev, sort) in rty.refinement.existentials() {
-                let tv = builder.add_var(
-                    sort.clone(),
-                    chc::VarOrigin::Existential {
-                        variable: ev.to_string(),
-                        refinement: chc::RefinementSource::Environment(var.to_string()),
-                    },
-                );
+                let tv = builder.add_var(sort.clone());
+                origin.map_existential(ev, tv);
                 instantiator.existential(ev, tv);
             }
             if !rty.ty.to_sort().is_singleton() {
@@ -576,21 +570,14 @@ where
                 builder.add_body(atom);
             }
             builder.add_body(formula);
+            builder.add_environment_origin(origin);
         }
-        for (index, assumption) in self.assumptions.iter().enumerate() {
-            builder
-                .origin
-                .assumptions
-                .push(assumption.display().to_string());
+        for assumption in &self.assumptions {
+            let mut origin = Entry::assumption(assumption);
             let mut evs = HashMap::new();
             for (ev, sort) in assumption.existentials.iter_enumerated() {
-                let tv = builder.add_var(
-                    sort.clone(),
-                    chc::VarOrigin::Existential {
-                        variable: ev.to_string(),
-                        refinement: chc::RefinementSource::Assumption(index),
-                    },
-                );
+                let tv = builder.add_var(sort.clone());
+                origin.map_existential(ev, tv);
                 evs.insert(ev, tv);
             }
             let chc::Body { formula, atoms } = assumption.body.clone().map_var(|v| match v {
@@ -601,6 +588,7 @@ where
                 builder.add_body(atom);
             }
             builder.add_body(formula);
+            builder.add_environment_origin(origin);
         }
         builder
     }

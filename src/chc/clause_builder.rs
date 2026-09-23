@@ -14,7 +14,8 @@ use std::rc::Rc;
 
 use rustc_index::IndexVec;
 
-use super::{Atom, Body, Clause, ClauseOrigin, DebugInfo, Sort, TermVarIdx, VarOrigin};
+use super::debug::origin::{ClauseOrigin, Entry};
+use super::{Atom, Body, Clause, DebugInfo, Sort, TermVarIdx};
 
 /// A convenience trait to represent constraints on variables used in [`ClauseBuilder`] at once.
 pub trait Var: Eq + Ord + Hash + Copy + Debug + 'static {}
@@ -76,25 +77,33 @@ impl Hash for dyn Key {
 /// to build clauses from [`crate::rty::Refinement`]s.
 #[derive(Clone, Default)]
 pub struct ClauseBuilder {
-    pub origin: ClauseOrigin,
+    environment_origin: Vec<Entry>,
+    body_origin: Vec<Entry>,
     vars: IndexVec<TermVarIdx, Sort>,
     mapped_var_indices: HashMap<Rc<dyn Key>, TermVarIdx>,
     body: Body<TermVarIdx>,
 }
 
 impl ClauseBuilder {
-    pub fn add_mapped_var<T>(&mut self, v: T, sort: Sort)
+    pub fn add_mapped_var<T>(&mut self, v: T, sort: Sort) -> TermVarIdx
     where
         T: Var,
     {
-        let idx = self.add_var(sort, VarOrigin::Mapped(format!("{v:?}")));
+        let idx = self.add_var(sort);
         self.mapped_var_indices.insert(Rc::new(v), idx);
+        idx
     }
 
-    pub fn add_var(&mut self, sort: Sort, origin: VarOrigin) -> TermVarIdx {
-        let idx = self.vars.push(sort);
-        self.origin.vars.push(origin);
-        idx
+    pub fn add_var(&mut self, sort: Sort) -> TermVarIdx {
+        self.vars.push(sort)
+    }
+
+    pub fn add_environment_origin(&mut self, entry: Entry) {
+        self.environment_origin.push(entry);
+    }
+
+    pub fn add_body_origin(&mut self, entry: Entry) {
+        self.body_origin.push(entry);
     }
 
     pub fn find_mapped_var<T>(&self, v: T) -> Option<TermVarIdx>
@@ -121,7 +130,7 @@ impl ClauseBuilder {
         self
     }
 
-    pub fn head(&self, head: Atom<TermVarIdx>) -> Clause {
+    pub fn head(&self, head: Atom<TermVarIdx>, head_origin: &Entry) -> Clause {
         let vars = self.vars.clone();
         let mut body = self.body.clone();
         body.simplify();
@@ -129,7 +138,11 @@ impl ClauseBuilder {
             vars,
             head,
             body,
-            origin: self.origin.clone(),
+            origin: ClauseOrigin {
+                environment: self.environment_origin.clone(),
+                body: self.body_origin.clone(),
+                head: head_origin.clone(),
+            },
             debug_info: DebugInfo::from_current_span(),
         }
     }
