@@ -368,9 +368,6 @@ pub struct Clause<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if !self.inner.debug_info.is_empty() {
-            writeln!(f, "{}", self.inner.debug_info.display("; "))?;
-        }
         let body = Body::new(self.ctx, self.inner, &self.inner.body);
         let head = Atom::new(self.ctx, self.inner, &self.inner.head);
         if !self.inner.vars.is_empty() {
@@ -393,6 +390,59 @@ impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
 impl<'ctx, 'a> Clause<'ctx, 'a> {
     pub fn new(ctx: &'ctx FormatContext, inner: &'a chc::Clause) -> Self {
         Self { ctx, inner }
+    }
+}
+
+struct ClauseComments<'a> {
+    clause: &'a chc::Clause,
+}
+
+fn write_comment(
+    f: &mut std::fmt::Formatter<'_>,
+    indent: usize,
+    text: impl std::fmt::Display,
+) -> std::fmt::Result {
+    for line in text.to_string().lines() {
+        writeln!(f, "; {:indent$}{line}", "")?;
+    }
+    Ok(())
+}
+
+fn write_origin_entry(
+    f: &mut std::fmt::Formatter<'_>,
+    indent: usize,
+    entry: &chc::debug::origin::Entry,
+) -> std::fmt::Result {
+    write_comment(f, indent, entry.text())?;
+    for mapping in entry.mappings() {
+        write_comment(f, indent + 2, mapping)?;
+    }
+    Ok(())
+}
+
+impl std::fmt::Display for ClauseComments<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.clause.debug_info.is_empty() {
+            writeln!(f, "{}", self.clause.debug_info.display("; "))?;
+        }
+        let origin = &self.clause.origin;
+        if !origin.environment.is_empty() {
+            write_comment(f, 0, "Γ")?;
+            for entry in &origin.environment {
+                write_origin_entry(f, 2, entry)?;
+            }
+        }
+        if !origin.body.is_empty() {
+            write_comment(f, 0, "body:")?;
+            for entry in &origin.body {
+                write_origin_entry(f, 2, entry)?;
+            }
+        }
+        write_comment(f, 0, format_args!("head: {}", origin.head.text()))?;
+        for mapping in origin.head.mappings() {
+            write_comment(f, 2, mapping)?;
+        }
+        Ok(())
     }
 }
 
@@ -660,8 +710,9 @@ impl<'a> std::fmt::Display for System<'a> {
         for (id, clause) in self.inner.clauses.iter_enumerated() {
             writeln!(
                 f,
-                "; {:?}\n(assert {})\n",
+                "; {:?}\n{}(assert {})\n",
                 id,
+                ClauseComments { clause },
                 Clause::new(&self.ctx, clause)
             )?;
         }

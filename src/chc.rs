@@ -6,7 +6,7 @@ use rustc_index::IndexVec;
 use crate::pretty::PrettyDisplayExt as _;
 
 mod clause_builder;
-mod debug;
+pub mod debug;
 mod format_context;
 mod hoice;
 mod smtlib2;
@@ -1252,11 +1252,6 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let guard = if let Some(guard) = &self.guard {
-            guard.pretty(allocator).append(allocator.text(" ⇒"))
-        } else {
-            allocator.nil()
-        };
         let atom = if self.pred.is_infix() {
             self.args[0]
                 .pretty_atom(allocator)
@@ -1277,7 +1272,16 @@ where
                 p.append(allocator.line()).append(inner.nest(2)).group()
             }
         };
-        guard.append(allocator.line()).append(atom).group()
+        if let Some(guard) = &self.guard {
+            guard
+                .pretty(allocator)
+                .append(allocator.text(" ⇒"))
+                .append(allocator.line())
+                .append(atom)
+                .group()
+        } else {
+            atom
+        }
     }
 }
 
@@ -1864,6 +1868,7 @@ where
 /// atoms and underlying logical formula, and `head` is an atom.
 #[derive(Debug, Clone)]
 pub struct Clause {
+    pub origin: debug::origin::ClauseOrigin,
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
     pub body: Body<TermVarIdx>,
