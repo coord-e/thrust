@@ -111,6 +111,7 @@ fn unbox_clause(clause: Clause) -> Clause {
         head,
         body,
         debug_info,
+        origin,
     } = clause;
     let vars = vars.into_iter().map(unbox_sort).collect();
     let head = unbox_atom(head);
@@ -120,6 +121,7 @@ fn unbox_clause(clause: Clause) -> Clause {
         head,
         body,
         debug_info,
+        origin,
     }
 }
 

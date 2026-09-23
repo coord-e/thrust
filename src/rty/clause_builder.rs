@@ -6,6 +6,7 @@
 //! This is primarily used to generate clauses from [`super::subtyping`] constraints between refinement types.
 
 use crate::chc;
+use crate::pretty::PrettyDisplayExt;
 
 use super::{Refinement, Type};
 
@@ -24,7 +25,8 @@ pub trait ClauseBuilderExt {
 impl ClauseBuilderExt for chc::ClauseBuilder {
     fn with_value_var<'a, T>(&'a mut self, ty: &Type<T>) -> RefinementClauseBuilder<'a> {
         let ty_sort = ty.to_sort();
-        let value_var = (!ty_sort.is_singleton()).then(|| self.add_var(ty_sort));
+        let value_var =
+            (!ty_sort.is_singleton()).then(|| self.add_var(ty_sort, chc::VarOrigin::Value));
         RefinementClauseBuilder {
             builder: self,
             value_var,
@@ -57,6 +59,11 @@ impl<'a> RefinementClauseBuilder<'a> {
     where
         T: chc::Var,
     {
+        let body_index = self.builder.origin.body.len();
+        self.builder.origin.body.push(chc::RefinementOrigin {
+            formula: refinement.display().to_string(),
+            value_var: self.value_var,
+        });
         let existentials: Vec<_> = refinement
             .existentials()
             .map(|(ev, sort)| (ev, sort.clone()))
@@ -65,7 +72,13 @@ impl<'a> RefinementClauseBuilder<'a> {
             .map_free_var(|v| self.builder.mapped_var(v))
             .instantiate();
         for (ev, sort) in existentials {
-            let tv = self.builder.add_var(sort);
+            let tv = self.builder.add_var(
+                sort,
+                chc::VarOrigin::Existential {
+                    variable: ev.to_string(),
+                    refinement: chc::RefinementSource::Body(body_index),
+                },
+            );
             instantiator.existential(ev, tv);
         }
         if let Some(value_var) = self.value_var {
@@ -83,6 +96,10 @@ impl<'a> RefinementClauseBuilder<'a> {
     where
         T: chc::Var,
     {
+        self.builder.origin.head = Some(chc::RefinementOrigin {
+            formula: refinement.display().to_string(),
+            value_var: self.value_var,
+        });
         if refinement.has_existentials() {
             panic!("head refinement must not contain existentials");
         }

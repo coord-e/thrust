@@ -545,14 +545,27 @@ where
         for (v, sort) in self.dependencies() {
             builder.add_mapped_var(v, sort);
         }
-        for (var, rty) in self.vars() {
+        for (var, rty) in self.bindings() {
+            builder.origin.environment.push(chc::EnvironmentBinding {
+                variable: var.to_string(),
+                refined_type: rty.display().to_string(),
+            });
+            if !rty.is_refined() {
+                continue;
+            }
             let mut instantiator = rty
                 .refinement
                 .clone()
                 .map_free_var(|v| builder.mapped_var(v))
                 .instantiate();
             for (ev, sort) in rty.refinement.existentials() {
-                let tv = builder.add_var(sort.clone());
+                let tv = builder.add_var(
+                    sort.clone(),
+                    chc::VarOrigin::Existential {
+                        variable: ev.to_string(),
+                        refinement: chc::RefinementSource::Environment(var.to_string()),
+                    },
+                );
                 instantiator.existential(ev, tv);
             }
             if !rty.ty.to_sort().is_singleton() {
@@ -564,10 +577,20 @@ where
             }
             builder.add_body(formula);
         }
-        for assumption in &self.assumptions {
+        for (index, assumption) in self.assumptions.iter().enumerate() {
+            builder
+                .origin
+                .assumptions
+                .push(assumption.display().to_string());
             let mut evs = HashMap::new();
             for (ev, sort) in assumption.existentials.iter_enumerated() {
-                let tv = builder.add_var(sort.clone());
+                let tv = builder.add_var(
+                    sort.clone(),
+                    chc::VarOrigin::Existential {
+                        variable: ev.to_string(),
+                        refinement: chc::RefinementSource::Assumption(index),
+                    },
+                );
                 evs.insert(ev, tv);
             }
             let chc::Body { formula, atoms } = assumption.body.clone().map_var(|v| match v {
@@ -902,7 +925,7 @@ where
             )
     }
 
-    pub fn vars(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
+    fn bindings(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
         self.locals
             .iter()
             .map(|(local, rty)| (Var::Local(*local), rty))
@@ -911,7 +934,10 @@ where
                     .iter_enumerated()
                     .filter_map(|(idx, b)| b.as_type().map(|rty| (Var::Temp(idx), rty))),
             )
-            .filter(|(_var, rty)| rty.is_refined())
+    }
+
+    pub fn vars(&self) -> impl Iterator<Item = (Var, &rty::RefinedType<Var>)> + '_ {
+        self.bindings().filter(|(_, rty)| rty.is_refined())
     }
 
     pub fn assumptions(&self) -> &[Assumption] {

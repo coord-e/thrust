@@ -7,6 +7,7 @@
 //! The output of this module is what gets passed to the external CHC solver.
 
 use crate::chc::{self, format_context::FormatContext};
+use crate::pretty::PrettyDisplayExt;
 
 /// A helper struct to display a list of items.
 #[derive(Debug, Clone)]
@@ -368,9 +369,6 @@ pub struct Clause<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if !self.inner.debug_info.is_empty() {
-            writeln!(f, "{}", self.inner.debug_info.display("; "))?;
-        }
         let body = Body::new(self.ctx, self.inner, &self.inner.body);
         let head = Atom::new(self.ctx, self.inner, &self.inner.head);
         if !self.inner.vars.is_empty() {
@@ -393,6 +391,117 @@ impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
 impl<'ctx, 'a> Clause<'ctx, 'a> {
     pub fn new(ctx: &'ctx FormatContext, inner: &'a chc::Clause) -> Self {
         Self { ctx, inner }
+    }
+}
+
+struct ClauseComments<'a> {
+    clause: &'a chc::Clause,
+}
+
+fn write_comment(
+    f: &mut std::fmt::Formatter<'_>,
+    indent: usize,
+    text: impl std::fmt::Display,
+) -> std::fmt::Result {
+    for line in text.to_string().lines() {
+        writeln!(f, "; {:indent$}{line}", "")?;
+    }
+    Ok(())
+}
+
+impl ClauseComments<'_> {
+    fn existential_mappings(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        source: chc::RefinementSource,
+        indent: usize,
+    ) -> std::fmt::Result {
+        for (var, origin) in self.clause.origin.vars.iter_enumerated() {
+            if let chc::VarOrigin::Existential {
+                variable,
+                refinement,
+            } = origin
+            {
+                if *refinement == source {
+                    write_comment(f, indent, format_args!("{variable} -> {var}"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for ClauseComments<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.clause.debug_info.is_empty() {
+            writeln!(f, "{}", self.clause.debug_info.display("; "))?;
+        }
+        let origin = &self.clause.origin;
+        let has_environment = !origin.environment.is_empty()
+            || !origin.assumptions.is_empty()
+            || origin
+                .vars
+                .iter()
+                .any(|var| matches!(var, chc::VarOrigin::Mapped(_)));
+        if has_environment {
+            write_comment(f, 0, "Γ")?;
+        }
+        for binding in &origin.environment {
+            write_comment(
+                f,
+                2,
+                format_args!("{}: {}", binding.variable, binding.refined_type),
+            )?;
+            for (var, source) in origin.vars.iter_enumerated() {
+                if let chc::VarOrigin::Mapped(name) = source {
+                    if *name == binding.variable {
+                        write_comment(f, 4, format_args!("{name} -> {var}"))?;
+                    }
+                }
+            }
+            self.existential_mappings(
+                f,
+                chc::RefinementSource::Environment(binding.variable.clone()),
+                4,
+            )?;
+        }
+        for (var, source) in origin.vars.iter_enumerated() {
+            if let chc::VarOrigin::Mapped(name) = source {
+                if !origin
+                    .environment
+                    .iter()
+                    .any(|binding| binding.variable == *name)
+                {
+                    write_comment(
+                        f,
+                        2,
+                        format_args!("{name}: {}", self.clause.vars[var].display()),
+                    )?;
+                    write_comment(f, 4, format_args!("{name} -> {var}"))?;
+                }
+            }
+        }
+        for (index, assumption) in origin.assumptions.iter().enumerate() {
+            write_comment(f, 2, format_args!("_: {{ {assumption} }}"))?;
+            self.existential_mappings(f, chc::RefinementSource::Assumption(index), 4)?;
+        }
+        if !origin.body.is_empty() {
+            write_comment(f, 0, "body:")?;
+        }
+        for (index, body) in origin.body.iter().enumerate() {
+            write_comment(f, 2, &body.formula)?;
+            if let Some(var) = body.value_var {
+                write_comment(f, 4, format_args!("ν -> {var}"))?;
+            }
+            self.existential_mappings(f, chc::RefinementSource::Body(index), 4)?;
+        }
+        if let Some(head) = &origin.head {
+            write_comment(f, 0, format_args!("head: {}", head.formula))?;
+            if let Some(var) = head.value_var {
+                write_comment(f, 2, format_args!("ν -> {var}"))?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -660,8 +769,9 @@ impl<'a> std::fmt::Display for System<'a> {
         for (id, clause) in self.inner.clauses.iter_enumerated() {
             writeln!(
                 f,
-                "; {:?}\n(assert {})\n",
+                "; {:?}\n{}(assert {})\n",
                 id,
+                ClauseComments { clause },
                 Clause::new(&self.ctx, clause)
             )?;
         }

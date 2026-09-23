@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use rustc_index::IndexVec;
 
-use super::{Atom, Body, Clause, DebugInfo, Sort, TermVarIdx};
+use super::{Atom, Body, Clause, ClauseOrigin, DebugInfo, Sort, TermVarIdx, VarOrigin};
 
 /// A convenience trait to represent constraints on variables used in [`ClauseBuilder`] at once.
 pub trait Var: Eq + Ord + Hash + Copy + Debug + 'static {}
@@ -76,6 +76,7 @@ impl Hash for dyn Key {
 /// to build clauses from [`crate::rty::Refinement`]s.
 #[derive(Clone, Default)]
 pub struct ClauseBuilder {
+    pub origin: ClauseOrigin,
     vars: IndexVec<TermVarIdx, Sort>,
     mapped_var_indices: HashMap<Rc<dyn Key>, TermVarIdx>,
     body: Body<TermVarIdx>,
@@ -86,12 +87,14 @@ impl ClauseBuilder {
     where
         T: Var,
     {
-        let idx = self.vars.push(sort);
+        let idx = self.add_var(sort, VarOrigin::Mapped(format!("{v:?}")));
         self.mapped_var_indices.insert(Rc::new(v), idx);
     }
 
-    pub fn add_var(&mut self, sort: Sort) -> TermVarIdx {
-        self.vars.push(sort)
+    pub fn add_var(&mut self, sort: Sort, origin: VarOrigin) -> TermVarIdx {
+        let idx = self.vars.push(sort);
+        self.origin.vars.push(origin);
+        idx
     }
 
     pub fn find_mapped_var<T>(&self, v: T) -> Option<TermVarIdx>
@@ -126,6 +129,7 @@ impl ClauseBuilder {
             vars,
             head,
             body,
+            origin: self.origin.clone(),
             debug_info: DebugInfo::from_current_span(),
         }
     }
