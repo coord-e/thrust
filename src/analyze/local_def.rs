@@ -71,13 +71,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // been translated into a `chc::Formula`; otherwise the body is a raw
         // SMT-LIB2 string literal.
         if self.is_annotated_as_formula_fn() {
-            // Name the parameters `v{i}` to match how `chc::TermVarIdx` renders the
-            // formula's variables (see `chc::UserDefinedPredBody::Formula`).
-            let arg_name_and_sorts = arg_sorts
-                .enumerate()
-                .map(|(i, sort)| (format!("v{i}"), sort))
-                .collect::<Vec<_>>();
-
             let formula_fn = self
                 .ctx
                 .formula_fn_with_args(self.local_def_id, self.tcx.mk_args(&[]))
@@ -89,7 +82,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
             self.ctx.system.borrow_mut().push_pred_define_formula(
                 pred,
-                chc::UserDefinedPredSig::from(arg_name_and_sorts),
+                arg_sorts.collect(),
                 formula,
             );
             return;

@@ -6,6 +6,8 @@
 //! such as naming convention and solver-specific workarounds.
 //! The output of this module is what gets passed to the external CHC solver.
 
+use rustc_index::IndexVec;
+
 use crate::chc::{self, format_context::FormatContext};
 
 /// A helper struct to display a list of items.
@@ -93,7 +95,7 @@ impl<T> List<T> {
 struct Term<'ctx, 'a> {
     ctx: &'ctx FormatContext,
     // we need variable sorts to select box/mut selector/constructor
-    sorts: &'a dyn chc::TermSortEnv,
+    sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
     inner: &'a chc::Term,
 }
 
@@ -106,7 +108,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
             chc::Term::Bool(b) => write!(f, "{}", b),
             chc::Term::String(s) => write!(f, "\"{}\"", s.escape_default()),
             chc::Term::Box(t) => {
-                let s = self.sorts.term_sort(t);
+                let s = t.sort(|v| self.sorts[*v].clone());
                 write!(
                     f,
                     "({} {})",
@@ -115,7 +117,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 )
             }
             chc::Term::Mut(t1, t2) => {
-                let s = self.sorts.term_sort(t1);
+                let s = t1.sort(|v| self.sorts[*v].clone());
                 write!(
                     f,
                     "({} {} {})",
@@ -125,7 +127,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 )
             }
             chc::Term::BoxCurrent(t) => {
-                let s = self.sorts.term_sort(t).deref();
+                let s = t.sort(|v| self.sorts[*v].clone()).deref();
                 write!(
                     f,
                     "({} {})",
@@ -134,7 +136,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 )
             }
             chc::Term::MutCurrent(t) => {
-                let s = self.sorts.term_sort(t).deref();
+                let s = t.sort(|v| self.sorts[*v].clone()).deref();
                 write!(
                     f,
                     "({} {})",
@@ -143,7 +145,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 )
             }
             chc::Term::MutFinal(t) => {
-                let s = self.sorts.term_sort(t).deref();
+                let s = t.sort(|v| self.sorts[*v].clone()).deref();
                 write!(
                     f,
                     "({} {})",
@@ -173,7 +175,10 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 write!(f, "(as seq.empty (Seq {}))", self.ctx.fmt_sort(elem))
             }
             chc::Term::Tuple(ts) => {
-                let ss: Vec<_> = ts.iter().map(|t| self.sorts.term_sort(t)).collect();
+                let ss: Vec<_> = ts
+                    .iter()
+                    .map(|t| t.sort(|v| self.sorts[*v].clone()))
+                    .collect();
                 if ss.is_empty() {
                     write!(f, "{}", self.ctx.tuple_ctor(&ss),)
                 } else {
@@ -186,7 +191,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 }
             }
             chc::Term::TupleProj(t, i) => {
-                let s = self.sorts.term_sort(t);
+                let s = t.sort(|v| self.sorts[*v].clone());
                 write!(
                     f,
                     "({} {})",
@@ -207,7 +212,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                 }
             }
             chc::Term::DatatypeDiscr(_s, t) => {
-                let s = self.sorts.term_sort(t).into_datatype().unwrap();
+                let s = t.sort(|v| self.sorts[*v].clone()).into_datatype().unwrap();
                 write!(
                     f,
                     "({} {})",
@@ -223,7 +228,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
 impl<'ctx, 'a> Term<'ctx, 'a> {
     pub fn new(
         ctx: &'ctx FormatContext,
-        sorts: &'a dyn chc::TermSortEnv,
+        sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
         inner: &'a chc::Term,
     ) -> Self {
         Self { ctx, sorts, inner }
@@ -234,7 +239,7 @@ impl<'ctx, 'a> Term<'ctx, 'a> {
 #[derive(Clone)]
 pub struct Atom<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    sorts: &'a dyn chc::TermSortEnv,
+    sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
     inner: &'a chc::Atom,
 }
 
@@ -275,7 +280,7 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
 impl<'ctx, 'a> Atom<'ctx, 'a> {
     pub fn new(
         ctx: &'ctx FormatContext,
-        sorts: &'a dyn chc::TermSortEnv,
+        sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
         inner: &'a chc::Atom,
     ) -> Self {
         Self { ctx, sorts, inner }
@@ -286,7 +291,7 @@ impl<'ctx, 'a> Atom<'ctx, 'a> {
 #[derive(Clone)]
 pub struct Formula<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    sorts: &'a dyn chc::TermSortEnv,
+    sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
     inner: &'a chc::Formula,
 }
 
@@ -337,7 +342,7 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
 impl<'ctx, 'a> Formula<'ctx, 'a> {
     pub fn new(
         ctx: &'ctx FormatContext,
-        sorts: &'a dyn chc::TermSortEnv,
+        sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
         inner: &'a chc::Formula,
     ) -> Self {
         Self { ctx, sorts, inner }
@@ -348,7 +353,7 @@ impl<'ctx, 'a> Formula<'ctx, 'a> {
 #[derive(Clone)]
 pub struct Body<'ctx, 'a> {
     ctx: &'ctx FormatContext,
-    sorts: &'a dyn chc::TermSortEnv,
+    sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
     inner: &'a chc::Body,
 }
 
@@ -368,7 +373,7 @@ impl<'ctx, 'a> std::fmt::Display for Body<'ctx, 'a> {
 impl<'ctx, 'a> Body<'ctx, 'a> {
     pub fn new(
         ctx: &'ctx FormatContext,
-        sorts: &'a dyn chc::TermSortEnv,
+        sorts: &'a IndexVec<chc::TermVarIdx, chc::Sort>,
         inner: &'a chc::Body,
     ) -> Self {
         Self { ctx, sorts, inner }
@@ -384,8 +389,8 @@ pub struct Clause<'ctx, 'a> {
 
 impl<'ctx, 'a> std::fmt::Display for Clause<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let body = Body::new(self.ctx, self.inner, &self.inner.body);
-        let head = Atom::new(self.ctx, self.inner, &self.inner.head);
+        let body = Body::new(self.ctx, &self.inner.vars, &self.inner.body);
+        let head = Atom::new(self.ctx, &self.inner.vars, &self.inner.head);
         if !self.inner.vars.is_empty() {
             let vars = List::closed(
                 self.inner
@@ -675,12 +680,7 @@ impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
         match &self.inner.body {
             chc::UserDefinedPredBody::Raw(body) => write!(f, "{body}")?,
             chc::UserDefinedPredBody::Formula(formula) => {
-                // Term display resolves variable sorts (for box/mut/tuple
-                // constructors) through a `TermSortEnv`: here, the predicate's
-                // parameter sorts in order. The formula's `Var(v{i})` and the
-                // `(v{i} Sort)` parameter list above both render via `TermVarIdx`,
-                // so they line up by index.
-                let sorts: rustc_index::IndexVec<chc::TermVarIdx, chc::Sort> = self
+                let sorts: IndexVec<chc::TermVarIdx, chc::Sort> = self
                     .inner
                     .sig
                     .iter()

@@ -1913,33 +1913,6 @@ impl Clause {
     }
 }
 
-/// Resolves the sort of term-level variables.
-///
-/// Rendering a [`Term`] to SMT-LIB2 needs the sort of each variable, because
-/// box/mut/tuple constructors and selectors are sort-indexed. Anything that can
-/// provide variable sorts (a [`Clause`] via its `vars`, or a bare list of sorts
-/// for a `define-fun` signature) can drive term rendering through this trait,
-/// so callers need not fabricate a [`Clause`].
-pub trait TermSortEnv {
-    fn var_sort(&self, var: TermVarIdx) -> Sort;
-
-    fn term_sort(&self, term: &Term<TermVarIdx>) -> Sort {
-        term.sort(|v| self.var_sort(*v))
-    }
-}
-
-impl TermSortEnv for Clause {
-    fn var_sort(&self, var: TermVarIdx) -> Sort {
-        self.vars[var].clone()
-    }
-}
-
-impl TermSortEnv for IndexVec<TermVarIdx, Sort> {
-    fn var_sort(&self, var: TermVarIdx) -> Sort {
-        self[var].clone()
-    }
-}
-
 /// A command specified using `thrust::raw_command` attribute
 ///
 /// Those will be directly inserted into the generated SMT-LIB2 file.
@@ -2055,9 +2028,13 @@ impl System {
     pub fn push_pred_define_formula(
         &mut self,
         symbol: UserDefinedPred,
-        sig: UserDefinedPredSig,
+        arg_sorts: IndexVec<TermVarIdx, Sort>,
         formula: Formula<TermVarIdx>,
     ) {
+        let sig = arg_sorts
+            .into_iter_enumerated()
+            .map(|(var, sort)| (var.to_string(), sort))
+            .collect();
         self.user_defined_pred_defs.push(UserDefinedPredDef {
             symbol,
             sig,

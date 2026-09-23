@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::chc::{self, hoice::HoiceDatatypeRenamer, TermSortEnv as _};
+use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 
 /// A context for formatting a CHC system.
 ///
@@ -25,7 +25,7 @@ pub struct FormatContext {
 
 // FIXME: this is obviously ineffective and should be replaced
 fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sort>) {
-    sorts.insert(clause.term_sort(t));
+    sorts.insert(t.sort(|v| clause.vars[*v].clone()));
     match t {
         chc::Term::Null => {}
         chc::Term::Var(_) => {}

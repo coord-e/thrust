@@ -16,9 +16,6 @@ use syn::{
 use crate::{fn_outer_item::FnOuterItem, FormulaFnTypeLowering};
 
 pub fn expand_predicate(item: TokenStream) -> TokenStream {
-    // Predicate bodies are consumed by the plugin as a raw SMT-LIB string literal
-    // (see `analyze::local_def::define_as_predicate`), not as formula expressions,
-    // so they are not routed through `formula!`.
     let func = parse_macro_input!(item as FnItemWithSignature);
     let outer_context = match extract_outer_context(&func) {
         Ok(ctx) => ctx,
@@ -47,8 +44,6 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
     let formula_fn_attr = if is_rust_body {
         quote! {
             #[thrust::formula_fn]
-            #[allow(unused_variables)]
-            #[allow(non_snake_case)]
         }
     } else {
         quote!()
