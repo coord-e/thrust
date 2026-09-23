@@ -720,7 +720,7 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}\n", RawCommand::new(raw_command))?;
         }
 
-        for user_defined_pred_def in &self.inner.user_defined_pred_defs {
+        for user_defined_pred_def in self.inner.user_defined_preds_in_dependency_order() {
             writeln!(
                 f,
                 "{}\n",
