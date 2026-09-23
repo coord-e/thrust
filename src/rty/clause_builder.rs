@@ -6,7 +6,7 @@
 //! This is primarily used to generate clauses from [`super::subtyping`] constraints between refinement types.
 
 use crate::chc;
-use crate::chc::debug::origin::Entry;
+use crate::chc::debug;
 
 use super::{Refinement, Type};
 
@@ -58,7 +58,7 @@ impl<'a> RefinementClauseBuilder<'a> {
     where
         T: chc::Var,
     {
-        let mut origin = Entry::refinement(&refinement, self.value_var);
+        let mut origin = debug::origin::Entry::refinement(&refinement);
         let existentials: Vec<_> = refinement
             .existentials()
             .map(|(ev, sort)| (ev, sort.clone()))
@@ -68,18 +68,14 @@ impl<'a> RefinementClauseBuilder<'a> {
             .instantiate();
         for (ev, sort) in existentials {
             let tv = self.builder.add_var(sort);
-            origin.map_existential(ev, tv);
+            origin.add_existential_var_mapping(ev, tv);
             instantiator.existential(ev, tv);
         }
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);
+            origin.add_value_var_mapping(value_var);
         }
-        let chc::Body { atoms, formula } = instantiator.instantiate();
-        for atom in atoms {
-            self.builder.add_body(atom);
-        }
-        self.builder.add_body(formula);
-        self.builder.add_body_origin(origin);
+        self.builder.add_body(instantiator.instantiate(), origin);
         self
     }
 
@@ -87,7 +83,7 @@ impl<'a> RefinementClauseBuilder<'a> {
     where
         T: chc::Var,
     {
-        let head_origin = Entry::refinement(&refinement, self.value_var);
+        let mut origin = debug::origin::Entry::refinement(&refinement);
         if refinement.has_existentials() {
             panic!("head refinement must not contain existentials");
         }
@@ -96,20 +92,8 @@ impl<'a> RefinementClauseBuilder<'a> {
             .instantiate();
         if let Some(value_var) = self.value_var {
             instantiator.value_var(value_var);
+            origin.add_value_var_mapping(value_var);
         }
-        let chc::Body { atoms, formula } = instantiator.instantiate();
-        let mut cs = atoms
-            .into_iter()
-            .map(|a| self.builder.head(a, &head_origin))
-            .collect::<Vec<_>>();
-        if !formula.is_top() {
-            cs.push({
-                let mut builder = self.builder.clone();
-                builder
-                    .add_body(formula.not())
-                    .head(chc::Atom::bottom(), &head_origin)
-            });
-        }
-        cs
+        self.builder.head(instantiator.instantiate(), origin)
     }
 }

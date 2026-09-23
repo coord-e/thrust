@@ -3,7 +3,7 @@
 use rustc_index::IndexVec;
 
 use crate::chc;
-use crate::chc::debug::origin::Entry;
+use crate::chc::debug;
 use crate::pretty::PrettyDisplayExt;
 
 use super::{ClauseBuilderExt as _, FunctionParamIdx, PointerKind, RefKind, RefinedType, Type};
@@ -129,12 +129,11 @@ where
             for (param_idx, param_rty) in got.params.iter_enumerated() {
                 let param_sort = param_rty.ty.to_sort();
                 if !param_sort.is_singleton() {
-                    let target = builder.add_mapped_var(param_idx, param_sort.clone());
-                    builder.add_environment_origin(Entry::parameter(
-                        param_idx,
-                        &param_sort,
-                        target,
-                    ));
+                    let chc_var = builder.add_mapped_var(param_idx, param_sort.clone());
+                    builder.add_environment_origin(
+                        debug::origin::Entry::parameter(param_idx, &param_sort)
+                            .var_mapping(param_idx, chc_var),
+                    );
                 }
             }
             for (got_ty, expected_ty) in got.params.iter().zip(expected.params.iter()) {
@@ -210,8 +209,11 @@ pub fn relate_sub_param_types(
     for (param_idx, param_rty) in got.iter_enumerated() {
         let param_sort = param_rty.ty.to_sort();
         if !param_sort.is_singleton() {
-            let target = builder.add_mapped_var(param_idx, param_sort.clone());
-            builder.add_environment_origin(Entry::parameter(param_idx, &param_sort, target));
+            let chc_var = builder.add_mapped_var(param_idx, param_sort.clone());
+            builder.add_environment_origin(
+                debug::origin::Entry::parameter(param_idx, &param_sort)
+                    .var_mapping(param_idx, chc_var),
+            );
         }
     }
 

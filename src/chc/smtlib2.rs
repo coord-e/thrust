@@ -413,7 +413,7 @@ fn write_origin_entry(
     indent: usize,
     entry: &chc::debug::origin::Entry,
 ) -> std::fmt::Result {
-    write_comment(f, indent, entry)?;
+    write_comment(f, indent, entry.text())?;
     for mapping in entry.mappings() {
         write_comment(f, indent + 2, mapping)?;
     }
@@ -438,7 +438,7 @@ impl std::fmt::Display for ClauseComments<'_> {
                 write_origin_entry(f, 2, entry)?;
             }
         }
-        write_comment(f, 0, format_args!("head: {}", origin.head))?;
+        write_comment(f, 0, format_args!("head: {}", origin.head.text()))?;
         for mapping in origin.head.mappings() {
             write_comment(f, 2, mapping)?;
         }

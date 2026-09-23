@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use rustc_index::IndexVec;
 
-use super::debug::origin::{ClauseOrigin, Entry};
+use super::debug;
 use super::{Atom, Body, Clause, DebugInfo, Sort, TermVarIdx};
 
 /// A convenience trait to represent constraints on variables used in [`ClauseBuilder`] at once.
@@ -77,8 +77,8 @@ impl Hash for dyn Key {
 /// to build clauses from [`crate::rty::Refinement`]s.
 #[derive(Clone, Default)]
 pub struct ClauseBuilder {
-    environment_origin: Vec<Entry>,
-    body_origin: Vec<Entry>,
+    environment_origin: Vec<debug::origin::Entry>,
+    body_origin: Vec<debug::origin::Entry>,
     vars: IndexVec<TermVarIdx, Sort>,
     mapped_var_indices: HashMap<Rc<dyn Key>, TermVarIdx>,
     body: Body<TermVarIdx>,
@@ -96,14 +96,6 @@ impl ClauseBuilder {
 
     pub fn add_var(&mut self, sort: Sort) -> TermVarIdx {
         self.vars.push(sort)
-    }
-
-    pub fn add_environment_origin(&mut self, entry: Entry) {
-        self.environment_origin.push(entry);
-    }
-
-    pub fn add_body_origin(&mut self, entry: Entry) {
-        self.body_origin.push(entry);
     }
 
     pub fn find_mapped_var<T>(&self, v: T) -> Option<TermVarIdx>
@@ -125,12 +117,37 @@ impl ClauseBuilder {
             .unwrap_or_else(|| panic!("unbound var {:?}", v))
     }
 
-    pub fn add_body(&mut self, body: impl Into<Body<TermVarIdx>>) -> &mut Self {
-        self.body.push_conj(body);
-        self
+    pub fn add_environment_origin(&mut self, origin: debug::origin::Entry) {
+        self.environment_origin.push(origin);
     }
 
-    pub fn head(&self, head: Atom<TermVarIdx>, head_origin: &Entry) -> Clause {
+    /// Adds constraints to the clause body, recording their origin under the environment.
+    pub fn add_environment(&mut self, body: Body<TermVarIdx>, origin: debug::origin::Entry) {
+        self.body.push_conj(body);
+        self.environment_origin.push(origin);
+    }
+
+    /// Adds constraints to the clause body, recording their origin under body.
+    pub fn add_body(&mut self, body: Body<TermVarIdx>, origin: debug::origin::Entry) {
+        self.body.push_conj(body);
+        self.body_origin.push(origin);
+    }
+
+    pub fn head(&self, head: Body<TermVarIdx>, origin: debug::origin::Entry) -> Vec<Clause> {
+        let Body { atoms, formula } = head;
+        let mut clauses = atoms
+            .into_iter()
+            .map(|atom| self.clause(atom, &origin))
+            .collect::<Vec<_>>();
+        if !formula.is_top() {
+            let mut builder = self.clone();
+            builder.body.push_conj(formula.not());
+            clauses.push(builder.clause(Atom::bottom(), &origin));
+        }
+        clauses
+    }
+
+    fn clause(&self, head: Atom<TermVarIdx>, head_origin: &debug::origin::Entry) -> Clause {
         let vars = self.vars.clone();
         let mut body = self.body.clone();
         body.simplify();
@@ -138,7 +155,7 @@ impl ClauseBuilder {
             vars,
             head,
             body,
-            origin: ClauseOrigin {
+            origin: debug::origin::ClauseOrigin {
                 environment: self.environment_origin.clone(),
                 body: self.body_origin.clone(),
                 head: head_origin.clone(),
