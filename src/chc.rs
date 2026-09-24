@@ -1911,10 +1911,6 @@ impl Clause {
     pub fn is_nop(&self) -> bool {
         self.head.is_top() || self.body.is_bottom()
     }
-
-    fn term_sort(&self, term: &Term<TermVarIdx>) -> Sort {
-        term.sort(|v| self.vars[*v].clone())
-    }
 }
 
 /// A command specified using `thrust::raw_command` attribute
@@ -1979,11 +1975,22 @@ pub struct PredVarDef {
 
 pub type UserDefinedPredSig = Vec<(String, Sort)>;
 
+/// The body of a user-defined predicate.
+///
+/// A predicate can be defined either by a raw SMT-LIB2 string (inserted into the
+/// generated `define-fun` verbatim) or by a [`Formula`] translated from a Rust
+/// expression via the `formula_fn` infrastructure.
+#[derive(Debug, Clone)]
+pub enum UserDefinedPredBody {
+    Raw(String),
+    Formula(Formula<TermVarIdx>),
+}
+
 #[derive(Debug, Clone)]
 pub struct UserDefinedPredDef {
     symbol: UserDefinedPred,
     sig: UserDefinedPredSig,
-    body: String,
+    body: UserDefinedPredBody,
 }
 
 /// A CHC system.
@@ -1997,6 +2004,29 @@ pub struct System {
 }
 
 impl System {
+    fn user_defined_preds_in_dependency_order(&self) -> Vec<&UserDefinedPredDef> {
+        let mut remaining: Vec<_> = self.user_defined_pred_defs.iter().collect();
+        let mut ordered = Vec::with_capacity(remaining.len());
+        while !remaining.is_empty() {
+            let next = remaining
+                .iter()
+                .position(|def| match &def.body {
+                    UserDefinedPredBody::Raw(_) => true,
+                    UserDefinedPredBody::Formula(formula) => formula.iter_atoms().all(|atom| {
+                        let Pred::UserDefined(pred) = &atom.pred else {
+                            return true;
+                        };
+                        !remaining
+                            .iter()
+                            .any(|dependency| dependency.symbol == *pred)
+                    }),
+                })
+                .expect("recursive predicate definitions are not supported");
+            ordered.push(remaining.remove(next));
+        }
+        ordered
+    }
+
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
     }
@@ -2011,8 +2041,28 @@ impl System {
         sig: UserDefinedPredSig,
         body: String,
     ) {
-        self.user_defined_pred_defs
-            .push(UserDefinedPredDef { symbol, sig, body })
+        self.user_defined_pred_defs.push(UserDefinedPredDef {
+            symbol,
+            sig,
+            body: UserDefinedPredBody::Raw(body),
+        })
+    }
+
+    pub fn push_pred_define_formula(
+        &mut self,
+        symbol: UserDefinedPred,
+        arg_sorts: IndexVec<TermVarIdx, Sort>,
+        formula: Formula<TermVarIdx>,
+    ) {
+        let sig = arg_sorts
+            .into_iter_enumerated()
+            .map(|(var, sort)| (var.to_string(), sort))
+            .collect();
+        self.user_defined_pred_defs.push(UserDefinedPredDef {
+            symbol,
+            sig,
+            body: UserDefinedPredBody::Formula(formula),
+        })
     }
 
     pub fn push_clause(&mut self, clause: Clause) -> Option<ClauseId> {

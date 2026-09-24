@@ -16,9 +16,6 @@ use syn::{
 use crate::{fn_outer_item::FnOuterItem, FormulaFnTypeLowering};
 
 pub fn expand_predicate(item: TokenStream) -> TokenStream {
-    // Predicate bodies are consumed by the plugin as a raw SMT-LIB string literal
-    // (see `analyze::local_def::define_as_predicate`), not as formula expressions,
-    // so they are not routed through `formula!`.
     let func = parse_macro_input!(item as FnItemWithSignature);
     let outer_context = match extract_outer_context(&func) {
         Ok(ctx) => ctx,
@@ -41,16 +38,51 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
     let model_preds = type_lowering.model_where_predicates();
     let extended_where = extended_where_clause(&func, &model_preds);
 
+    // A predicate body written as a Rust expression is translated through the
+    // `formula_fn` pipeline; a raw SMT-LIB2 string-literal body is not.
+    let is_rust_body = func.block().is_some_and(|block| !is_raw_smt2_body(block));
+    let formula_fn_attr = if is_rust_body {
+        quote! {
+            #[thrust::formula_fn]
+        }
+    } else {
+        quote!()
+    };
+
     let sig = quote! {
         #[allow(dead_code)]
+        #formula_fn_attr
         #[thrust::predicate]
         fn #name #def_generics(#model_ty_params) -> #model_ret #extended_where
     };
     if let Some(block) = func.block() {
+        let mut block = block.clone();
+        // The receiver `self` is lowered to a named `self_` parameter, so rewrite
+        // references in the (Rust) body to match.
+        if is_rust_body {
+            rewrite_self_in_block(&mut block);
+        }
         quote! { #sig #block }.into()
     } else {
         quote! { #sig; }.into()
     }
+}
+
+/// Whether a predicate body is a raw SMT-LIB2 definition, i.e. it contains a
+/// string-literal statement such as `"(= ..)"; true`.
+fn is_raw_smt2_body(block: &syn::Block) -> bool {
+    block.stmts.iter().any(|stmt| {
+        matches!(
+            stmt,
+            syn::Stmt::Expr(
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(_),
+                    ..
+                }),
+                _,
+            )
+        )
+    })
 }
 
 pub fn expand_requires(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -491,29 +523,34 @@ fn mentions_self(sig: &syn::Signature) -> bool {
     visitor.mentions_self
 }
 
-fn rewrite_self_in_expr(expr: &mut syn::Expr) {
-    struct Visitor;
+struct RewriteSelf;
 
-    impl syn::visit_mut::VisitMut for Visitor {
-        fn visit_ident_mut(&mut self, ident: &mut syn::Ident) {
-            if ident == "self" {
-                *ident = format_ident!("self_");
-            }
-        }
-
-        // syn skips macro token streams, so rewrite `self` inside the
-        // `formula!(..)` wrapper by hand.
-        fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
-            let self_ = format_ident!("self_");
-            mac.tokens = std::mem::take(&mut mac.tokens)
-                .into_iter()
-                .map(|tt| rewrite_self_in_tokens(tt, &self_))
-                .collect();
+impl syn::visit_mut::VisitMut for RewriteSelf {
+    fn visit_ident_mut(&mut self, ident: &mut syn::Ident) {
+        if ident == "self" {
+            *ident = format_ident!("self_");
         }
     }
 
+    // syn skips macro token streams, so rewrite `self` inside the
+    // `formula!(..)` wrapper by hand.
+    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+        let self_ = format_ident!("self_");
+        mac.tokens = std::mem::take(&mut mac.tokens)
+            .into_iter()
+            .map(|tt| rewrite_self_in_tokens(tt, &self_))
+            .collect();
+    }
+}
+
+fn rewrite_self_in_expr(expr: &mut syn::Expr) {
     use syn::visit_mut::VisitMut as _;
-    Visitor.visit_expr_mut(expr);
+    RewriteSelf.visit_expr_mut(expr);
+}
+
+fn rewrite_self_in_block(block: &mut syn::Block) {
+    use syn::visit_mut::VisitMut as _;
+    RewriteSelf.visit_block_mut(block);
 }
 
 /// Replaces a `self` identifier with `self_`, recursing into groups. Operates on
