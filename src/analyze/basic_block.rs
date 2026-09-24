@@ -548,6 +548,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             Rvalue::Use(operand) => self.operand_type(operand),
             Rvalue::CopyForDeref(place) => self.env.place_type(self.elaborate_place(&place)),
             Rvalue::UnaryOp(op, operand) => {
+                let operand_mir_ty = operand.ty(&self.local_decls, self.tcx);
                 let operand_ty = self.operand_type(operand);
 
                 let mut builder = PlaceTypeBuilder::default();
@@ -557,13 +558,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         builder.build(rty::Type::Bool, operand_term.not())
                     }
                     (rty::Type::Int, mir::UnOp::Neg) => {
-                        builder.build(rty::Type::Int, operand_term.neg())
+                        let term = wrap_int_term(self.tcx, operand_term.neg(), operand_mir_ty);
+                        builder.build(rty::Type::Int, term)
                     }
                     _ => unimplemented!("ty={}, op={:?}", operand_ty.display(), op),
                 }
             }
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = *operands;
+                let lhs_mir_ty = lhs.ty(&self.local_decls, self.tcx);
                 let lhs_ty = self.operand_type(lhs);
                 let rhs_ty = self.operand_type(rhs);
 
@@ -572,13 +575,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let (_rhs_ty, rhs_term) = builder.subsume(rhs_ty);
                 match (&lhs_ty, op) {
                     (rty::Type::Int, mir::BinOp::Add) => {
-                        builder.build(lhs_ty, lhs_term.add(rhs_term))
+                        let term = wrap_int_term(self.tcx, lhs_term.add(rhs_term), lhs_mir_ty);
+                        builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::Sub) => {
-                        builder.build(lhs_ty, lhs_term.sub(rhs_term))
+                        let term = wrap_int_term(self.tcx, lhs_term.sub(rhs_term), lhs_mir_ty);
+                        builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::Mul) => {
-                        builder.build(lhs_ty, lhs_term.mul(rhs_term))
+                        let term = wrap_int_term(self.tcx, lhs_term.mul(rhs_term), lhs_mir_ty);
+                        builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
                         builder.build(rty::Type::Bool, lhs_term.ge(rhs_term))
@@ -723,7 +729,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 op_pty
             }
             Rvalue::Cast(mir::CastKind::IntToInt, operand, ty) => {
-                let op_ty = operand.ty(&self.body.local_decls, self.tcx);
+                let op_ty = operand.ty(&self.local_decls, self.tcx);
                 if !op_ty.is_integral() || !ty.is_integral() {
                     unimplemented!("int cast: {:?} -> {:?}", op_ty, ty);
                 }
