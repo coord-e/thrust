@@ -924,10 +924,35 @@ impl<T> ArrayType<T> {
     }
 }
 
+/// The integers that values of [`Type::Int`] range over.
+#[derive(Debug, Clone, Copy)]
+pub enum IntType {
+    /// All mathematical integers, as `model::Int` denotes.
+    Unbounded,
+    /// The values of a Rust integer type of the given width and signedness.
+    Bounded { bits: u64, signed: bool },
+}
+
+impl IntType {
+    /// The smallest value of this type and the value one past its largest, if it is bounded.
+    fn bounds<V>(&self) -> Option<(chc::Term<V>, chc::Term<V>)> {
+        match *self {
+            IntType::Unbounded => None,
+            IntType::Bounded { bits, signed: true } => {
+                Some((chc::Term::pow2(bits - 1).neg(), chc::Term::pow2(bits - 1)))
+            }
+            IntType::Bounded {
+                bits,
+                signed: false,
+            } => Some((chc::Term::int(0), chc::Term::pow2(bits))),
+        }
+    }
+}
+
 /// An underlying type of a refinement type.
 #[derive(Debug, Clone)]
 pub enum Type<T> {
-    Int,
+    Int(IntType),
     Bool,
     String,
     Never,
@@ -984,7 +1009,7 @@ where
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
-            Type::Int => allocator.text("int"),
+            Type::Int(_) => allocator.text("int"),
             Type::Bool => allocator.text("bool"),
             Type::String => allocator.text("string"),
             Type::Never => allocator.text("!"),
@@ -1022,7 +1047,7 @@ impl<T> Type<T> {
     }
 
     pub fn int() -> Self {
-        Type::Int
+        Type::Int(IntType::Unbounded)
     }
 
     pub fn bool() -> Self {
@@ -1118,7 +1143,7 @@ impl<T> Type<T> {
 
     pub fn to_sort(&self) -> chc::Sort {
         match self {
-            Type::Int => chc::Sort::int(),
+            Type::Int(_) => chc::Sort::int(),
             Type::Bool => chc::Sort::bool(),
             // TODO: enable string reasoning
             //       currently String sort seems not available in HORN logic of Z3
@@ -1158,7 +1183,7 @@ impl<T> Type<T> {
         F: FnMut(T) -> chc::Term<U>,
     {
         match self {
-            Type::Int => Type::Int,
+            Type::Int(ty) => Type::Int(ty),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1177,7 +1202,7 @@ impl<T> Type<T> {
         F: FnMut(T) -> U,
     {
         match self {
-            Type::Int => Type::Int,
+            Type::Int(ty) => Type::Int(ty),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1197,7 +1222,7 @@ impl<T> Type<T> {
 
     pub fn strip_refinement(self) -> Type<Closed> {
         match self {
-            Type::Int => Type::Int,
+            Type::Int(ty) => Type::Int(ty),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1213,7 +1238,7 @@ impl<T> Type<T> {
 
     pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
         match self {
-            Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
+            Type::Int(_) | Type::Bool | Type::String | Type::Never => Default::default(),
             Type::Param(ty) => std::iter::once(ty.index()).collect(),
             Type::Pointer(ty) => ty.free_ty_params(),
             Type::Function(ty) => ty.free_ty_params(),
@@ -1810,6 +1835,25 @@ impl<FV> RefinedType<FV> {
         self.refinement.push_conj(refinement);
     }
 
+    /// Restricts the refinement to the range of the value's integer type, if it is bounded.
+    pub fn restrict_to_int_range(&mut self) {
+        let Type::Int(int_ty) = &self.ty else {
+            return;
+        };
+        let Some((min, end)) = int_ty.bounds() else {
+            return;
+        };
+        let value = || chc::Term::var(RefinedTypeVar::Value);
+        let range = vec![
+            chc::Atom::new(
+                chc::KnownPred::GREATER_THAN_OR_EQUAL.into(),
+                vec![value(), min],
+            ),
+            chc::Atom::new(chc::KnownPred::LESS_THAN.into(), vec![value(), end]),
+        ];
+        self.extend_refinement(chc::Body::from(range).into());
+    }
+
     pub fn strip_refinement(self) -> Type<Closed> {
         self.ty.strip_refinement()
     }
@@ -1824,7 +1868,7 @@ impl<FV> RefinedType<FV> {
     {
         self.refinement.subst_ty_params_in_sorts(subst);
         match &mut self.ty {
-            Type::Int | Type::Bool | Type::String | Type::Never => {}
+            Type::Int(_) | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
                 if let Some(rty) = subst.get(ty.index()) {
                     let RefinedType {
@@ -1859,7 +1903,7 @@ impl<FV> RefinedType<FV> {
         FV: chc::Var,
     {
         match (self.ty, other.ty) {
-            (Type::Int, Type::Int)
+            (Type::Int(_), Type::Int(_))
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Never, Type::Never) => Default::default(),

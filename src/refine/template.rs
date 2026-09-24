@@ -210,7 +210,18 @@ impl<'tcx> TypeBuilder<'tcx> {
     }
 
     // TODO: consolidate two impls
+    /// The integer type of the Rust integer type `ty`.
+    fn int_type(&self, ty: mir_ty::Ty<'tcx>) -> rty::IntType {
+        rty::IntType::Bounded {
+            bits: ty.primitive_size(self.tcx).bits(),
+            signed: ty.is_signed(),
+        }
+    }
+
     pub fn build(&self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
+        if ty.is_integral() {
+            return rty::Type::Int(self.int_type(ty));
+        }
         let ty = self.resolve_model_ty(ty);
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
@@ -404,6 +415,9 @@ where
     }
 
     pub fn build(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<S::Var> {
+        if ty.is_integral() {
+            return rty::Type::Int(self.inner.int_type(ty));
+        }
         let ty = self.inner.resolve_model_ty(ty);
         match ty.kind() {
             mir_ty::TyKind::Bool => rty::Type::bool(),
