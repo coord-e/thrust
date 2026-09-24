@@ -81,6 +81,21 @@ fn wrap_int_term<'tcx, V>(
     }
 }
 
+/// Whether the integer `term` lies in the range of the integer type `ty`.
+fn int_term_in_range<'tcx, V: Clone>(
+    tcx: TyCtxt<'tcx>,
+    term: chc::Term<V>,
+    ty: mir_ty::Ty<'tcx>,
+) -> chc::Term<V> {
+    let bits = ty.primitive_size(tcx).bits();
+    let (min, end) = if ty.is_signed() {
+        (chc::Term::pow2(bits - 1).neg(), chc::Term::pow2(bits - 1))
+    } else {
+        (chc::Term::int(0), chc::Term::pow2(bits))
+    };
+    term.clone().ge(min).and(term.lt(end))
+}
+
 /// Converts the current env state into a `Refinement<FunctionParamIdx>` to be
 /// used as the inherited precondition of a successor block.
 ///
@@ -543,6 +558,28 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty
     }
 
+    /// The `(result, overflowed)` pair that a checked integer operation evaluates to.
+    ///
+    /// `result` is not wrapped into the range of `ty`: rustc reads it only after asserting that
+    /// the operation did not overflow.
+    fn checked_int_op_type(
+        &self,
+        builder: PlaceTypeBuilder,
+        result: chc::Term<PlaceTypeVar>,
+        ty: mir_ty::Ty<'tcx>,
+    ) -> PlaceType {
+        let overflowed = int_term_in_range(self.tcx, result.clone(), ty).not();
+        // elaboration: all fields are boxed
+        let tuple_ty = rty::TupleType::new(vec![
+            rty::PointerType::own(rty::Type::int()).into(),
+            rty::PointerType::own(rty::Type::bool()).into(),
+        ]);
+        builder.build(
+            tuple_ty.into(),
+            chc::Term::tuple(vec![result.boxed(), overflowed.boxed()]),
+        )
+    }
+
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
         match rvalue {
             Rvalue::Use(operand) => self.operand_type(operand),
@@ -564,6 +601,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             Rvalue::BinaryOp(op, operands) => {
                 let (lhs, rhs) = *operands;
+                let lhs_mir_ty = lhs.ty(&self.local_decls, self.tcx);
                 let lhs_ty = self.operand_type(lhs);
                 let rhs_ty = self.operand_type(rhs);
 
@@ -579,6 +617,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     }
                     (rty::Type::Int, mir::BinOp::Mul) => {
                         builder.build(lhs_ty, lhs_term.mul(rhs_term))
+                    }
+                    (rty::Type::Int, mir::BinOp::AddWithOverflow) => {
+                        self.checked_int_op_type(builder, lhs_term.add(rhs_term), lhs_mir_ty)
+                    }
+                    (rty::Type::Int, mir::BinOp::SubWithOverflow) => {
+                        self.checked_int_op_type(builder, lhs_term.sub(rhs_term), lhs_mir_ty)
+                    }
+                    (rty::Type::Int, mir::BinOp::MulWithOverflow) => {
+                        self.checked_int_op_type(builder, lhs_term.mul(rhs_term), lhs_mir_ty)
                     }
                     (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
                         builder.build(rty::Type::Bool, lhs_term.ge(rhs_term))
