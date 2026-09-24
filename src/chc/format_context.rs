@@ -7,6 +7,8 @@
 
 use std::collections::BTreeSet;
 
+use rustc_index::IndexVec;
+
 use crate::chc::{self, hoice::HoiceDatatypeRenamer};
 
 /// A context for formatting a CHC system.
@@ -24,48 +26,83 @@ pub struct FormatContext {
 }
 
 // FIXME: this is obviously ineffective and should be replaced
-fn term_sorts(clause: &chc::Clause, t: &chc::Term, sorts: &mut BTreeSet<chc::Sort>) {
-    sorts.insert(t.sort(|v| clause.vars[*v].clone()));
+fn term_sorts(
+    var_sorts: &IndexVec<chc::TermVarIdx, chc::Sort>,
+    t: &chc::Term,
+    sorts: &mut BTreeSet<chc::Sort>,
+) {
+    sorts.insert(t.sort(|v| var_sorts[*v].clone()));
     match t {
         chc::Term::Null => {}
         chc::Term::Var(_) => {}
         chc::Term::Bool(_) => {}
         chc::Term::Int(_) => {}
         chc::Term::String(_) => {}
-        chc::Term::Box(t) => term_sorts(clause, t, sorts),
+        chc::Term::Box(t) => term_sorts(var_sorts, t, sorts),
         chc::Term::Mut(t1, t2) => {
-            term_sorts(clause, t1, sorts);
-            term_sorts(clause, t2, sorts);
+            term_sorts(var_sorts, t1, sorts);
+            term_sorts(var_sorts, t2, sorts);
         }
-        chc::Term::BoxCurrent(t) => term_sorts(clause, t, sorts),
-        chc::Term::MutCurrent(t) => term_sorts(clause, t, sorts),
-        chc::Term::MutFinal(t) => term_sorts(clause, t, sorts),
+        chc::Term::BoxCurrent(t) => term_sorts(var_sorts, t, sorts),
+        chc::Term::MutCurrent(t) => term_sorts(var_sorts, t, sorts),
+        chc::Term::MutFinal(t) => term_sorts(var_sorts, t, sorts),
         chc::Term::App(_fun, args) => {
             for arg in args {
-                term_sorts(clause, arg, sorts);
+                term_sorts(var_sorts, arg, sorts);
             }
         }
         chc::Term::ArrayEmpty(_, _) => {}
         chc::Term::SeqEmpty(_) => {}
         chc::Term::Tuple(ts) => {
             for t in ts {
-                term_sorts(clause, t, sorts);
+                term_sorts(var_sorts, t, sorts);
             }
         }
-        chc::Term::TupleProj(t, _) => term_sorts(clause, t, sorts),
+        chc::Term::TupleProj(t, _) => term_sorts(var_sorts, t, sorts),
         chc::Term::DatatypeCtor(_, _, args) => {
             for arg in args {
-                term_sorts(clause, arg, sorts);
+                term_sorts(var_sorts, arg, sorts);
             }
         }
-        chc::Term::DatatypeDiscr(_, t) => term_sorts(clause, t, sorts),
+        chc::Term::DatatypeDiscr(_, t) => term_sorts(var_sorts, t, sorts),
         chc::Term::FormulaQuantifiedVar(_, _) => {}
     }
 }
 
-fn atom_sorts(clause: &chc::Clause, a: &chc::Atom, sorts: &mut BTreeSet<chc::Sort>) {
+fn atom_sorts(
+    var_sorts: &IndexVec<chc::TermVarIdx, chc::Sort>,
+    a: &chc::Atom,
+    sorts: &mut BTreeSet<chc::Sort>,
+) {
+    if let Some(guard) = &a.guard {
+        formula_sorts(var_sorts, guard, sorts);
+    }
     for a in &a.args {
-        term_sorts(clause, a, sorts);
+        term_sorts(var_sorts, a, sorts);
+    }
+}
+
+fn formula_sorts(
+    var_sorts: &IndexVec<chc::TermVarIdx, chc::Sort>,
+    formula: &chc::Formula,
+    sorts: &mut BTreeSet<chc::Sort>,
+) {
+    match formula {
+        chc::Formula::Atom(atom) => atom_sorts(var_sorts, atom, sorts),
+        chc::Formula::Not(formula) => formula_sorts(var_sorts, formula, sorts),
+        chc::Formula::And(formulas) | chc::Formula::Or(formulas) => {
+            for formula in formulas {
+                formula_sorts(var_sorts, formula, sorts);
+            }
+        }
+        chc::Formula::Implies(lhs, rhs) => {
+            formula_sorts(var_sorts, lhs, sorts);
+            formula_sorts(var_sorts, rhs, sorts);
+        }
+        chc::Formula::Exists(vars, formula) | chc::Formula::Forall(vars, formula) => {
+            sorts.extend(vars.iter().map(|(_, sort)| sort.clone()));
+            formula_sorts(var_sorts, formula, sorts);
+        }
     }
 }
 
@@ -216,11 +253,19 @@ fn collect_sorts(system: &chc::System) -> BTreeSet<chc::Sort> {
         sorts.extend(def.sig.clone());
     }
 
+    for def in &system.user_defined_pred_defs {
+        sorts.extend(def.sig.iter().map(|(_, sort)| sort.clone()));
+        if let chc::UserDefinedPredBody::Formula(formula) = &def.body {
+            let var_sorts = def.sig.iter().map(|(_, sort)| sort.clone()).collect();
+            formula_sorts(&var_sorts, formula, &mut sorts);
+        }
+    }
+
     for clause in &system.clauses {
         sorts.extend(clause.vars.clone());
-        atom_sorts(clause, &clause.head, &mut sorts);
+        atom_sorts(&clause.vars, &clause.head, &mut sorts);
         for a in clause.body.iter_atoms() {
-            atom_sorts(clause, a, &mut sorts);
+            atom_sorts(&clause.vars, a, &mut sorts);
         }
     }
 
