@@ -410,6 +410,27 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             (_, ConstValue::ZeroSized) => {
                 PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
+            (mir_ty::TyKind::Adt(def, args), ConstValue::Scalar(_)) if def.is_struct() => {
+                // a struct with scalar representation has exactly one non-ZST field,
+                // which holds the scalar
+                let typing_env = self.body.typing_env(self.tcx);
+                let mut pts = Vec::new();
+                for field_def in def.all_fields() {
+                    let field_ty = field_def.ty(self.tcx, args);
+                    let field_layout = self
+                        .tcx
+                        .layout_of(typing_env.as_query_input(field_ty))
+                        .unwrap();
+                    let field_val = if field_layout.is_zst() {
+                        ConstValue::ZeroSized
+                    } else {
+                        *val
+                    };
+                    let pt = self.const_value_ty(&field_val, &field_ty);
+                    pts.push(pt.boxed());
+                }
+                PlaceType::tuple(pts)
+            }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                 ConstValue::Scalar(Scalar::Ptr(ptr, _)),
