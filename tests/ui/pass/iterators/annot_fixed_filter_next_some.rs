@@ -1,0 +1,56 @@
+//@check-pass
+//@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
+
+struct Range {
+    start: i64,
+    end: i64,
+}
+
+impl thrust_models::Model for Range {
+    type Ty = Range;
+}
+
+impl Iterator for Range {
+    type Item = i64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start < self.end {
+            let item = self.start;
+            self.start += 1;
+            Some(item)
+        } else {
+            None
+        }
+    }
+}
+
+struct FixedFilter {
+    iter: Range,
+}
+
+impl thrust_models::Model for FixedFilter {
+    type Ty = FixedFilter;
+}
+
+impl Iterator for FixedFilter {
+    type Item = <Range as Iterator>::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let it = &mut self.iter;
+        while let Some(item) = it.next() {
+            thrust_macros::invariant!(|it: &mut Range| (*it).end >= 3 && (*it).start <= 2);
+            if item >= 2 {
+                return Some(item);
+            }
+        }
+        None
+    }
+}
+
+fn main() {
+    let range = Range { start: 0, end: 5 };
+    let mut adapter = FixedFilter { iter: range };
+
+    assert!(matches!(adapter.next(), Some(2)));
+}

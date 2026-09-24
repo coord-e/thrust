@@ -1,6 +1,6 @@
 //@check-pass
 //@compile-flags: -Adead_code -C debug-assertions=off
-//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 #[thrust_macros::context]
 trait Source {
@@ -10,7 +10,7 @@ trait Source {
     fn produces(self, x: Self::Item) -> bool;
 
     #[thrust_macros::ensures(thrust_models::exists(|x| Self::produces(*self, x)))]
-    fn nonempty(&self) {}
+    fn nonempty(&self);
 }
 
 #[derive(PartialEq)]
@@ -32,6 +32,8 @@ impl Source for S {
         "(= x (tuple_proj<Int>.0 self_))";
         true
     }
+
+    fn nonempty(&self) {}
 }
 
 fn main() {

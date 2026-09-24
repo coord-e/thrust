@@ -1,5 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -Adead_code -C debug-assertions=off
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 #[thrust_macros::predicate]
 fn is_double(x: i64, doubled_x: i64) -> bool {

@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 #[thrust_macros::requires((x.0 > 0) && (x.1 > 0))]
 #[thrust_macros::ensures((result.0 == x.1) && (result.1 == x.0))]

@@ -1,8 +1,10 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
+use thrust_models::{exists, model::Mut};
 
 #[thrust_macros::requires(thrust_macros::pre!(f()))]
-#[thrust_macros::ensures(thrust_macros::post!(f(), result))]
+#[thrust_macros::ensures(exists(|g| thrust_macros::post!(Mut::new(f, g)(), result)))]
 fn call<F: FnMut() -> i64>(mut f: F) -> i64 {
     f()
 }

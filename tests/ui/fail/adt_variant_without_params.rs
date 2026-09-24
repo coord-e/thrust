@@ -1,3 +1,4 @@
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 //@error-in-other-file: Unsat
 
 enum X<T> {

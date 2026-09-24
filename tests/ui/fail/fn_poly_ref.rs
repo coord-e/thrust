@@ -1,4 +1,5 @@
 //@error-in-other-file: Unsat
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 fn identity_ref<T>(x: &T) -> &T {
     x

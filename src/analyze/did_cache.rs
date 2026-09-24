@@ -19,6 +19,7 @@ struct DefIds {
     box_model: OnceCell<Option<DefId>>,
     array_model: OnceCell<Option<DefId>>,
     closure_model: OnceCell<Option<DefId>>,
+    ghost_model: OnceCell<Option<DefId>>,
 
     mut_model_new: OnceCell<Option<DefId>>,
     box_model_new: OnceCell<Option<DefId>>,
@@ -66,6 +67,10 @@ impl<'tcx> DefIdCache<'tcx> {
 
     pub fn box_(&self) -> Option<DefId> {
         self.tcx.lang_items().owned_box()
+    }
+
+    pub fn vec(&self) -> Option<DefId> {
+        self.tcx.get_diagnostic_item(Symbol::intern("Vec"))
     }
 
     pub fn unique(&self) -> Option<DefId> {
@@ -166,6 +171,13 @@ impl<'tcx> DefIdCache<'tcx> {
             .def_ids
             .closure_model
             .get_or_init(|| self.annotated_def(&crate::analyze::annot::closure_model_path()))
+    }
+
+    pub fn ghost_model(&self) -> Option<DefId> {
+        *self
+            .def_ids
+            .ghost_model
+            .get_or_init(|| self.annotated_def(&crate::analyze::annot::ghost_model_path()))
     }
 
     pub fn mut_model_new(&self) -> Option<DefId> {

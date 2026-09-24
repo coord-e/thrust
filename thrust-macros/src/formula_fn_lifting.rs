@@ -155,11 +155,17 @@ pub fn lift(
 
         match outer {
             FnOuterItem::ItemImpl(item_impl) => {
-                // `Self` in an impl method context: rewrite it to the concrete self type everywhere
-                // TODO: Support generic/trait impl
+                // `Self` in an impl method context: rewrite it to the concrete self type
+                // everywhere. In a trait impl the projection `Self::Item` names the
+                // implemented trait's associated item, so carry that trait along: without it
+                // the substituted `<Wrap<I>>::Item` no longer says which trait to look in.
                 let self_ty = &item_impl.self_ty;
                 let mut rewriter = SelfTypeRewriter {
                     to: *self_ty.clone(),
+                    trait_: item_impl
+                        .trait_
+                        .as_ref()
+                        .map(|(trait_path, _)| trait_path.clone()),
                 };
                 for param in &mut params {
                     rewriter.visit_fn_arg_mut(param);
@@ -179,6 +185,9 @@ pub fn lift(
 
                 let mut rewriter = SelfTypeRewriter {
                     to: syn::parse_quote!(#synth),
+                    // `#synth` is a type parameter bound by the trait below, so
+                    // `<#synth>::Item` resolves through that bound on its own.
+                    trait_: None,
                 };
                 for param in &mut params {
                     rewriter.visit_fn_arg_mut(param);
@@ -299,6 +308,9 @@ impl VisitMut for SelfValueRewriter {
 
 struct SelfTypeRewriter {
     to: syn::Type,
+    /// The trait an enclosing `impl` implements, used to qualify a `Self::Assoc`
+    /// projection as `<#to as #trait_>::Assoc`.
+    trait_: Option<syn::Path>,
 }
 
 impl VisitMut for SelfTypeRewriter {
@@ -325,7 +337,10 @@ impl VisitMut for SelfTypeRewriter {
             *ty = self.to.clone();
         } else {
             let to = &self.to;
-            *ty = syn::parse_quote!(<#to>::#tail)
+            *ty = match &self.trait_ {
+                Some(trait_) => syn::parse_quote!(<#to as #trait_>::#tail),
+                None => syn::parse_quote!(<#to>::#tail),
+            }
         };
     }
 

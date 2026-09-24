@@ -6,6 +6,8 @@
 //! such as naming convention and solver-specific workarounds.
 //! The output of this module is what gets passed to the external CHC solver.
 
+use std::collections::BTreeSet;
+
 use rustc_index::IndexVec;
 
 use crate::chc::{self, format_context::FormatContext};
@@ -103,6 +105,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.inner {
             chc::Term::Null => write!(f, "null"),
+            chc::Term::ForallDefault(idx) => write!(f, "default_{idx}"),
             chc::Term::Var(v) => write!(f, "{}", v),
             chc::Term::Int(i) => write!(f, "{}", i),
             chc::Term::Bool(b) => write!(f, "{}", b),
@@ -261,6 +264,7 @@ impl<'ctx, 'a> std::fmt::Display for Atom<'ctx, 'a> {
         }
         let pred = match &self.inner.pred {
             chc::Pred::Matcher(p) => self.ctx.matcher_pred(p).to_string(),
+            chc::Pred::ForallPred(p) => self.ctx.forall_pred(p).to_string(),
             p => p.name().into_owned(),
         };
         if self.inner.args.is_empty() {
@@ -723,6 +727,72 @@ impl<'ctx, 'a> UserDefinedPredDef<'ctx, 'a> {
         Self { ctx, inner }
     }
 }
+
+pub struct ForallPredDef<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    pred: &'a chc::ForallPred,
+}
+
+impl<'ctx, 'a> std::fmt::Display for ForallPredDef<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let params = self.pred.params.iter().map(|sort| self.ctx.fmt_sort(sort));
+        let params = List::closed(params);
+        write!(
+            f,
+            "(declare-forall-fun {name} {params} Bool)",
+            name = self.ctx.forall_pred(self.pred),
+        )
+    }
+}
+
+impl<'ctx, 'a> ForallPredDef<'ctx, 'a> {
+    pub fn new(ctx: &'ctx FormatContext, pred: &'a chc::ForallPred) -> Self {
+        Self { ctx, pred }
+    }
+}
+
+pub struct DepExistsPredVarDef<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    id: &'a chc::PredVarId,
+    def: &'a chc::PredVarDef,
+    // A `BTreeSet`, not a `HashSet`: `fmt` below iterates this directly to
+    // list a `declare-dep-exists-fun`'s dependencies, so whatever order it
+    // arrives in is the order emitted. It is ordered where it is built, in
+    // `chc::System::compute_dependency`, rather than sorted here.
+    dependencies: &'a BTreeSet<chc::ForallPred>,
+}
+
+impl<'ctx, 'a> std::fmt::Display for DepExistsPredVarDef<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.def.debug_info.is_empty() {
+            writeln!(f, "{}", self.def.debug_info.display("; "))?;
+        }
+        writeln!(
+            f,
+            "(declare-dep-exists-fun {} {} {} Bool)",
+            self.id,
+            List::closed(self.dependencies.iter().map(|p| self.ctx.forall_pred(p))),
+            List::closed(self.def.sig.iter().map(|s| self.ctx.fmt_sort(s))),
+        )
+    }
+}
+
+impl<'ctx, 'a> DepExistsPredVarDef<'ctx, 'a> {
+    pub fn new(
+        ctx: &'ctx FormatContext,
+        id: &'a chc::PredVarId,
+        def: &'a chc::PredVarDef,
+        dependencies: &'a BTreeSet<chc::ForallPred>,
+    ) -> Self {
+        Self {
+            ctx,
+            id,
+            def,
+            dependencies,
+        }
+    }
+}
+
 /// A wrapper around a [`chc::System`] that provides a [`std::fmt::Display`] implementation in SMT-LIB2 format.
 #[derive(Debug, Clone)]
 pub struct System<'a> {
@@ -734,10 +804,39 @@ impl<'a> std::fmt::Display for System<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "(set-logic HORN)\n")?;
 
+        for forall_sort_def in &self.inner.forall_sorts {
+            if !forall_sort_def.debug_info.is_empty() {
+                writeln!(f, "{}", forall_sort_def.debug_info.display("; "))?;
+            }
+            writeln!(f, "(declare-forall-sort {})\n", forall_sort_def.idx)?;
+        }
+        let used_forall_defaults = self.inner.used_forall_default_sorts();
+        for forall_sort_def in &self.inner.forall_sorts {
+            if !used_forall_defaults.contains(&forall_sort_def.idx) {
+                continue;
+            }
+            // The padding of an empty array at an abstract element sort: an arbitrary but
+            // fixed value that nothing is allowed to observe. Under `(set-logic HORN)` a
+            // top-level `declare-const` names something the solver must *build*, and an
+            // abstract sort has no value the solver can build, so that spelling stops the
+            // query at the parser. A nullary `declare-forall-fun` is the universal reading:
+            // the clauses have to hold whatever the padding is, which is what "nothing may
+            // observe it" means.
+            writeln!(
+                f,
+                "(declare-forall-fun default_{} () {})\n",
+                forall_sort_def.idx, forall_sort_def.idx
+            )?;
+        }
+
         writeln!(f, "{}\n", Datatypes::new(&self.ctx, self.ctx.datatypes()))?;
         for datatype in self.ctx.datatypes() {
             writeln!(f, "{}", DatatypeDiscrFun::new(&self.ctx, datatype))?;
             writeln!(f, "{}", MatcherPredFun::new(&self.ctx, datatype))?;
+        }
+
+        for pred in &self.inner.forall_pred_vars {
+            writeln!(f, "{}\n", ForallPredDef::new(&self.ctx, pred))?;
         }
 
         // insert command from #![thrust::raw_command()] here
@@ -754,16 +853,25 @@ impl<'a> std::fmt::Display for System<'a> {
         }
 
         writeln!(f)?;
+        let dependencies = self.inner.compute_dependency();
         for (p, def) in self.inner.pred_vars.iter_enumerated() {
-            if !def.debug_info.is_empty() {
-                writeln!(f, "{}", def.debug_info.display("; "))?;
+            if dependencies.contains_key(&p) && !dependencies[&p].is_empty() {
+                writeln!(
+                    f,
+                    "{}\n",
+                    DepExistsPredVarDef::new(&self.ctx, &p, def, &dependencies[&p])
+                )?;
+            } else {
+                if !def.debug_info.is_empty() {
+                    writeln!(f, "{}", def.debug_info.display("; "))?;
+                }
+                writeln!(
+                    f,
+                    "(declare-fun {} {} Bool)\n",
+                    p,
+                    List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
+                )?;
             }
-            writeln!(
-                f,
-                "(declare-fun {} {} Bool)\n",
-                p,
-                List::closed(def.sig.iter().map(|s| self.ctx.fmt_sort(s)))
-            )?;
         }
         for (id, clause) in self.inner.clauses.iter_enumerated() {
             writeln!(

@@ -1,15 +1,16 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
-//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
+//@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper COAR_IMAGE=coar:latest
 
 use thrust_models::{
-    exists,
-    model::{Int, Mut},
+    exists, forall,
+    model::{Closure, Int, Mut},
 };
 
 // Naming the closure by value leaves its upvars as the call found them, which cannot carry
 // the upvars from one call to the next. `Mut::new` builds the receiver instead, naming the
 // upvars between the two calls.
+#[thrust_macros::requires(forall(|c: Closure<F>| thrust_macros::pre!(c())))]
 #[thrust_macros::ensures(exists(|g, h, i: Int|
   thrust_macros::post!(Mut::new(f, g)(), i)
   && thrust_macros::post!(Mut::new(g, h)(), result)
