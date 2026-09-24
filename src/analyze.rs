@@ -205,6 +205,10 @@ struct InstantiationKey<'tcx> {
     caller_def_id: DefId,
 }
 
+/// Identifies one instance of a predicate with a Rust body: the predicate, its generic
+/// arguments, and the calling function when those arguments mention its type parameters.
+type PredicateInstanceKey<'tcx> = (DefId, mir_ty::GenericArgsRef<'tcx>, Option<DefId>);
+
 /// Identifies one analysis instance of a function body.
 ///
 /// A def may be analyzed more than once: the placeholder analysis (with the
@@ -305,6 +309,8 @@ pub struct Analyzer<'tcx> {
 
     /// Collection of functions with `#[thrust::formula_fn]` attribute.
     formula_fns: HashMap<LocalDefId, DeferredFormulaFnDef<'tcx>>,
+    /// Instances of predicates with a Rust body; see [`Analyzer::predicate_with_args`].
+    predicate_instances: Rc<RefCell<HashMap<PredicateInstanceKey<'tcx>, chc::UserDefinedPred>>>,
 
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
@@ -349,6 +355,7 @@ impl<'tcx> Analyzer<'tcx> {
             tcx,
             defs,
             formula_fns,
+            predicate_instances: Default::default(),
             system,
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
@@ -555,6 +562,61 @@ impl<'tcx> Analyzer<'tcx> {
                 .collect(),
         );
         def_ty.ty.as_function().cloned()
+    }
+
+    /// The predicate symbol for a call to the predicate `def_id` at `generic_args`, made from
+    /// `owner_fn_id`.
+    ///
+    /// A predicate with a Rust body is defined once per instantiation. When the arguments still
+    /// mention type parameters, those belong to `owner_fn_id` and translate to its forall sorts,
+    /// so the instance is keyed by the owner as well.
+    pub fn predicate_with_args(
+        &self,
+        def_id: DefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
+        owner_fn_id: DefId,
+    ) -> chc::UserDefinedPred {
+        let Some(local_def_id) = def_id
+            .as_local()
+            .filter(|id| self.formula_fns.contains_key(id))
+        else {
+            return refine::user_defined_pred(self.tcx, def_id);
+        };
+        use mir_ty::TypeVisitableExt as _;
+        let key = (
+            def_id,
+            generic_args,
+            generic_args.has_param().then_some(owner_fn_id),
+        );
+        if let Some(pred) = self.predicate_instances.borrow().get(&key) {
+            return pred.clone();
+        }
+        let pred = chc::UserDefinedPred::new(format!(
+            "{}_{}",
+            refine::user_defined_pred(self.tcx, def_id),
+            self.predicate_instances.borrow().len(),
+        ));
+        self.predicate_instances
+            .borrow_mut()
+            .insert(key, pred.clone());
+
+        let formula_fn = self
+            .formula_fn_with_args(local_def_id, generic_args, owner_fn_id)
+            .unwrap();
+        let type_builder = self.type_builder(self.def_ids(), owner_fn_id);
+        let arg_sorts = formula_fn
+            .params()
+            .iter()
+            .map(|ty| type_builder.build(*ty).to_sort())
+            .collect();
+        let formula = formula_fn
+            .formula()
+            .clone()
+            .map_var(|idx| chc::TermVarIdx::from(idx.index()));
+        self.system
+            .borrow_mut()
+            .push_pred_define_formula(pred.clone(), arg_sorts, formula);
+        pred
     }
 
     pub fn formula_fn_with_args(

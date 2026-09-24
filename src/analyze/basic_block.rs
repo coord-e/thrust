@@ -11,6 +11,7 @@ use rustc_span::def_id::{DefId, LocalDefId};
 
 use crate::analyze::{self, annot_fn::FormulaFn, TypeParam};
 use crate::chc;
+use crate::chc::debug;
 use crate::pretty::PrettyDisplayExt as _;
 use crate::refine::{
     Assumption, BasicBlockType, BasicBlockTypeParamKind, PlaceType, PlaceTypeBuilder, PlaceTypeVar,
@@ -47,6 +48,37 @@ pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
     let pred = preds[0];
     let pred_term = body.basic_blocks[pred].terminator();
     pred_term.successors().filter(|s| *s == bb).count() > 1
+}
+
+/// Whether every value of the integer type `inner` is also a value of the integer type `outer`.
+fn int_ty_includes<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    outer: mir_ty::Ty<'tcx>,
+    inner: mir_ty::Ty<'tcx>,
+) -> bool {
+    let outer_bits = outer.primitive_size(tcx).bits();
+    let inner_bits = inner.primitive_size(tcx).bits();
+    match (outer.is_signed(), inner.is_signed()) {
+        (true, true) | (false, false) => inner_bits <= outer_bits,
+        (true, false) => inner_bits < outer_bits,
+        (false, true) => false,
+    }
+}
+
+/// Wraps the integer `term` around into the range of the integer type `ty`, as an `as` cast does.
+fn wrap_int_term<'tcx, V>(
+    tcx: TyCtxt<'tcx>,
+    term: chc::Term<V>,
+    ty: mir_ty::Ty<'tcx>,
+) -> chc::Term<V> {
+    let bits = ty.primitive_size(tcx).bits();
+    if ty.is_signed() {
+        term.add(chc::Term::pow2(bits - 1))
+            .mod_(chc::Term::pow2(bits))
+            .sub(chc::Term::pow2(bits - 1))
+    } else {
+        term.mod_(chc::Term::pow2(bits))
+    }
 }
 
 /// Converts the current env state into a `Refinement<FunctionParamIdx>` to be
@@ -302,7 +334,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         for (param_idx, param_rty) in got_args.iter_enumerated() {
             let param_sort = param_rty.ty.to_sort();
             if !param_sort.is_singleton() {
-                builder.add_mapped_var(param_idx, param_sort);
+                let chc_var = builder.add_mapped_var(param_idx, param_sort.clone());
+                builder.add_environment_origin(
+                    debug::origin::Entry::parameter(param_idx, &param_sort)
+                        .var_mapping(param_idx, chc_var),
+                );
             }
         }
         for ((param_idx, got_ty), expected_ty) in got_args.iter_enumerated().zip(&expected_args) {
@@ -386,11 +422,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn const_value_ty(&self, val: &mir::ConstValue, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
         use mir::{interpret::Scalar, ConstValue, Mutability};
         match (ty.kind(), val) {
-            (
-                mir_ty::TyKind::Int(_) | mir_ty::TyKind::Uint(_),
-                ConstValue::Scalar(Scalar::Int(val)),
-            ) => {
+            (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
                 let val = val.to_int(val.size());
+                PlaceType::with_ty_and_term(
+                    rty::Type::int(),
+                    chc::Term::int(val.try_into().unwrap()),
+                )
+            }
+            (mir_ty::TyKind::Uint(_), ConstValue::Scalar(Scalar::Int(val))) => {
+                let val = val.to_uint(val.size());
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
                     chc::Term::int(val.try_into().unwrap()),
@@ -408,8 +448,35 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             (mir_ty::TyKind::Closure(_, args), _) if args.as_closure().upvar_tys().is_empty() => {
                 PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
-            (_, ConstValue::ZeroSized) => {
-                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            (mir_ty::TyKind::Tuple(tys), ConstValue::ZeroSized) => {
+                let pts = tys
+                    .iter()
+                    .map(|ty| self.const_value_ty(&ConstValue::ZeroSized, &ty).boxed())
+                    .collect();
+                PlaceType::tuple(pts)
+            }
+            (mir_ty::TyKind::Adt(def, args), ConstValue::Scalar(_) | ConstValue::ZeroSized)
+                if def.is_struct() =>
+            {
+                // the value is a scalar only when the struct has exactly one non-ZST field,
+                // which holds the scalar
+                let typing_env = self.body.typing_env(self.tcx);
+                let mut pts = Vec::new();
+                for field_def in def.all_fields() {
+                    let field_ty = field_def.ty(self.tcx, args);
+                    let field_layout = self
+                        .tcx
+                        .layout_of(typing_env.as_query_input(field_ty))
+                        .unwrap();
+                    let field_val = if field_layout.is_zst() {
+                        ConstValue::ZeroSized
+                    } else {
+                        *val
+                    };
+                    let pt = self.const_value_ty(&field_val, &field_ty);
+                    pts.push(pt.boxed());
+                }
+                PlaceType::tuple(pts)
             }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
@@ -661,6 +728,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 op_pty.ty = expected_ty;
                 op_pty
             }
+            Rvalue::Cast(mir::CastKind::IntToInt, operand, ty) => {
+                let op_ty = operand.ty(&self.body.local_decls, self.tcx);
+                if !op_ty.is_integral() || !ty.is_integral() {
+                    unimplemented!("int cast: {:?} -> {:?}", op_ty, ty);
+                }
+                let op_pty = self.operand_type(operand);
+                if int_ty_includes(self.tcx, ty, op_ty) {
+                    op_pty
+                } else {
+                    let mut builder = PlaceTypeBuilder::default();
+                    let (_, op_term) = builder.subsume(op_pty);
+                    builder.build(rty::Type::Int, wrap_int_term(self.tcx, op_term, ty))
+                }
+            }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
                 let ty = self.env.place_type(place);
@@ -723,10 +804,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             if sort.is_singleton() {
                 continue;
             }
-            builder.add_mapped_var(param_idx, sort);
-            let tv_param_idx = builder.mapped_var(param_idx);
+            let tv_param_idx = builder.add_mapped_var(param_idx, sort.clone());
+            builder.add_environment_origin(
+                debug::origin::Entry::parameter(param_idx, &sort)
+                    .var_mapping(param_idx, tv_param_idx),
+            );
             let tv_param_var = builder.mapped_var(param_var);
-            builder.add_body(chc::Term::var(tv_param_idx).equal_to(chc::Term::var(tv_param_var)));
+            let assumption = rty::Formula::from(
+                chc::Term::var(tv_param_idx).equal_to(chc::Term::var(tv_param_var)),
+            );
+            let assumption_origin = debug::origin::Entry::assumption(&assumption);
+            builder.add_environment(assumption.body, assumption_origin);
         }
 
         let ret_rty = self.operand_refined_type(Operand::Move(mir::RETURN_PLACE.into()));

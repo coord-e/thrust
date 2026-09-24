@@ -8,6 +8,7 @@ use rustc_span::def_id::LocalDefId;
 
 use crate::analyze;
 use crate::chc;
+use crate::chc::debug;
 use crate::rty::ClauseBuilderExt as _;
 
 /// An implementation of local crate analysis.
@@ -89,13 +90,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 self.skip_analysis.insert(*local_def_id);
                 keys.swap_remove(local_def_id);
             }
-            if analyzer.is_annotated_as_predicate() {
-                analyzer.analyze_predicate_definition();
-                self.skip_analysis.insert(*local_def_id);
-                keys.swap_remove(local_def_id);
-            }
-            if analyzer.is_annotated_as_formula_fn() {
-                self.ctx.register_formula_fn(*local_def_id);
+            let is_predicate = analyzer.is_annotated_as_predicate();
+            let is_formula_fn = analyzer.is_annotated_as_formula_fn();
+            if is_predicate || is_formula_fn {
+                if is_formula_fn {
+                    self.ctx.register_formula_fn(*local_def_id);
+                }
+                if is_predicate && !is_formula_fn {
+                    self.ctx
+                        .local_def_analyzer(*local_def_id)
+                        .analyze_predicate_definition();
+                }
                 self.skip_analysis.insert(*local_def_id);
                 keys.swap_remove(local_def_id);
             }
@@ -246,10 +251,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             for (param_idx, param_ty) in entry_ty.params.iter_enumerated() {
                 let param_sort = param_ty.ty.to_sort();
                 if !param_sort.is_singleton() {
-                    builder.add_mapped_var(param_idx, param_sort);
+                    let chc_var = builder.add_mapped_var(param_idx, param_sort.clone());
+                    builder.add_environment_origin(
+                        debug::origin::Entry::parameter(param_idx, &param_sort)
+                            .var_mapping(param_idx, chc_var),
+                    );
                 }
             }
-            builder.add_body(chc::Atom::top());
             for param_ty in entry_ty.params {
                 let cs = builder
                     .clone()

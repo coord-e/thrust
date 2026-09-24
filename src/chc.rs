@@ -9,7 +9,7 @@ use rustc_index::IndexVec;
 use crate::pretty::PrettyDisplayExt as _;
 
 mod clause_builder;
-mod debug;
+pub mod debug;
 mod format_context;
 mod hoice;
 mod smtlib2;
@@ -485,6 +485,7 @@ impl Function {
             Self::ADD => Sort::int(),
             Self::SUB => Sort::int(),
             Self::MUL => Sort::int(),
+            Self::MOD => Sort::int(),
             Self::EQ => Sort::bool(),
             Self::GE => Sort::bool(),
             Self::GT => Sort::bool(),
@@ -519,6 +520,7 @@ impl Function {
     pub const ADD: Function = Function::infix("+");
     pub const SUB: Function = Function::infix("-");
     pub const MUL: Function = Function::infix("*");
+    pub const MOD: Function = Function::new("mod");
     pub const EQ: Function = Function::infix("=");
     pub const GE: Function = Function::infix(">=");
     pub const GT: Function = Function::infix(">");
@@ -777,6 +779,18 @@ impl<V> Term<V> {
         Term::Int(n)
     }
 
+    /// The integer `2^exp`.
+    ///
+    /// [`Term::Int`] holds an `i64`, so from `2^63` on the value cannot be a single literal
+    /// and is instead expressed as a product of literals, e.g. `2^64` as `2^32 * 2^32`.
+    pub fn pow2(exp: u64) -> Self {
+        if exp < 63 {
+            Term::int(1 << exp)
+        } else {
+            Term::pow2(exp / 2).mul(Term::pow2(exp - exp / 2))
+        }
+    }
+
     pub fn bool(b: bool) -> Self {
         Term::Bool(b)
     }
@@ -876,6 +890,10 @@ impl<V> Term<V> {
 
     pub fn mul(self, other: Self) -> Self {
         Term::App(Function::MUL, vec![self, other])
+    }
+
+    pub fn mod_(self, other: Self) -> Self {
+        Term::App(Function::MOD, vec![self, other])
     }
 
     pub fn eq(self, other: Self) -> Self {
@@ -1427,11 +1445,6 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let guard = if let Some(guard) = &self.guard {
-            guard.pretty(allocator).append(allocator.text(" ⇒"))
-        } else {
-            allocator.nil()
-        };
         let atom = if self.pred.is_infix() {
             self.args[0]
                 .pretty_atom(allocator)
@@ -1452,7 +1465,16 @@ where
                 p.append(allocator.line()).append(inner.nest(2)).group()
             }
         };
-        guard.append(allocator.line()).append(atom).group()
+        if let Some(guard) = &self.guard {
+            guard
+                .pretty(allocator)
+                .append(allocator.text(" ⇒"))
+                .append(allocator.line())
+                .append(atom)
+                .group()
+        } else {
+            atom
+        }
     }
 }
 
@@ -2039,6 +2061,7 @@ where
 /// atoms and underlying logical formula, and `head` is an atom.
 #[derive(Debug, Clone)]
 pub struct Clause {
+    pub origin: debug::origin::ClauseOrigin,
     pub vars: IndexVec<TermVarIdx, Sort>,
     pub head: Atom<TermVarIdx>,
     pub body: Body<TermVarIdx>,
@@ -2080,10 +2103,6 @@ where
 impl Clause {
     pub fn is_nop(&self) -> bool {
         self.head.is_top() || self.body.is_bottom()
-    }
-
-    fn term_sort(&self, term: &Term<TermVarIdx>) -> Sort {
-        term.sort(|v| self.vars[*v].clone())
     }
 }
 
@@ -2149,11 +2168,22 @@ pub struct PredVarDef {
 
 pub type UserDefinedPredSig = Vec<(String, Sort)>;
 
+/// The body of a user-defined predicate.
+///
+/// A predicate can be defined either by a raw SMT-LIB2 string (inserted into the
+/// generated `define-fun` verbatim) or by a [`Formula`] translated from a Rust
+/// expression via the `formula_fn` infrastructure.
+#[derive(Debug, Clone)]
+pub enum UserDefinedPredBody {
+    Raw(String),
+    Formula(Formula<TermVarIdx>),
+}
+
 #[derive(Debug, Clone)]
 pub struct UserDefinedPredDef {
     symbol: UserDefinedPred,
     sig: UserDefinedPredSig,
-    body: String,
+    body: UserDefinedPredBody,
     /// `ForallPred`s referenced from `body`. Populated just before dependency
     /// analysis by `System::populate_user_defined_pred_dependencies`.
     pub dependencies: HashSet<ForallPred>,
@@ -2221,6 +2251,29 @@ pub struct System {
 }
 
 impl System {
+    fn user_defined_preds_in_dependency_order(&self) -> Vec<&UserDefinedPredDef> {
+        let mut remaining: Vec<_> = self.user_defined_pred_defs.iter().collect();
+        let mut ordered = Vec::with_capacity(remaining.len());
+        while !remaining.is_empty() {
+            let next = remaining
+                .iter()
+                .position(|def| match &def.body {
+                    UserDefinedPredBody::Raw(_) => true,
+                    UserDefinedPredBody::Formula(formula) => formula.iter_atoms().all(|atom| {
+                        let Pred::UserDefined(pred) = &atom.pred else {
+                            return true;
+                        };
+                        !remaining
+                            .iter()
+                            .any(|dependency| dependency.symbol == *pred)
+                    }),
+                })
+                .expect("recursive predicate definitions are not supported");
+            ordered.push(remaining.remove(next));
+        }
+        ordered
+    }
+
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
     }
@@ -2260,19 +2313,37 @@ impl System {
         self.user_defined_pred_defs.push(UserDefinedPredDef {
             symbol,
             sig,
-            body,
+            body: UserDefinedPredBody::Raw(body),
             dependencies,
+        })
+    }
+
+    pub fn push_pred_define_formula(
+        &mut self,
+        symbol: UserDefinedPred,
+        arg_sorts: IndexVec<TermVarIdx, Sort>,
+        formula: Formula<TermVarIdx>,
+    ) {
+        let sig = arg_sorts
+            .into_iter_enumerated()
+            .map(|(var, sort)| (var.to_string(), sort))
+            .collect();
+        self.user_defined_pred_defs.push(UserDefinedPredDef {
+            symbol,
+            sig,
+            body: UserDefinedPredBody::Formula(formula),
+            dependencies: HashSet::new(),
         })
     }
 
     /// Scans every [`UserDefinedPredDef`]'s body for references to registered
     /// [`ForallPred`]s and records the matches in `dependencies`.
     ///
-    /// The user-supplied SMT-LIB2 body of a `#[thrust_macros::predicate]` is a
-    /// raw string and therefore opaque to the analyzer. To still let dependency
-    /// analysis see transitive `ForallPred` uses, we look for the SMT-LIB2
-    /// representation of every registered `ForallPred` as a substring of each
-    /// body. Must be called after every `ForallPred` has been registered
+    /// A formula body is scanned for `ForallPred` atoms directly. A raw
+    /// SMT-LIB2 body of a `#[thrust_macros::predicate]` is opaque to the
+    /// analyzer, so to still let dependency analysis see transitive
+    /// `ForallPred` uses, we look for the SMT-LIB2 representation of every
+    /// registered `ForallPred` as a substring of it. Must be called after every `ForallPred` has been registered
     /// (i.e. after `crate::refine::template` and trait/closure pre/post
     /// construction finish) and before [`System::compute_dependency`].
     pub fn populate_user_defined_pred_dependencies(&mut self) {
@@ -2285,9 +2356,21 @@ impl System {
             .collect();
 
         for udpd in &mut self.user_defined_pred_defs {
-            for (pred, name) in &forall_names {
-                if udpd.body.contains(name.as_str()) {
-                    udpd.dependencies.insert(pred.clone());
+            match &udpd.body {
+                UserDefinedPredBody::Raw(body) => {
+                    for (pred, name) in &forall_names {
+                        if body.contains(name.as_str()) {
+                            udpd.dependencies.insert(pred.clone());
+                        }
+                    }
+                }
+                UserDefinedPredBody::Formula(formula) => {
+                    udpd.dependencies.extend(formula.iter_atoms().filter_map(
+                        |atom| match &atom.pred {
+                            Pred::ForallPred(pred) => Some(pred.clone()),
+                            _ => None,
+                        },
+                    ));
                 }
             }
         }
@@ -2373,7 +2456,24 @@ impl System {
         // Each `UserDefinedPred`'s body may call `ForallPred`s. We populate
         // these lazily via `populate_user_defined_pred_dependencies`; thread
         // them into the forall map so transitive propagation sees them.
+        // A formula body may also call other `UserDefinedPred`s, whose
+        // `ForallPred` uses then propagate through it.
         for udpd in &self.user_defined_pred_defs {
+            if let UserDefinedPredBody::Formula(formula) = &udpd.body {
+                let callees: HashSet<_> = formula
+                    .iter_atoms()
+                    .filter_map(|atom| match &atom.pred {
+                        Pred::UserDefined(p) => Some(ExistsDep::UserDefined(p.clone())),
+                        _ => None,
+                    })
+                    .collect();
+                if !callees.is_empty() {
+                    exists_deps
+                        .entry(ExistsDep::UserDefined(udpd.symbol.clone()))
+                        .or_default()
+                        .extend(callees);
+                }
+            }
             if !udpd.dependencies.is_empty() {
                 forall_deps
                     .entry(ExistsDep::UserDefined(udpd.symbol.clone()))
@@ -2492,6 +2592,14 @@ fn collect_forall_defaults(term: &Term<TermVarIdx>, used: &mut HashSet<ForallSor
 mod tests {
     use super::*;
 
+    fn test_origin(var: TermVarIdx, sort: &Sort) -> debug::origin::ClauseOrigin {
+        debug::origin::ClauseOrigin {
+            environment: Vec::new(),
+            body: Vec::new(),
+            head: debug::origin::Entry::parameter(var, sort),
+        }
+    }
+
     #[test]
     fn declares_forall_default_once() {
         let mut system = System::default();
@@ -2502,6 +2610,7 @@ mod tests {
             vec![default, Term::var(0usize.into())],
         );
         system.push_clause(Clause {
+            origin: test_origin(0usize.into(), &Sort::forall(idx)),
             vars: [Sort::forall(idx)].into_iter().collect(),
             head: Atom::new(Pred::UserDefined(UserDefinedPred::new("p".into())), vec![]),
             body: body.into(),
@@ -2527,6 +2636,7 @@ mod tests {
             vec![empty, Term::var(0usize.into())],
         );
         system.push_clause(Clause {
+            origin: test_origin(0usize.into(), &seq_sort),
             vars: [seq_sort].into_iter().collect(),
             head: Atom::new(Pred::UserDefined(UserDefinedPred::new("p".into())), vec![]),
             body: body.into(),

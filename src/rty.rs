@@ -569,10 +569,10 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let separator = allocator.text(",").append(allocator.line());
         if self.elems.len() == 1 {
-            self.elems[0].pretty(allocator).append(separator).parens()
+            self.elems[0].pretty(allocator).append(",").parens()
         } else {
+            let separator = allocator.text(",").append(allocator.line());
             allocator
                 .intersperse(self.elems.iter().map(|s| s.pretty(allocator)), separator)
                 .parens()

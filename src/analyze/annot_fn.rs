@@ -9,7 +9,7 @@ use rustc_index::IndexVec;
 use rustc_middle::ty::{self as mir_ty, TyCtxt, TypeFoldable};
 
 use crate::analyze::{self, did_cache::DefIdCache};
-use crate::chc::{self};
+use crate::chc;
 use crate::refine::{self, TypeBuilder};
 use crate::rty;
 
@@ -1055,35 +1055,38 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 generic_args,
                             )
                             .unwrap();
-                            let (is_unresolved_args, pred_def_id) = match instance {
-                                Some(instance) => (false, instance.def_id()),
-                                None => (true, def_id),
-                            };
+                            let pred: chc::Pred = match instance {
+                                None => {
+                                    tracing::debug!(?self.local_def_id, ?generic_args, "owner_fn_id={:?}", self.type_builder.owner_fn_id());
+                                    let type_params = generic_args
+                                        .types()
+                                        .map(|ty| self.type_builder.build(ty).to_sort())
+                                        .collect();
 
-                            let pred = if is_unresolved_args {
-                                tracing::debug!(?self.local_def_id, ?generic_args, "owner_fn_id={:?}", self.type_builder.owner_fn_id());
-                                let type_params = generic_args
-                                    .types()
-                                    .map(|ty| self.type_builder.build(ty).to_sort())
-                                    .collect();
+                                    let params = args
+                                        .iter()
+                                        .map(|expr| {
+                                            self.type_builder.build(self.expr_ty(expr)).to_sort()
+                                        })
+                                        .collect();
 
-                                let params = args
-                                    .iter()
-                                    .map(|expr| {
-                                        self.type_builder.build(self.expr_ty(expr)).to_sort()
-                                    })
-                                    .collect();
-
-                                let pred = refine::trait_forall_pred(
-                                    self.tcx,
-                                    pred_def_id,
-                                    type_params,
-                                    params,
-                                );
-                                self.register_forall_pred(pred.clone());
-                                pred.into()
-                            } else {
-                                refine::user_defined_pred(self.tcx, pred_def_id).into()
+                                    let pred = refine::trait_forall_pred(
+                                        self.tcx,
+                                        def_id,
+                                        type_params,
+                                        params,
+                                    );
+                                    self.register_forall_pred(pred.clone());
+                                    pred.into()
+                                }
+                                Some(instance) => self
+                                    .analyzer
+                                    .predicate_with_args(
+                                        instance.def_id(),
+                                        instance.args,
+                                        self.type_builder.owner_fn_id(),
+                                    )
+                                    .into(),
                             };
                             tracing::debug!("resolved predicate call in formula: {:?}", pred);
                             let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
