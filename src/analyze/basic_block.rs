@@ -437,9 +437,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
                 PlaceType::tuple(pts)
             }
-            (_, ConstValue::ZeroSized) => {
-                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
-            }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
                 ConstValue::Scalar(Scalar::Ptr(ptr, _)),
