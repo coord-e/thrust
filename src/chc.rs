@@ -406,6 +406,7 @@ impl Function {
             Self::ADD => Sort::int(),
             Self::SUB => Sort::int(),
             Self::MUL => Sort::int(),
+            Self::MOD => Sort::int(),
             Self::EQ => Sort::bool(),
             Self::GE => Sort::bool(),
             Self::GT => Sort::bool(),
@@ -440,6 +441,7 @@ impl Function {
     pub const ADD: Function = Function::infix("+");
     pub const SUB: Function = Function::infix("-");
     pub const MUL: Function = Function::infix("*");
+    pub const MOD: Function = Function::new("mod");
     pub const EQ: Function = Function::infix("=");
     pub const GE: Function = Function::infix(">=");
     pub const GT: Function = Function::infix(">");
@@ -693,6 +695,18 @@ impl<V> Term<V> {
         Term::Int(n)
     }
 
+    /// The integer `2^exp`.
+    ///
+    /// [`Term::Int`] holds an `i64`, so from `2^63` on the value cannot be a single literal
+    /// and is instead expressed as a product of literals, e.g. `2^64` as `2^32 * 2^32`.
+    pub fn pow2(exp: u64) -> Self {
+        if exp < 63 {
+            Term::int(1 << exp)
+        } else {
+            Term::pow2(exp / 2).mul(Term::pow2(exp - exp / 2))
+        }
+    }
+
     pub fn bool(b: bool) -> Self {
         Term::Bool(b)
     }
@@ -791,6 +805,10 @@ impl<V> Term<V> {
 
     pub fn mul(self, other: Self) -> Self {
         Term::App(Function::MUL, vec![self, other])
+    }
+
+    pub fn mod_(self, other: Self) -> Self {
+        Term::App(Function::MOD, vec![self, other])
     }
 
     pub fn eq(self, other: Self) -> Self {
