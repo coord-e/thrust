@@ -407,11 +407,17 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             (mir_ty::TyKind::Closure(_, args), _) if args.as_closure().upvar_tys().is_empty() => {
                 PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
-            (_, ConstValue::ZeroSized) => {
-                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            (mir_ty::TyKind::Tuple(tys), ConstValue::ZeroSized) => {
+                let pts = tys
+                    .iter()
+                    .map(|ty| self.const_value_ty(&ConstValue::ZeroSized, &ty).boxed())
+                    .collect();
+                PlaceType::tuple(pts)
             }
-            (mir_ty::TyKind::Adt(def, args), ConstValue::Scalar(_)) if def.is_struct() => {
-                // a struct with scalar representation has exactly one non-ZST field,
+            (mir_ty::TyKind::Adt(def, args), ConstValue::Scalar(_) | ConstValue::ZeroSized)
+                if def.is_struct() =>
+            {
+                // the value is a scalar only when the struct has exactly one non-ZST field,
                 // which holds the scalar
                 let typing_env = self.body.typing_env(self.tcx);
                 let mut pts = Vec::new();
@@ -430,6 +436,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     pts.push(pt.boxed());
                 }
                 PlaceType::tuple(pts)
+            }
+            (_, ConstValue::ZeroSized) => {
+                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
