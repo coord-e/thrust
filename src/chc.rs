@@ -695,7 +695,10 @@ impl<V> Term<V> {
         Term::Int(n)
     }
 
-    /// `2^exp`, built as a product of smaller powers when it does not fit in `i64`.
+    /// The integer `2^exp`.
+    ///
+    /// [`Term::Int`] holds an `i64`, so from `2^63` on the value cannot be a single literal
+    /// and is instead expressed as a product of literals, e.g. `2^64` as `2^32 * 2^32`.
     pub fn pow2(exp: u64) -> Self {
         if exp < 63 {
             Term::int(1 << exp)
