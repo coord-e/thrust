@@ -726,11 +726,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 FormulaOrTerm::Term(operand.boxed())
             }
             ExprKind::Lit(lit) => match lit.node {
-                rustc_ast::LitKind::Int(i, _) => {
-                    let n = i64::try_from(i.get())
-                        .expect("integer literal out of i64 range in formula");
-                    FormulaOrTerm::Term(chc::Term::int(n))
-                }
+                rustc_ast::LitKind::Int(i, _) => FormulaOrTerm::Term(chc::Term::int(i.get())),
                 rustc_ast::LitKind::Bool(b) => FormulaOrTerm::Literal(b),
                 _ => unimplemented!("unsupported literal in formula: {:?}", lit),
             },

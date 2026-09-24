@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use num_bigint::BigInt;
 use rustc_hir::lang_items::LangItem;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{self, BasicBlock, Local};
@@ -85,12 +86,12 @@ pub fn function_param_of_local(local: Local) -> rty::FunctionParamIdx {
     rty::FunctionParamIdx::from(local.as_usize() - 1)
 }
 
-fn discr_value<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::util::Discr<'tcx>) -> i64 {
+fn discr_value<'tcx>(tcx: TyCtxt<'tcx>, discr: mir_ty::util::Discr<'tcx>) -> BigInt {
     let (size, signed) = discr.ty.int_size_and_signed(tcx);
     if signed {
-        size.sign_extend(discr.val).try_into().unwrap()
+        size.sign_extend(discr.val).into()
     } else {
-        discr.val.try_into().unwrap()
+        discr.val.into()
     }
 }
 
@@ -366,7 +367,7 @@ impl<'tcx> Analyzer<'tcx> {
                         sort: ty.to_sort(),
                     })
                     .collect(),
-                discriminant: v.discr,
+                discriminant: v.discr.clone(),
             })
             .collect();
         let datatype = chc::Datatype {

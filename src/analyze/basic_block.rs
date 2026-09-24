@@ -417,17 +417,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         use mir::{interpret::Scalar, ConstValue, Mutability};
         match (ty.kind(), val) {
             (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                let val = val.to_int(val.size());
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
-                    chc::Term::int(val.try_into().unwrap()),
+                    chc::Term::int(val.to_int(val.size())),
                 )
             }
             (mir_ty::TyKind::Uint(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                let val = val.to_uint(val.size());
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
-                    chc::Term::int(val.try_into().unwrap()),
+                    chc::Term::int(val.to_uint(val.size())),
                 )
             }
             (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
@@ -939,12 +937,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 (1, rty::Type::Bool) => chc::Term::bool(true),
                 (_, rty::Type::Int) => {
                     let (size, signed) = discr_mir_ty.int_size_and_signed(self.tcx);
-                    let val: i64 = if signed {
-                        size.sign_extend(bits).try_into().unwrap()
+                    if signed {
+                        chc::Term::int(size.sign_extend(bits))
                     } else {
-                        bits.try_into().unwrap()
-                    };
-                    chc::Term::int(val)
+                        chc::Term::int(bits)
+                    }
                 }
                 _ => unimplemented!(),
             };
