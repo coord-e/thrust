@@ -50,6 +50,37 @@ pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
     pred_term.successors().filter(|s| *s == bb).count() > 1
 }
 
+/// Whether every value of the integer type `inner` is also a value of the integer type `outer`.
+fn int_ty_includes<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    outer: mir_ty::Ty<'tcx>,
+    inner: mir_ty::Ty<'tcx>,
+) -> bool {
+    let outer_bits = outer.primitive_size(tcx).bits();
+    let inner_bits = inner.primitive_size(tcx).bits();
+    match (outer.is_signed(), inner.is_signed()) {
+        (true, true) | (false, false) => inner_bits <= outer_bits,
+        (true, false) => inner_bits < outer_bits,
+        (false, true) => false,
+    }
+}
+
+/// Wraps the integer `term` around into the range of the integer type `ty`, as an `as` cast does.
+fn wrap_int_term<'tcx, V>(
+    tcx: TyCtxt<'tcx>,
+    term: chc::Term<V>,
+    ty: mir_ty::Ty<'tcx>,
+) -> chc::Term<V> {
+    let bits = ty.primitive_size(tcx).bits();
+    if ty.is_signed() {
+        term.add(chc::Term::pow2(bits - 1))
+            .mod_(chc::Term::pow2(bits))
+            .sub(chc::Term::pow2(bits - 1))
+    } else {
+        term.mod_(chc::Term::pow2(bits))
+    }
+}
+
 /// Converts the current env state into a `Refinement<FunctionParamIdx>` to be
 /// used as the inherited precondition of a successor block.
 ///
@@ -690,6 +721,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
                 op_pty.ty = expected_ty;
                 op_pty
+            }
+            Rvalue::Cast(mir::CastKind::IntToInt, operand, ty) => {
+                let op_ty = operand.ty(&self.body.local_decls, self.tcx);
+                if !op_ty.is_integral() || !ty.is_integral() {
+                    unimplemented!("int cast: {:?} -> {:?}", op_ty, ty);
+                }
+                let op_pty = self.operand_type(operand);
+                if int_ty_includes(self.tcx, ty, op_ty) {
+                    op_pty
+                } else {
+                    let mut builder = PlaceTypeBuilder::default();
+                    let (_, op_term) = builder.subsume(op_pty);
+                    builder.build(rty::Type::Int, wrap_int_term(self.tcx, op_term, ty))
+                }
             }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
