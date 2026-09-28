@@ -1148,6 +1148,9 @@ where
         let rty::Type::Pointer(pointer) = &mut borrowed.ty else {
             unreachable!();
         };
+        // borrow_var replaces the borrowed value with prophecy_var in the environment.
+        // Reconstruct each parent after that update, then replace prophecy_var with
+        // Value to express the parent's invariant as a refinement of the borrowed pointee.
         for (parent, refinement) in invariants {
             if refinement.is_top() {
                 continue;
