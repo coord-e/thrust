@@ -945,22 +945,42 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     where
         I: IntoIterator<Item = Operand<'tcx>>,
     {
+        let mut args = args.into_iter();
+        if let Some((def_id, _)) = func.const_fn_def() {
+            if Some(def_id) == self.ctx.def_ids().box_new() {
+                self.type_box(args.next().expect("Box::new argument"), expected_ret);
+                return;
+            }
+        }
+
         // TODO: handle const_fn_def on Env side
         let func_ty = if let Some((def_id, args)) = func.const_fn_def() {
             self.fn_def_ty(def_id, args).vacuous()
         } else {
             self.operand_type(func.clone()).ty
         };
-        let expected_args: IndexVec<_, _> = args
-            .into_iter()
-            .map(|op| self.operand_refined_type(op))
-            .collect();
+        let expected_args: IndexVec<_, _> = args.map(|op| self.operand_refined_type(op)).collect();
         if let rty::Type::Function(func_ty) = func_ty {
             let clauses = self.relate_fn_sub_type(func_ty, expected_args, expected_ret.clone());
             self.ctx.extend_clauses(clauses);
         } else {
             panic!("unexpected def type: {:?}", func_ty);
         }
+    }
+
+    fn type_box(&mut self, value: Operand<'tcx>, expected: &rty::RefinedType<Var>) {
+        let value = self.operand_type(value);
+        let pointer = expected.ty.as_pointer().expect("Box::new return type");
+        let clauses = self
+            .env
+            .relate_sub_refined_type(&value.clone().into(), &pointer.elem);
+        self.ctx.extend_clauses(clauses);
+
+        let mut builder = PlaceTypeBuilder::default();
+        let (_, term) = builder.subsume(value);
+        let boxed = builder.build(expected.ty.clone(), term.boxed());
+        let clauses = self.env.relate_sub_refined_type(&boxed.into(), expected);
+        self.ctx.extend_clauses(clauses);
     }
 
     /// The formula function a ghost marker call carries, or `None` for any other call.
