@@ -50,8 +50,8 @@ jobs:
           tar --strip-components=1 -xf thrust-pcsat-wrapper.tar.gz
           mv thrust-pcsat-wrapper "$GITHUB_WORKSPACE/tests/thrust-pcsat-wrapper"
         env:
-          PCSAT_URL: https://thrust-ci-public.s3.ap-northeast-1.amazonaws.com/pcsat/thrust-pcsat-wrapper-49ed9fe340.tar.gz
-          PCSAT_SHA256: 7a606b60050e8e04aece7a58297fcd80055783084996d2f1c9fa99d9d51d6114
+          PCSAT_URL: https://thrust-ci-public.s3.ap-northeast-1.amazonaws.com/pcsat/thrust-pcsat-wrapper-e25ef7f418.tar.gz
+          PCSAT_SHA256: bd393ac3aab8fcf1cc7a382cccf36ebe381a6aec71025b9d8bf5a7437ce53b58
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
