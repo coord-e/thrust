@@ -39,6 +39,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use num_bigint::BigInt;
 use pretty::{termcolor, Pretty};
 use rustc_abi::VariantIdx;
 use rustc_index::IndexVec;
@@ -599,10 +600,10 @@ where
     D::Doc: Clone,
 {
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
-        let separator = allocator.text(",").append(allocator.line());
         if self.elems.len() == 1 {
-            self.elems[0].pretty(allocator).append(separator).parens()
+            self.elems[0].pretty(allocator).append(",").parens()
         } else {
+            let separator = allocator.text(",").append(allocator.line());
             allocator
                 .intersperse(self.elems.iter().map(|s| s.pretty(allocator)), separator)
                 .parens()
@@ -690,7 +691,7 @@ impl<T> TupleType<T> {
 #[derive(Debug, Clone)]
 pub struct EnumVariantDef {
     pub name: chc::DatatypeSymbol,
-    pub discr: i64,
+    pub discr: BigInt,
     pub field_tys: Vec<Type<Closed>>,
 }
 

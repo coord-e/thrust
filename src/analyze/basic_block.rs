@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use num_bigint::BigInt;
 use rustc_hir::def::DefKind;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{
@@ -48,6 +49,39 @@ pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
     let pred = preds[0];
     let pred_term = body.basic_blocks[pred].terminator();
     pred_term.successors().filter(|s| *s == bb).count() > 1
+}
+
+/// Whether every value of the integer type `inner` is also a value of the integer type `outer`.
+fn int_ty_includes<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    outer: mir_ty::Ty<'tcx>,
+    inner: mir_ty::Ty<'tcx>,
+) -> bool {
+    let outer_bits = outer.primitive_size(tcx).bits();
+    let inner_bits = inner.primitive_size(tcx).bits();
+    match (outer.is_signed(), inner.is_signed()) {
+        (true, true) | (false, false) => inner_bits <= outer_bits,
+        (true, false) => inner_bits < outer_bits,
+        (false, true) => false,
+    }
+}
+
+/// Wraps the integer `term` around into the range of the integer type `ty`, as an `as` cast does.
+fn wrap_int_term<'tcx, V>(
+    tcx: TyCtxt<'tcx>,
+    term: chc::Term<V>,
+    ty: mir_ty::Ty<'tcx>,
+) -> chc::Term<V> {
+    let bits = ty.primitive_size(tcx).bits();
+    let modulus = BigInt::from(1) << bits;
+    if ty.is_signed() {
+        let half = BigInt::from(1) << (bits - 1);
+        term.add(chc::Term::int(half.clone()))
+            .mod_(chc::Term::int(modulus))
+            .sub(chc::Term::int(half))
+    } else {
+        term.mod_(chc::Term::int(modulus))
+    }
 }
 
 /// Converts the current env state into a `Refinement<FunctionParamIdx>` to be
@@ -372,14 +406,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn const_value_ty(&self, val: &mir::ConstValue, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
         use mir::{interpret::Scalar, ConstValue, Mutability};
         match (ty.kind(), val) {
-            (
-                mir_ty::TyKind::Int(_) | mir_ty::TyKind::Uint(_),
-                ConstValue::Scalar(Scalar::Int(val)),
-            ) => {
-                let val = val.to_int(val.size());
+            (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
-                    chc::Term::int(val.try_into().unwrap()),
+                    chc::Term::int(val.to_int(val.size())),
+                )
+            }
+            (mir_ty::TyKind::Uint(_), ConstValue::Scalar(Scalar::Int(val))) => {
+                PlaceType::with_ty_and_term(
+                    rty::Type::int(),
+                    chc::Term::int(val.to_uint(val.size())),
                 )
             }
             (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
@@ -394,8 +430,35 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             (mir_ty::TyKind::Closure(_, args), _) if args.as_closure().upvar_tys().is_empty() => {
                 PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
-            (_, ConstValue::ZeroSized) => {
-                PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
+            (mir_ty::TyKind::Tuple(tys), ConstValue::ZeroSized) => {
+                let pts = tys
+                    .iter()
+                    .map(|ty| self.const_value_ty(&ConstValue::ZeroSized, &ty).boxed())
+                    .collect();
+                PlaceType::tuple(pts)
+            }
+            (mir_ty::TyKind::Adt(def, args), ConstValue::Scalar(_) | ConstValue::ZeroSized)
+                if def.is_struct() =>
+            {
+                // the value is a scalar only when the struct has exactly one non-ZST field,
+                // which holds the scalar
+                let typing_env = self.body.typing_env(self.tcx);
+                let mut pts = Vec::new();
+                for field_def in def.all_fields() {
+                    let field_ty = field_def.ty(self.tcx, args);
+                    let field_layout = self
+                        .tcx
+                        .layout_of(typing_env.as_query_input(field_ty))
+                        .unwrap();
+                    let field_val = if field_layout.is_zst() {
+                        ConstValue::ZeroSized
+                    } else {
+                        *val
+                    };
+                    let pt = self.const_value_ty(&field_val, &field_ty);
+                    pts.push(pt.boxed());
+                }
+                PlaceType::tuple(pts)
             }
             (
                 mir_ty::TyKind::Ref(_, elem, Mutability::Not),
@@ -647,6 +710,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 op_pty.ty = expected_ty;
                 op_pty
             }
+            Rvalue::Cast(mir::CastKind::IntToInt, operand, ty) => {
+                let op_ty = operand.ty(&self.body.local_decls, self.tcx);
+                if !op_ty.is_integral() || !ty.is_integral() {
+                    unimplemented!("int cast: {:?} -> {:?}", op_ty, ty);
+                }
+                let op_pty = self.operand_type(operand);
+                if int_ty_includes(self.tcx, ty, op_ty) {
+                    op_pty
+                } else {
+                    let mut builder = PlaceTypeBuilder::default();
+                    let (_, op_term) = builder.subsume(op_pty);
+                    builder.build(rty::Type::Int, wrap_int_term(self.tcx, op_term, ty))
+                }
+            }
             Rvalue::Discriminant(place) => {
                 let place = self.elaborate_place(&place);
                 let ty = self.env.place_type(place);
@@ -843,12 +920,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 (1, rty::Type::Bool) => chc::Term::bool(true),
                 (_, rty::Type::Int) => {
                     let (size, signed) = discr_mir_ty.int_size_and_signed(self.tcx);
-                    let val: i64 = if signed {
-                        size.sign_extend(bits).try_into().unwrap()
+                    if signed {
+                        chc::Term::int(size.sign_extend(bits))
                     } else {
-                        bits.try_into().unwrap()
-                    };
-                    chc::Term::int(val)
+                        chc::Term::int(bits)
+                    }
                 }
                 _ => unimplemented!(),
             };

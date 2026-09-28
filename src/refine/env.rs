@@ -779,7 +779,7 @@ where
                 field_ty.instantiate_ty_params(ty.args.clone());
                 let guarded_field_ty = field_ty.guarded(
                     chc::Term::var(discr_var.into())
-                        .equal_to(chc::Term::int(variant_def.discr))
+                        .equal_to(chc::Term::int(variant_def.discr.clone()))
                         .into(),
                 );
                 let field_pointer = rty::PointerType::own_refined(guarded_field_ty);
@@ -1069,7 +1069,8 @@ where
                     term = Some(match term {
                         None => value,
                         Some(other) => chc::Term::ite(
-                            chc::Term::var((*discr).into()).eq(chc::Term::int(variant.discr)),
+                            chc::Term::var((*discr).into())
+                                .eq(chc::Term::int(variant.discr.clone())),
                             value,
                             other,
                         ),

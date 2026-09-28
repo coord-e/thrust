@@ -7,7 +7,7 @@ use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
 use crate::analyze::{self, did_cache::DefIdCache};
 use crate::chc;
-use crate::refine::{self, TypeBuilder};
+use crate::refine::TypeBuilder;
 use crate::rty;
 
 #[derive(Debug, Clone)]
@@ -726,11 +726,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 FormulaOrTerm::Term(operand.boxed())
             }
             ExprKind::Lit(lit) => match lit.node {
-                rustc_ast::LitKind::Int(i, _) => {
-                    let n = i64::try_from(i.get())
-                        .expect("integer literal out of i64 range in formula");
-                    FormulaOrTerm::Term(chc::Term::int(n))
-                }
+                rustc_ast::LitKind::Int(i, _) => FormulaOrTerm::Term(chc::Term::int(i.get())),
                 rustc_ast::LitKind::Bool(b) => FormulaOrTerm::Literal(b),
                 _ => unimplemented!("unsupported literal in formula: {:?}", lit),
             },
@@ -981,12 +977,12 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                                 generic_args,
                             )
                             .unwrap();
-                            let pred_def_id = if let Some(instance) = instance {
-                                instance.def_id()
+                            let (pred_def_id, pred_args) = if let Some(instance) = instance {
+                                (instance.def_id(), instance.args)
                             } else {
-                                def_id
+                                (def_id, generic_args)
                             };
-                            let pred = refine::user_defined_pred(self.tcx, pred_def_id);
+                            let pred = self.analyzer.predicate_with_args(pred_def_id, pred_args);
                             let arg_terms = args.iter().map(|e| self.to_term(e)).collect();
                             let atom = chc::Atom::new(pred.into(), arg_terms);
                             return FormulaOrTerm::Formula(chc::Formula::Atom(atom));
