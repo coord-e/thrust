@@ -10,9 +10,7 @@ use rustc_index::IndexVec;
 
 use crate::chc::{self, format_context::FormatContext};
 
-/// A variable bound by a quantifier in a specification. Its name comes from the annotation, so it
-/// is displayed with a `q$` prefix to keep it from capturing a generated clause variable such as
-/// `v1`; `$` never appears in a Rust identifier or in a generated symbol.
+/// A quantifier-bound variable, prefixed with `q$` so it can't capture a clause variable like `v1`.
 struct QuantifiedVar<'a>(&'a str);
 
 impl std::fmt::Display for QuantifiedVar<'_> {
