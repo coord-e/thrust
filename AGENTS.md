@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Everything about the project itself is documented for humans, starting from `README.md`;
 read it, the Development section in particular, rather than looking for it here. This file
