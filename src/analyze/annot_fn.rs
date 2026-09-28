@@ -620,27 +620,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .tcx
             .const_eval_resolve(typing_env, unevaluated, hir.span)
             .unwrap_or_else(|e| panic!("failed to evaluate constant in formula: {:?}", e));
-        self.const_value_term(&val, ty)
-    }
-
-    fn const_value_term(
-        &self,
-        val: &mir::ConstValue,
-        ty: mir_ty::Ty<'tcx>,
-    ) -> chc::Term<rty::FunctionParamIdx> {
-        use mir::interpret::Scalar;
-        match (ty.kind(), val) {
-            (mir_ty::TyKind::Int(_), mir::ConstValue::Scalar(Scalar::Int(v))) => {
-                chc::Term::int(v.to_int(v.size()))
-            }
-            (mir_ty::TyKind::Uint(_), mir::ConstValue::Scalar(Scalar::Int(v))) => {
-                chc::Term::int(v.to_uint(v.size()))
-            }
-            (mir_ty::TyKind::Bool, mir::ConstValue::Scalar(Scalar::Int(v))) => {
-                chc::Term::bool(v.try_to_bool().unwrap())
-            }
-            _ => unimplemented!("unsupported constant type in formula: {:?}", ty),
-        }
+        analyze::scalar_const_term(ty, &val)
+            .unwrap_or_else(|| unimplemented!("unsupported constant type in formula: {:?}", ty))
     }
 
     fn to_formula_with_quantified_vars(
