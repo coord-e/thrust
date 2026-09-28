@@ -558,10 +558,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty
     }
 
-    /// The `(result, overflowed)` pair that a checked integer operation evaluates to.
-    ///
-    /// `result` is not wrapped into the range of `ty`: rustc reads it only after asserting that
-    /// the operation did not overflow.
+    /// The `(wrapped result, overflowed)` pair that a checked integer operation with the
+    /// mathematical `result` evaluates to.
     fn checked_int_op_type(
         &self,
         builder: PlaceTypeBuilder,
@@ -569,6 +567,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty: mir_ty::Ty<'tcx>,
     ) -> PlaceType {
         let overflowed = int_term_in_range(self.tcx, result.clone(), ty).not();
+        let wrapped = wrap_int_term(self.tcx, result, ty);
         // elaboration: all fields are boxed
         let tuple_ty = rty::TupleType::new(vec![
             rty::PointerType::own(rty::Type::int()).into(),
@@ -576,7 +575,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ]);
         builder.build(
             tuple_ty.into(),
-            chc::Term::tuple(vec![result.boxed(), overflowed.boxed()]),
+            chc::Term::tuple(vec![wrapped.boxed(), overflowed.boxed()]),
         )
     }
 
