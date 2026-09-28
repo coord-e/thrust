@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use num_bigint::BigInt;
 use rustc_hir::def::DefKind;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{
@@ -72,12 +73,14 @@ fn wrap_int_term<'tcx, V>(
     ty: mir_ty::Ty<'tcx>,
 ) -> chc::Term<V> {
     let bits = ty.primitive_size(tcx).bits();
+    let modulus = BigInt::from(1) << bits;
     if ty.is_signed() {
-        term.add(chc::Term::pow2(bits - 1))
-            .mod_(chc::Term::pow2(bits))
-            .sub(chc::Term::pow2(bits - 1))
+        let half = BigInt::from(1) << (bits - 1);
+        term.add(chc::Term::int(half.clone()))
+            .mod_(chc::Term::int(modulus))
+            .sub(chc::Term::int(half))
     } else {
-        term.mod_(chc::Term::pow2(bits))
+        term.mod_(chc::Term::int(modulus))
     }
 }
 

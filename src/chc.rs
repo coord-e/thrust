@@ -696,11 +696,6 @@ impl<V> Term<V> {
         Term::Int(n.into())
     }
 
-    /// The integer `2^exp`.
-    pub fn pow2(exp: u64) -> Self {
-        Term::Int(BigInt::from(1) << exp)
-    }
-
     pub fn bool(b: bool) -> Self {
         Term::Bool(b)
     }
