@@ -28,6 +28,18 @@ impl Callbacks for CompilerCalls {
             .mir_enable_passes
             .push(("RemoveZsts".to_owned(), false));
 
+        // With UB checks on, these passes insert null and alignment checks before every
+        // dereference of a raw pointer, which includes each `Box` dereference once
+        // `ElaborateBoxDerefs` has run. A `Box` pointer is always non-null and aligned, and
+        // the checks go through pointer-to-integer casts that Thrust does not model.
+        for pass in ["CheckAlignment", "CheckNull"] {
+            config
+                .opts
+                .unstable_opts
+                .mir_enable_passes
+                .push((pass.to_owned(), false));
+        }
+
         config.override_queries = Some(|_sess, providers| {
             providers.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
         });

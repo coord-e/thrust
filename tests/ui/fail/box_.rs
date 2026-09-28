@@ -1,5 +1,4 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 
 fn main() {
     let mut x = Box::new(1_i64);

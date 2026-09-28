@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 fn incr(x: &mut i64) {
     *x += 1;

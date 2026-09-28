@@ -1,5 +1,5 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off -C opt-level=3
+//@compile-flags: -C opt-level=3
 //@rustc-env: THRUST_SOLVER_TIMEOUT_SECS=120
 
 enum List {
