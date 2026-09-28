@@ -908,11 +908,22 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn refine_basic_blocks(&mut self) {
         use rustc_mir_dataflow::Analysis as _;
         let loop_invariants = self.collect_loop_invariant_annotations();
+        let partial_moves = analyze::partial_moves::PartialMoves::analyze(self.tcx, &mut self.body);
+        let loop_invariants: HashMap<_, _> = partial_moves
+            .block_origins
+            .iter_enumerated()
+            .filter_map(|(block, original)| {
+                loop_invariants
+                    .get(original)
+                    .map(|invariants| (block, invariants.clone()))
+            })
+            .collect();
         let mut results = rustc_mir_dataflow::impls::MaybeLiveLocals
             .iterate_to_fixpoint(self.tcx, &self.body, None)
             .into_results_cursor(&self.body);
 
-        let mut builder = analyze::basic_block::DropPoints::builder(self.tcx, &self.body);
+        let mut builder =
+            analyze::basic_block::DropPoints::builder(self.tcx, &self.body, partial_moves);
         for (bb, _data) in mir::traversal::postorder(&self.body) {
             let span = tracing::info_span!("refine_basic_block", ?bb);
             let _guard = span.enter();

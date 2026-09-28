@@ -1216,33 +1216,37 @@ where
             let matcher_pred = chc::MatcherPred::new(ety.symbol.clone(), ety.arg_sorts());
 
             let mut pred_args = vec![];
-            for field_ty in enum_def.field_tys() {
-                let mut field_rty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
-                field_rty.instantiate_ty_params(ety.args.clone());
-                let field_type = field_rty.ty;
+            for (variant_index, variant) in enum_def.variants.iter_enumerated() {
+                for (field_index, field_ty) in variant.field_tys.iter().enumerate() {
+                    let mut field_rty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
+                    field_rty.instantiate_ty_params(ety.args.clone());
+                    let field_type = field_rty.ty;
 
-                let ev = existentials.push(field_type.to_sort());
-                let field_term = chc::Term::var(ev.into());
-                pred_args.push(field_term.clone());
+                    let ev = existentials.push(field_type.to_sort());
+                    let field_term = chc::Term::var(ev.into());
+                    pred_args.push(field_term.clone());
 
-                if let Some(p) = field_type.as_pointer() {
-                    if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
-                        // TODO: we need recursively defined drop_pred for the recursive ADTs!
-                        tracing::warn!("skipping recursive variant");
+                    if let Some(p) = field_type.as_pointer() {
+                        if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
+                            // TODO: we need recursively defined drop_pred for the recursive ADTs!
+                            tracing::warn!("skipping recursive variant");
+                            continue;
+                        }
+                    }
+
+                    let field_path =
+                        Path::Downcast(Box::new(path.clone()), variant_index, field_index.into());
+                    if except.contains(&field_path) {
                         continue;
                     }
+                    body.push_conj(self.dropping_formula_for_term(
+                        existentials,
+                        &field_type,
+                        field_term,
+                        &field_path.deref(),
+                        except,
+                    ));
                 }
-
-                // A field is reached through a matcher selector rather than a
-                // projection, so the walk stays at the enum's path and a
-                // moved-out field is not skipped.
-                body.push_conj(self.dropping_formula_for_term(
-                    existentials,
-                    &field_type,
-                    field_term,
-                    path,
-                    except,
-                ));
             }
 
             pred_args.push(term);
@@ -1256,7 +1260,11 @@ where
     /// Drop `local` whole, except for the sub-places in `except` that were moved
     /// out of it.
     pub fn drop_local(&mut self, local: Local, except: &[Place<'_>]) {
-        let except: Vec<Path> = except.iter().map(|p| self.elaborated_path(*p)).collect();
+        let except: Vec<Path> = except
+            .iter()
+            .filter(|p| p.local == local)
+            .map(|p| self.elaborated_path(*p))
+            .collect();
         let assumption = self.dropping_assumption(&Path::Local(local), &except);
         if !assumption.is_top() {
             self.assume(assumption);
