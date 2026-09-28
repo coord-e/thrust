@@ -40,13 +40,6 @@ impl ClauseScope for chc::ClauseBuilder {
 /// Produces CHC constraints for subtyping relations.
 pub trait Subtyping {
     #[must_use]
-    fn relate_sub_type<T: chc::Var, U: chc::Var>(
-        &self,
-        got: &Type<T>,
-        expected: &Type<U>,
-    ) -> Vec<chc::Clause>;
-
-    #[must_use]
     fn relate_sub_refined_type<T: chc::Var, U: chc::Var>(
         &self,
         got: &RefinedType<T>,
@@ -58,19 +51,6 @@ impl<C> Subtyping for C
 where
     C: ClauseScope,
 {
-    fn relate_sub_type<T, U>(&self, got: &Type<T>, expected: &Type<U>) -> Vec<chc::Clause>
-    where
-        T: chc::Var,
-        U: chc::Var,
-    {
-        relate_refined_type(
-            self,
-            &RefinedType::unrefined(got.clone()),
-            &RefinedType::unrefined(expected.clone()),
-            Relation::Sub,
-        )
-    }
-
     fn relate_sub_refined_type<T, U>(
         &self,
         got: &RefinedType<T>,

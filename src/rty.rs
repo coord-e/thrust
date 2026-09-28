@@ -1003,6 +1003,42 @@ where
 }
 
 impl<T> Type<T> {
+    pub fn inherit_pointer_types<U: chc::Var>(
+        &mut self,
+        source: Type<U>,
+        subst: &mut impl FnMut(U) -> chc::Term<T>,
+    ) where
+        T: chc::Var,
+    {
+        match (self, source) {
+            (Type::Pointer(target), Type::Pointer(source)) => {
+                target.elem.refinement = source.elem.refinement.subst_free_var(&mut *subst);
+                target.elem.ty.inherit_pointer_types(source.elem.ty, subst);
+            }
+            (Type::Tuple(target), Type::Tuple(source)) => {
+                for (target, source) in target.elems.iter_mut().zip(source.elems) {
+                    target.ty.inherit_pointer_types(source.ty, subst);
+                }
+            }
+            (Type::Enum(target), Type::Enum(source)) => {
+                for (target, source) in target.args.iter_mut().zip(source.args) {
+                    target.ty.inherit_pointer_types(source.ty, subst);
+                }
+            }
+            (Type::Seq(target), Type::Seq(source)) => {
+                target.ty.inherit_pointer_types(source.ty, subst);
+            }
+            (Type::Array(target), Type::Array(source)) => {
+                target
+                    .index
+                    .ty
+                    .inherit_pointer_types(source.index.ty, subst);
+                target.elem.ty.inherit_pointer_types(source.elem.ty, subst);
+            }
+            _ => {}
+        }
+    }
+
     fn pretty_atom<'a, 'b, D>(
         &'b self,
         allocator: &'a D,

@@ -959,13 +959,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 // the same header are AND'd in source order.
                 let mut bty = self
                     .type_builder
-                    .for_template(&mut self.ctx)
-                    .build_basic_block_with_precondition(
-                        &self.body,
-                        live_locals,
-                        ret_ty,
-                        Some(rty::Refinement::top()),
-                    );
+                    .build_basic_block(&self.body, live_locals, ret_ty);
                 let mut inv = rty::Refinement::top();
                 for &(formula_def_id, generic_args) in invariants {
                     let one = self.build_invariant_precondition(formula_def_id, generic_args, &bty);
@@ -984,16 +978,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             } else {
                 // The block inherits its predecessor's outgoing env state as its
                 // precondition, materialized lazily during the predecessor's
-                // analysis.
+                // analysis. Record only unrefined type here.
                 let bty = self
                     .type_builder
-                    .for_template(&mut self.ctx)
-                    .build_basic_block_with_precondition(
-                        &self.body,
-                        live_locals,
-                        ret_ty,
-                        Some(rty::Refinement::top()),
-                    );
+                    .build_basic_block(&self.body, live_locals, ret_ty);
                 self.ctx
                     .register_basic_block_ty_without_precondition(self.local_def_id, bb, bty);
             };
@@ -1002,6 +990,37 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn analyze_basic_blocks(&mut self, expected_fn_ty: &rty::RefinedType) {
         let expected_fn_ty = expected_fn_ty.ty.as_function().unwrap();
+        let mut entry = self
+            .ctx
+            .basic_block_ty(self.local_def_id, mir::START_BLOCK)
+            .clone();
+        let mut expected_entry = expected_fn_ty.clone();
+        self.elaborate_mut_params(&mut expected_entry);
+        for idx in entry.as_ref().params.indices().collect::<Vec<_>>() {
+            let argument = match entry.param_kind(idx) {
+                crate::refine::BasicBlockTypeParamKind::Local(local, _) => self
+                    .body
+                    .args_iter()
+                    .position(|arg| arg == local)
+                    .map(rty::FunctionParamIdx::from),
+                crate::refine::BasicBlockTypeParamKind::OuterFnParam(argument) => Some(argument),
+                crate::refine::BasicBlockTypeParamKind::Synthetic => None,
+                crate::refine::BasicBlockTypeParamKind::Captured => unreachable!(),
+            };
+            if let Some(argument) = argument {
+                let ty = expected_entry.params[argument].ty.clone().map_var(|arg| {
+                    entry
+                        .param_of_local(analyze::local_of_function_param(arg))
+                        .unwrap()
+                });
+                entry.set_param_type(idx, ty);
+            }
+        }
+        self.ctx.register_basic_block_ty_with_precondition(
+            self.local_def_id,
+            mir::START_BLOCK,
+            entry,
+        );
         // Reverse postorder guarantees each block that inherits its precondition
         // is visited after the predecessor that lazily materialized its type.
         for (bb, data) in mir::traversal::reverse_postorder(&self.body) {
@@ -1080,7 +1099,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         // A function type must keep at least one parameter to host the precondition
         // predicate. When the function has no real argument, both the expected type and
         // the BB type carry a synthetic unit parameter (see
-        // `crate::refine::TemplateTypeBuilder::build_basic_block`). That synthetic has no
+        // `crate::refine::TypeBuilder::build_basic_block`). That synthetic has no
         // backing local, so it survives the drop loop untouched. If instead the entry
         // block exposed only ZST-local parameters (e.g. `RETURN_PLACE`), dropping them
         // empties the type, and we re-introduce the synthetic unit parameter carrying
@@ -1126,18 +1145,6 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry before");
         let mut expected = expected.ty.as_function().cloned().unwrap();
         self.elaborate_mut_params(&mut expected);
-
-        if self.body.arg_count != 0 {
-            let outer_params = entry_ty
-                .as_ref()
-                .params
-                .iter_enumerated()
-                .filter(|(idx, _)| entry_ty.param_kind(*idx).outer_fn_param_idx().is_some())
-                .map(|(_, ty)| rty::RefinedType::unrefined(ty.ty.clone()))
-                .collect();
-            let clauses = rty::relate_sub_param_types(&outer_params, &expected.params);
-            self.ctx.extend_clauses(clauses);
-        }
 
         entry_ty.truncate_outer_fn_params();
         self.drop_unused_expected_params(&mut expected, &entry_ty);

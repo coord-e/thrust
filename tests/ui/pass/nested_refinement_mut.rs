@@ -14,8 +14,10 @@ fn reborrow(x: &mut i32) -> &mut i32 {
     identity(x)
 }
 
-fn main() {
-    let mut x = Box::new(0);
-    *reborrow(&mut x) = 2;
+#[thrust_macros::param(x: &mut { v: i32 | v >= 0 })]
+fn update(x: &mut i32) {
+    *reborrow(x) = 2;
     assert!(*x >= 0);
 }
+
+fn main() {}

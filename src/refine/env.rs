@@ -1032,6 +1032,38 @@ where
         self.var_type(local.into())
     }
 
+    pub fn var_projections<V: chc::Var>(
+        &self,
+        var: Var,
+        term: chc::Term<V>,
+    ) -> HashMap<Var, chc::Term<V>> {
+        let mut projections = HashMap::from([(var, term.clone())]);
+        match self.flow_binding(var) {
+            Some(FlowBinding::Box { current, .. }) => {
+                projections.extend(self.var_projections((*current).into(), term.box_current()));
+            }
+            Some(FlowBinding::Mut(current, final_)) => {
+                projections.insert((*final_).into(), term.clone().mut_final());
+                projections.extend(self.var_projections((*current).into(), term.mut_current()));
+            }
+            Some(FlowBinding::Tuple(fields)) => {
+                for (index, field) in fields.iter().enumerate() {
+                    projections.extend(
+                        self.var_projections((*field).into(), term.clone().tuple_proj(index)),
+                    );
+                }
+            }
+            Some(FlowBinding::Enum { discr, sym, .. }) => {
+                projections.insert(
+                    (*discr).into(),
+                    chc::Term::datatype_discr(sym.clone(), term),
+                );
+            }
+            None => {}
+        }
+        projections
+    }
+
     /// Reconstructs a flow value using constructors, without existential variables.
     fn var_term(&self, var: Var) -> chc::Term<Var> {
         match self.flow_binding(var) {
