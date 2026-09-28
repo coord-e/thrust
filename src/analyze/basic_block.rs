@@ -435,26 +435,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn const_value_ty(&self, val: &mir::ConstValue, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
+        if let Some((scalar_ty, term)) = analyze::scalar_const_term(*ty, val) {
+            return PlaceType::with_ty_and_term(scalar_ty, term);
+        }
         use mir::{interpret::Scalar, ConstValue, Mutability};
         match (ty.kind(), val) {
-            (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                PlaceType::with_ty_and_term(
-                    rty::Type::int(),
-                    chc::Term::int(val.to_int(val.size())),
-                )
-            }
-            (mir_ty::TyKind::Uint(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                PlaceType::with_ty_and_term(
-                    rty::Type::int(),
-                    chc::Term::int(val.to_uint(val.size())),
-                )
-            }
-            (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
-                PlaceType::with_ty_and_term(
-                    rty::Type::bool(),
-                    chc::Term::bool(val.try_to_bool().unwrap()),
-                )
-            }
             (mir_ty::TyKind::Tuple(tys), _) if tys.is_empty() => {
                 PlaceType::with_ty_and_term(rty::Type::unit(), chc::Term::tuple(vec![]))
             }
