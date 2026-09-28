@@ -35,6 +35,25 @@ mod reconstruct_slice_indexing;
 // TODO: organize structure and remove cross dependency between refine
 pub use did_cache::DefIdCache;
 
+fn scalar_const_term<T>(
+    ty: mir_ty::Ty<'_>,
+    val: &mir::ConstValue,
+) -> Option<(rty::Type<T>, chc::Term<T>)> {
+    use mir::interpret::Scalar;
+    match (ty.kind(), val) {
+        (mir_ty::TyKind::Int(_), mir::ConstValue::Scalar(Scalar::Int(v))) => {
+            Some((rty::Type::int(), chc::Term::int(v.to_int(v.size()))))
+        }
+        (mir_ty::TyKind::Uint(_), mir::ConstValue::Scalar(Scalar::Int(v))) => {
+            Some((rty::Type::int(), chc::Term::int(v.to_uint(v.size()))))
+        }
+        (mir_ty::TyKind::Bool, mir::ConstValue::Scalar(Scalar::Int(v))) => {
+            Some((rty::Type::bool(), chc::Term::bool(v.try_to_bool().unwrap())))
+        }
+        _ => None,
+    }
+}
+
 fn fn_operand<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,

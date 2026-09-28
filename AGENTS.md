@@ -13,6 +13,16 @@ Add a test as a pair of files sharing one name: `tests/ui/pass/<name>.rs` headed
 The `fail` file is the `pass` file with the verified property broken as narrowly as
 possible, so that the pair pins down both directions of the check.
 
+Do not add tests merely to cover every changed code path or fixed bug. Add a test only
+when it protects behavior that could plausibly regress without an obviously incorrect
+code change. Similar implementations do not each need separate tests when one
+representative case sufficiently exercises the behavior.
+
+## Comments
+
+Fewer comments are better. A code comment means the code itself isn't self-explanatory
+and should be rewritten if possible.
+
 ## Panics on unsupported input
 
 Thrust is under active development, and it is fine for an unsupported or unexpected
