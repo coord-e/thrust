@@ -604,8 +604,6 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         chc::Term::datatype_ctor(d_sym, sort_args, v_sym, field_terms)
     }
 
-    /// The term for a reference to the constant `const_did` (a `const` item or an
-    /// associated `const` such as `i64::MAX`) appearing in a formula.
     fn const_term(
         &self,
         const_did: rustc_span::def_id::DefId,
