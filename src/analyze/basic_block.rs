@@ -754,11 +754,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     }
                     BasicBlockTypeParamKind::OuterFnParam(outer_idx) => {
                         let outer_fn_param_var = outer_fn_param_vars[&outer_idx];
-                        let pty = PlaceType::with_ty_and_term(
-                            rty.ty.clone().assert_closed().vacuous(),
-                            chc::Term::var(outer_fn_param_var),
-                        );
-                        pty.into()
+                        self.env.var_type(outer_fn_param_var).into()
                     }
                     BasicBlockTypeParamKind::Synthetic => {
                         rty::RefinedType::unrefined(rty.ty.clone().assert_closed().vacuous())
@@ -771,14 +767,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     /// Materializes the `BasicBlockType` for a target that inherits its
-    /// precondition by building its (pvar-free) layout and overwriting the last
+    /// precondition by overwriting the last
     /// param's refinement with the current env state.
     fn install_inherited_bb_ty(
         &mut self,
         bb: BasicBlock,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
-        let bty = self.ctx.basic_block_ty(self.local_def_id, bb);
+        let bty = self.ctx.basic_block_ty(self.local_def_id, bb).clone();
 
         let mut capture = PrecondCapture::default();
         for (param_idx, param_rty) in bty.as_ref().params.iter_enumerated() {
@@ -789,13 +785,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 BasicBlockTypeParamKind::Local(local, _) => self.env.local_type(local),
                 BasicBlockTypeParamKind::OuterFnParam(outer_idx) => {
                     let outer_var = outer_fn_param_vars[&outer_idx];
-                    PlaceType::with_ty_and_term(
-                        param_rty.ty.clone().assert_closed().vacuous(),
-                        chc::Term::var(outer_var),
-                    )
+                    self.env.var_type(outer_var)
                 }
                 BasicBlockTypeParamKind::Synthetic => continue,
             };
+            let clauses = self.env.relate_sub_type(
+                &pty.ty,
+                &param_rty.ty.clone().assert_closed().vacuous::<Var>(),
+            );
+            self.ctx.extend_clauses(clauses);
             capture.push(rty::RefinedTypeVar::Free(param_idx), pty);
         }
         capture.push_env_state(&self.env);
@@ -1095,6 +1093,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn assign_to_local(&mut self, local: Local, rvalue: mir::Rvalue<'tcx>) {
         let local_ty = self.env.local_type(local);
         let rvalue_ty = self.rvalue_type(rvalue);
+        let expected = &local_ty
+            .ty
+            .as_pointer()
+            .expect("assignment through a pointer")
+            .elem;
+        let clauses = self
+            .env
+            .relate_sub_refined_type(&rvalue_ty.clone().into(), expected);
+        self.ctx.extend_clauses(clauses);
         if !rvalue_ty.ty.to_sort().is_singleton() {
             let mut builder = PlaceTypeBuilder::default();
             let (_, local_term) = builder.subsume(local_ty);

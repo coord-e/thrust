@@ -269,30 +269,6 @@ impl<'tcx> TypeBuilder<'tcx> {
         }
     }
 
-    pub fn build_basic_block<I>(
-        &mut self,
-        body: &rustc_middle::mir::Body<'tcx>,
-        live_locals: I,
-        ret_ty: mir_ty::Ty<'tcx>,
-    ) -> BasicBlockType
-    where
-        I: IntoIterator<Item = (Local, mir_ty::TypeAndMut<'tcx>)>,
-    {
-        struct FakeRegistry;
-        impl TemplateRegistry for FakeRegistry {
-            fn register_template<V>(&mut self, _tmpl: rty::Template<V>) -> rty::RefinedType<V> {
-                panic!("unexpected template registration")
-            }
-        }
-        self.for_template(&mut FakeRegistry)
-            .build_basic_block_with_precondition(
-                body,
-                live_locals.into_iter().collect(),
-                ret_ty,
-                Some(rty::Refinement::top()),
-            )
-    }
-
     pub fn for_template<'a, R>(
         &self,
         registry: &'a mut R,
@@ -373,13 +349,19 @@ where
         }
 
         if Some(adt.did()) == self.inner.def_ids.mut_model() {
-            let elem_ty = self.build(args.type_at(0));
-            return Some(rty::PointerType::mut_to(elem_ty).into());
+            let elem = self.build_refined(args.type_at(0));
+            return Some(
+                rty::PointerType {
+                    kind: rty::PointerKind::Ref(rty::RefKind::Mut),
+                    elem: Box::new(elem),
+                }
+                .into(),
+            );
         }
 
         if Some(adt.did()) == self.inner.def_ids.box_model() {
-            let elem_ty = self.build(args.type_at(0));
-            return Some(rty::PointerType::own(elem_ty).into());
+            let elem = self.build_refined(args.type_at(0));
+            return Some(rty::PointerType::own_refined(elem).into());
         }
 
         if Some(adt.did()) == self.inner.def_ids.seq_model() {
@@ -462,7 +444,7 @@ where
         self.registry.register_template(tmpl)
     }
 
-    fn build_basic_block_with_precondition(
+    pub fn build_basic_block_with_precondition(
         &mut self,
         body: &rustc_middle::mir::Body<'tcx>,
         mut live_locals: Vec<(Local, mir_ty::TypeAndMut<'tcx>)>,
@@ -487,12 +469,28 @@ where
             });
         }
 
+        let mut param_rtys = HashMap::new();
+        if let Some(precondition) = &precondition {
+            for (index, param) in tys.iter().enumerate() {
+                let ty = self.inner.for_template(self.registry).build(param.ty);
+                let refinement = if index == tys.len() - 1 {
+                    precondition.clone()
+                } else {
+                    rty::Refinement::top()
+                };
+                param_rtys.insert(
+                    index.into(),
+                    rty::RefinedType::new(ty.vacuous(), refinement),
+                );
+            }
+        }
+
         let ty = FunctionTemplateTypeBuilder {
             inner: self.inner.clone(),
             registry: self.registry,
             param_tys: tys,
             ret_ty,
-            param_rtys: Default::default(),
+            param_rtys,
             param_refinement: precondition,
             // not generating pvar of BB post
             ret_rty: Some(rty::RefinedType::unrefined(
