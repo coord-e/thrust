@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use num_bigint::BigInt;
 use rustc_hir::def::DefKind;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{
@@ -72,12 +73,14 @@ fn wrap_int_term<'tcx, V>(
     ty: mir_ty::Ty<'tcx>,
 ) -> chc::Term<V> {
     let bits = ty.primitive_size(tcx).bits();
+    let modulus = BigInt::from(1) << bits;
     if ty.is_signed() {
-        term.add(chc::Term::pow2(bits - 1))
-            .mod_(chc::Term::pow2(bits))
-            .sub(chc::Term::pow2(bits - 1))
+        let half = BigInt::from(1) << (bits - 1);
+        term.add(chc::Term::int(half.clone()))
+            .mod_(chc::Term::int(modulus))
+            .sub(chc::Term::int(half))
     } else {
-        term.mod_(chc::Term::pow2(bits))
+        term.mod_(chc::Term::int(modulus))
     }
 }
 
@@ -432,17 +435,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         use mir::{interpret::Scalar, ConstValue, Mutability};
         match (ty.kind(), val) {
             (mir_ty::TyKind::Int(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                let val = val.to_int(val.size());
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
-                    chc::Term::int(val.try_into().unwrap()),
+                    chc::Term::int(val.to_int(val.size())),
                 )
             }
             (mir_ty::TyKind::Uint(_), ConstValue::Scalar(Scalar::Int(val))) => {
-                let val = val.to_uint(val.size());
                 PlaceType::with_ty_and_term(
                     rty::Type::int(),
-                    chc::Term::int(val.try_into().unwrap()),
+                    chc::Term::int(val.to_uint(val.size())),
                 )
             }
             (mir_ty::TyKind::Bool, ConstValue::Scalar(Scalar::Int(val))) => {
@@ -987,12 +988,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 (1, rty::Type::Bool) => chc::Term::bool(true),
                 (_, rty::Type::Int) => {
                     let (size, signed) = discr_mir_ty.int_size_and_signed(self.tcx);
-                    let val: i64 = if signed {
-                        size.sign_extend(bits).try_into().unwrap()
+                    if signed {
+                        chc::Term::int(size.sign_extend(bits))
                     } else {
-                        bits.try_into().unwrap()
-                    };
-                    chc::Term::int(val)
+                        chc::Term::int(bits)
+                    }
                 }
                 _ => unimplemented!(),
             };
