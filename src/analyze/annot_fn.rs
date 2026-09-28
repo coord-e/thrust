@@ -618,8 +618,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             .tcx
             .const_eval_resolve(typing_env, unevaluated, hir.span)
             .unwrap_or_else(|e| panic!("failed to evaluate constant in formula: {:?}", e));
-        analyze::scalar_const_term(ty, &val)
-            .unwrap_or_else(|| unimplemented!("unsupported constant type in formula: {:?}", ty))
+        let (_, term) = analyze::scalar_const_term(ty, &val)
+            .unwrap_or_else(|| unimplemented!("unsupported constant type in formula: {:?}", ty));
+        term
     }
 
     fn to_formula_with_quantified_vars(

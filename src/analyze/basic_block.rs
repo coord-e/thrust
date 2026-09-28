@@ -435,12 +435,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn const_value_ty(&self, val: &mir::ConstValue, ty: &mir_ty::Ty<'tcx>) -> PlaceType {
-        if let Some(term) = analyze::scalar_const_term(*ty, val) {
-            let scalar_ty = match ty.kind() {
-                mir_ty::TyKind::Bool => rty::Type::bool(),
-                mir_ty::TyKind::Int(_) | mir_ty::TyKind::Uint(_) => rty::Type::int(),
-                _ => unreachable!("scalar_const_term only returns Some for Int/Uint/Bool"),
-            };
+        if let Some((scalar_ty, term)) = analyze::scalar_const_term(*ty, val) {
             return PlaceType::with_ty_and_term(scalar_ty, term);
         }
         use mir::{interpret::Scalar, ConstValue, Mutability};
