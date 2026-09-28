@@ -24,8 +24,8 @@ keep from reaching it.
 ## Running the tests on claude.ai/code
 
 Neither prerequisite of `cargo test` is set up in the session container. Install Z3 at the
-version `.github/actions/setup-z3` pins for CI, and start a Docker daemon with `dockerd &`.
-The daemon dies from time to time, so restart it whenever the tests that need it fail.
+version `.github/actions/setup-z3` pins for CI.
 
-Export the `COAR_IMAGE` digest that `.github/workflows/ci.yml` pins, and `docker pull` it
-before running `cargo test`.
+For PCSat, do what `.github/workflows/ci.yml` does: install the packages it lists, download
+the pinned `thrust-pcsat-wrapper` binary, and put it in place of `tests/thrust-pcsat-wrapper`.
+That path is a tracked Docker-based script, so restore it before committing.
