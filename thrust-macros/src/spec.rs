@@ -49,11 +49,12 @@ pub fn expand_predicate(item: TokenStream) -> TokenStream {
         quote!()
     };
 
+    let vis = func.vis();
     let sig = quote! {
         #[allow(dead_code)]
         #formula_fn_attr
         #[thrust::predicate]
-        fn #name #def_generics(#model_ty_params) -> #model_ret #extended_where
+        #vis fn #name #def_generics(#model_ty_params) -> #model_ret #extended_where
     };
     if let Some(block) = func.block() {
         let mut block = block.clone();
@@ -206,6 +207,14 @@ impl FnItemWithSignature {
         match self {
             FnItemWithSignature::ItemFn(item_fn) => Some(&mut item_fn.block),
             FnItemWithSignature::ImplItemFn(impl_item_fn) => Some(&mut impl_item_fn.block),
+            FnItemWithSignature::TraitItemFn(_) => None,
+        }
+    }
+
+    pub fn vis(&self) -> Option<&syn::Visibility> {
+        match self {
+            FnItemWithSignature::ItemFn(item_fn) => Some(&item_fn.vis),
+            FnItemWithSignature::ImplItemFn(impl_item_fn) => Some(&impl_item_fn.vis),
             FnItemWithSignature::TraitItemFn(_) => None,
         }
     }
