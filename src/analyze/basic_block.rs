@@ -558,14 +558,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty
     }
 
-    /// The `(wrapped result, overflowed)` pair that a checked integer operation with the
-    /// mathematical `result` evaluates to.
-    fn checked_int_op_type(
+    /// The type and term of a checked integer operation on operands of `ty` whose mathematical
+    /// result is `result`.
+    ///
+    /// See <https://doc.rust-lang.org/nightly/nightly-rustc/rustc_middle/mir/enum.BinOp.html#variant.AddWithOverflow>.
+    fn checked_int_op(
         &self,
-        builder: PlaceTypeBuilder,
         result: chc::Term<PlaceTypeVar>,
         ty: mir_ty::Ty<'tcx>,
-    ) -> PlaceType {
+    ) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>) {
         let overflowed = int_term_in_range(self.tcx, result.clone(), ty).not();
         let wrapped = wrap_int_term(self.tcx, result, ty);
         // elaboration: all fields are boxed
@@ -573,10 +574,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             rty::PointerType::own(rty::Type::int()).into(),
             rty::PointerType::own(rty::Type::bool()).into(),
         ]);
-        builder.build(
-            tuple_ty.into(),
-            chc::Term::tuple(vec![wrapped.boxed(), overflowed.boxed()]),
-        )
+        let term = chc::Term::tuple(vec![wrapped.boxed(), overflowed.boxed()]);
+        (tuple_ty.into(), term)
     }
 
     fn rvalue_type(&mut self, rvalue: Rvalue<'tcx>) -> PlaceType {
@@ -618,13 +617,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         builder.build(lhs_ty, lhs_term.mul(rhs_term))
                     }
                     (rty::Type::Int, mir::BinOp::AddWithOverflow) => {
-                        self.checked_int_op_type(builder, lhs_term.add(rhs_term), lhs_mir_ty)
+                        let (ty, term) = self.checked_int_op(lhs_term.add(rhs_term), lhs_mir_ty);
+                        builder.build(ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::SubWithOverflow) => {
-                        self.checked_int_op_type(builder, lhs_term.sub(rhs_term), lhs_mir_ty)
+                        let (ty, term) = self.checked_int_op(lhs_term.sub(rhs_term), lhs_mir_ty);
+                        builder.build(ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::MulWithOverflow) => {
-                        self.checked_int_op_type(builder, lhs_term.mul(rhs_term), lhs_mir_ty)
+                        let (ty, term) = self.checked_int_op(lhs_term.mul(rhs_term), lhs_mir_ty);
+                        builder.build(ty, term)
                     }
                     (rty::Type::Int | rty::Type::Bool, mir::BinOp::Ge) => {
                         builder.build(rty::Type::Bool, lhs_term.ge(rhs_term))
