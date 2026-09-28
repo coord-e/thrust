@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use pretty::{termcolor, Pretty};
 use rustc_hir::{def_id::LocalDefId, HirId};
 use rustc_index::IndexVec;
+use rustc_middle::mir;
 use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
 use crate::analyze::{self, did_cache::DefIdCache};
@@ -603,6 +604,45 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         chc::Term::datatype_ctor(d_sym, sort_args, v_sym, field_terms)
     }
 
+    /// The term for a reference to the constant `const_did` (a `const` item or an
+    /// associated `const` such as `i64::MAX`) appearing in a formula.
+    fn const_term(
+        &self,
+        const_did: rustc_span::def_id::DefId,
+        hir: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        let ty = self.expr_ty(hir);
+        let generic_args = mir_ty::EarlyBinder::bind(self.typeck.node_args(hir.hir_id))
+            .instantiate(self.tcx, self.generic_args);
+        let typing_env = mir_ty::TypingEnv::fully_monomorphized();
+        let unevaluated = mir::UnevaluatedConst::new(const_did, generic_args);
+        let val = self
+            .tcx
+            .const_eval_resolve(typing_env, unevaluated, hir.span)
+            .unwrap_or_else(|e| panic!("failed to evaluate constant in formula: {:?}", e));
+        self.const_value_term(&val, ty)
+    }
+
+    fn const_value_term(
+        &self,
+        val: &mir::ConstValue,
+        ty: mir_ty::Ty<'tcx>,
+    ) -> chc::Term<rty::FunctionParamIdx> {
+        use mir::interpret::Scalar;
+        match (ty.kind(), val) {
+            (mir_ty::TyKind::Int(_), mir::ConstValue::Scalar(Scalar::Int(v))) => {
+                chc::Term::int(v.to_int(v.size()))
+            }
+            (mir_ty::TyKind::Uint(_), mir::ConstValue::Scalar(Scalar::Int(v))) => {
+                chc::Term::int(v.to_uint(v.size()))
+            }
+            (mir_ty::TyKind::Bool, mir::ConstValue::Scalar(Scalar::Int(v))) => {
+                chc::Term::bool(v.try_to_bool().unwrap())
+            }
+            _ => unimplemented!("unsupported constant type in formula: {:?}", ty),
+        }
+    }
+
     fn to_formula_with_quantified_vars(
         &self,
         closure: &rustc_hir::Body<'tcx>,
@@ -743,6 +783,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                 ) => {
                     FormulaOrTerm::Term(self.variant_ctor_term(ctor_did, self.expr_ty(hir), vec![]))
                 }
+                rustc_hir::def::Res::Def(
+                    rustc_hir::def::DefKind::Const | rustc_hir::def::DefKind::AssocConst,
+                    const_did,
+                ) => FormulaOrTerm::Term(self.const_term(const_did, hir)),
                 _ => unimplemented!("unsupported path in formula: {:?}", qpath),
             },
             ExprKind::Tup(exprs) => {
