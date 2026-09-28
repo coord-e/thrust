@@ -137,7 +137,7 @@ impl<T> FormulaOrTerm<T> {
     fn into_formula(self) -> Option<chc::Formula<T>> {
         let fo = match self {
             FormulaOrTerm::Formula(fo) => fo,
-            FormulaOrTerm::Term { .. } => return None,
+            FormulaOrTerm::Term(t) => chc::Formula::Atom(t.equal_to(chc::Term::bool(true))),
             FormulaOrTerm::BinOp(lhs, binop, rhs) => {
                 let pred = match binop {
                     AmbiguousBinOp::Eq => chc::KnownPred::EQUAL,
