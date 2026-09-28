@@ -17,14 +17,22 @@ trait Double {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool;
 
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool;
+
     // This annotations are applied to all implementors of the `Double` trait.
-    #[thrust_macros::requires(true)]
+    #[thrust_macros::requires(Self::can_double(*self))]
     #[thrust_macros::ensures(Self::is_double(*self, !self))]
     fn double(&mut self);
 }
 
 #[thrust_macros::context]
 impl Double for A {
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool {
+        -4611686018427387904_i64 <= self.x && self.x < 4611686018427387904_i64
+    }
+
     // Write concrete definitions for predicates in `impl` blocks, in Rust syntax.
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {

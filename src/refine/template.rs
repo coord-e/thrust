@@ -209,15 +209,43 @@ impl<'tcx> TypeBuilder<'tcx> {
         None
     }
 
+    /// The integer type of the Rust integer type `ty`.
+    fn int_type(&self, ty: mir_ty::Ty<'tcx>) -> rty::IntType {
+        rty::IntType::Bounded {
+            bits: ty.primitive_size(self.tcx).bits(),
+            signed: ty.is_signed(),
+        }
+    }
+
+    /// Resolves `ty` to its model type, unless `ty` is an integer, reference, box or tuple type.
+    ///
+    /// Those are built from their structure instead, which keeps the ranges of the integers
+    /// inside them that their model types lose.
+    fn resolve_model_ty_unless_structural(&self, ty: mir_ty::Ty<'tcx>) -> mir_ty::Ty<'tcx> {
+        match ty.kind() {
+            mir_ty::TyKind::Int(_)
+            | mir_ty::TyKind::Uint(_)
+            | mir_ty::TyKind::Ref(..)
+            | mir_ty::TyKind::Tuple(_) => ty,
+            mir_ty::TyKind::Adt(def, _) if def.is_box() => ty,
+            _ => self.resolve_model_ty(ty),
+        }
+    }
+
     // TODO: consolidate two impls
     pub fn build(&self, ty: mir_ty::Ty<'tcx>) -> rty::Type<rty::Closed> {
-        let ty = self.resolve_model_ty(ty);
+        let ty = self.resolve_model_ty_unless_structural(ty);
         match ty.kind() {
+            mir_ty::TyKind::Int(_) | mir_ty::TyKind::Uint(_) => rty::Type::Int(self.int_type(ty)),
             mir_ty::TyKind::Bool => rty::Type::bool(),
             mir_ty::TyKind::Str => rty::Type::string(),
             mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Not) => {
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
+            }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                rty::PointerType::mut_to(elem_ty).into()
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
@@ -239,6 +267,10 @@ impl<'tcx> TypeBuilder<'tcx> {
                     .collect();
                 let ret = rty::RefinedType::unrefined(self.build(sig.output()));
                 rty::FunctionType::new(params, ret.vacuous()).into()
+            }
+            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
+                let elem_ty = self.build(params.type_at(0));
+                rty::PointerType::own(elem_ty).into()
             }
             mir_ty::TyKind::Adt(def, params) => {
                 if let Some(model_ty) = self.model_adt(def, params) {
@@ -404,13 +436,20 @@ where
     }
 
     pub fn build(&mut self, ty: mir_ty::Ty<'tcx>) -> rty::Type<S::Var> {
-        let ty = self.inner.resolve_model_ty(ty);
+        let ty = self.inner.resolve_model_ty_unless_structural(ty);
         match ty.kind() {
+            mir_ty::TyKind::Int(_) | mir_ty::TyKind::Uint(_) => {
+                rty::Type::Int(self.inner.int_type(ty))
+            }
             mir_ty::TyKind::Bool => rty::Type::bool(),
             mir_ty::TyKind::Str => rty::Type::string(),
             mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Not) => {
                 let elem_ty = self.build(*elem_ty);
                 rty::PointerType::immut_to(elem_ty).into()
+            }
+            mir_ty::TyKind::Ref(_, elem_ty, mir_ty::Mutability::Mut) => {
+                let elem_ty = self.build(*elem_ty);
+                rty::PointerType::mut_to(elem_ty).into()
             }
             mir_ty::TyKind::Tuple(ts) => {
                 // elaboration: all fields are boxed
@@ -427,6 +466,10 @@ where
                 let sig = sig_tys.with(*hdr).skip_binder();
                 let ty = self.inner.for_function_template(self.registry, sig).build();
                 rty::Type::function(ty)
+            }
+            mir_ty::TyKind::Adt(def, params) if def.is_box() => {
+                let elem_ty = self.build(params.type_at(0));
+                rty::PointerType::own(elem_ty).into()
             }
             mir_ty::TyKind::Adt(def, params) => {
                 if let Some(model_ty) = self.model_adt(def, params) {

@@ -9,7 +9,7 @@ pub enum X<'a, 'b> {
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(true)]
+#[thrust_macros::ensures(-9223372036854775807_i64 <= result && result < 9223372036854775807_i64)]
 fn rand() -> i64 { unimplemented!() }
 
 fn x(i: &mut i64) -> X {

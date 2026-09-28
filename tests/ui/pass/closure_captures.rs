@@ -11,7 +11,7 @@ fn main() {
     let n = 5;
     let f = thrust_macros::closure!(
         captures(n: i32),
-        requires(x > n),
+        requires(x > n && n >= 0 && x <= 2147483647 - n),
         ensures(result == x + n),
         |x: i32| -> i32 { x + n },
     );

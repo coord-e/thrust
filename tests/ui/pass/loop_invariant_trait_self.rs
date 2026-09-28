@@ -44,8 +44,8 @@ impl Gauge for Counter {
 
     fn update(&mut self) -> i32 {
         if self.value < 0 {
-            self.value *= -1;
-        } else {
+            self.value = -(self.value + 1);
+        } else if self.value < i32::MAX {
             self.value += 1;
         }
         self.value

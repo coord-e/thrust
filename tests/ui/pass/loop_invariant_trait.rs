@@ -10,7 +10,7 @@ fn rand() -> i64 { unimplemented!() }
 trait Foo {
     fn run(&mut self) {
         let mut x: i64 = 0;
-        while rand() == 0 {
+        while rand() == 0 && x < i64::MAX {
             thrust_macros::invariant!(|x: i64| x >= 0);
             x += 1;
         }

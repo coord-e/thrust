@@ -2,7 +2,7 @@
 //@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(true)]
+#[thrust_macros::ensures(result < 9223372036854775807_i64)]
 #[thrust::trusted]
 fn rand() -> i64 { unimplemented!() }
 

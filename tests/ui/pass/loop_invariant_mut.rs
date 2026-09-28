@@ -9,7 +9,7 @@ fn rand() -> i64 { unimplemented!() }
 fn main() {
   let mut x = 1_i64;
   let p = &mut x;
-  while rand() == 0 {
+  while rand() == 0 && *p < i64::MAX {
     thrust_macros::invariant!(|p: &mut i64| *p >= 1);
     *p = *p + 1;
   }

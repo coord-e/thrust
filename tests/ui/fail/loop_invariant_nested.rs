@@ -8,10 +8,10 @@ fn rand() -> i64 { unimplemented!() }
 
 fn main() {
   let mut x = 1_i64;
-  while rand() == 0 {
+  while rand() == 0 && x < 1000 {
     let mut y = 1_i64;
-    while rand() == 0 {
-      thrust_macros::invariant!(|x: i64| x >= 1);
+    while rand() == 0 && y < 1000 {
+      thrust_macros::invariant!(|x: i64| x >= 1 && x < 1000);
       y = x + y;
     }
     x = x + y;

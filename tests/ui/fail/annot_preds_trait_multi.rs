@@ -7,8 +7,11 @@ trait Double {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool;
 
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool;
+
     // This annotations are applied to all implementors of the `Double` trait.
-    #[thrust_macros::requires(true)]
+    #[thrust_macros::requires(Self::can_double(*self))]
     #[thrust_macros::ensures(Self::is_double(*self, !self))]
     fn double(&mut self);
 }
@@ -24,6 +27,11 @@ impl thrust_models::Model for A {
 
 #[thrust_macros::context]
 impl Double for A {
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool {
+        -4611686018427387904_i64 <= self.x && self.x < 4611686018427387904_i64
+    }
+
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
         self.x * 2 == doubled.x
@@ -46,6 +54,11 @@ impl thrust_models::Model for B {
 
 #[thrust_macros::context]
 impl Double for B {
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool {
+        -4611686018427387904_i64 <= self.x && self.x < 4611686018427387904_i64 && -4611686018427387904_i64 <= self.y && self.y < 4611686018427387904_i64
+    }
+
     // self.x * 3 (this isn't actually doubled!) does not comply with the trait.
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {

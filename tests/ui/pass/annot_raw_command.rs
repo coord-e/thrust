@@ -11,7 +11,7 @@
     )
 )")]
 
-#[thrust_macros::requires(true)]
+#[thrust_macros::requires(-4611686018427387904_i64 <= x && x < 4611686018427387904_i64)]
 #[thrust_macros::ensures(result == 2 * x)]
 fn double(x: i64) -> i64 {
     x + x

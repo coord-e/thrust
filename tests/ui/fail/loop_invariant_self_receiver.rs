@@ -20,7 +20,7 @@ impl thrust_models::Model for Counter {
 impl Counter {
     fn run(&mut self) -> i64 {
         let init = *self;
-        while rand() {
+        while rand() && self.value < i64::MAX {
             thrust_macros::invariant!(|init: Self, self: &mut Self| init.value <= (*self).value);
             self.value -= 1;
         }

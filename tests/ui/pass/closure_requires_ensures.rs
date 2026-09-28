@@ -11,7 +11,7 @@ fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {
 
 fn main() {
     let f = thrust_macros::closure!(
-        requires(x > 0),
+        requires(x > 0 && x < 2147483647),
         ensures(result > x),
         |x: i32| -> i32 { x + 1 },
     );

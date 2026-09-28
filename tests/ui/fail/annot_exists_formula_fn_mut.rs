@@ -5,7 +5,7 @@
 #[allow(unused_variables)]
 #[thrust::formula_fn]
 fn _thrust_requires_incr(m: thrust_models::model::Mut<i32>, x: i32) -> bool {
-    x > 0
+    x > 0 && *m <= 2147483647 - x
 }
 
 #[allow(unused_variables)]

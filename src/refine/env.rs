@@ -617,8 +617,9 @@ where
     }
 
     pub fn push_temp_var(&mut self, ty: rty::Type<Var>) -> TempVarIdx {
-        self.temp_vars
-            .push(TempVarBinding::Type(rty::RefinedType::unrefined(ty)))
+        let mut rty = rty::RefinedType::unrefined(ty);
+        rty.restrict_to_int_range();
+        self.temp_vars.push(TempVarBinding::Type(rty))
     }
 
     // when var = Var::Temp(idx), idx must be temp_vars.next_index() in bind_*
@@ -680,10 +681,9 @@ where
                 assert_eq!(temp, self.temp_vars.push(TempVarBinding::Flow(binding)));
             }
         };
-        assert_eq!(
-            final_,
-            self.temp_vars.push(TempVarBinding::Type(*ty.elem.clone()))
-        );
+        let mut final_ty = *ty.elem.clone();
+        final_ty.restrict_to_int_range();
+        assert_eq!(final_, self.temp_vars.push(TempVarBinding::Type(final_ty)));
         let mut inner_ty = *ty.elem;
         inner_ty.extend_refinement(current_refinement);
         self.bind_impl(current.into(), inner_ty, depth);
@@ -834,7 +834,8 @@ where
         }
     }
 
-    fn bind_var(&mut self, var: Var, rty: rty::RefinedType<Var>) {
+    fn bind_var(&mut self, var: Var, mut rty: rty::RefinedType<Var>) {
+        rty.restrict_to_int_range();
         match var {
             Var::Local(local) => {
                 self.locals.insert(local, rty);

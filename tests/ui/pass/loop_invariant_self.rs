@@ -16,7 +16,7 @@ impl Counter {
     fn run(self) {
         let mut c = self;
         let mut x = 1_i64;
-        while rand() == 0 {
+        while rand() == 0 && x < i64::MAX {
             thrust_macros::invariant!(|x: i64, c: Self| x >= 1 && c == c);
             x = x + 1;
             c = Counter(0);

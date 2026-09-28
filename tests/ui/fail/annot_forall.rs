@@ -4,7 +4,7 @@
 
 use thrust_models::forall;
 
-#[thrust_macros::requires(true)]
+#[thrust_macros::requires(x < 2147483647)]
 #[thrust_macros::ensures(result > x && forall(|y: i32| y <= x || result < y))]
 fn succ(x: i32) -> i32 {
     x + 1

@@ -9,7 +9,7 @@ fn rand() -> i64 { unimplemented!() }
 fn main() {
   let mut x = 1_i64;
   let mut y = 1_i64;
-  while rand() == 0 {
+  while rand() == 0 && x < 4611686018427387904 && y < 4611686018427387904 {
     thrust_macros::invariant!(|x: i64, y: i64| x >= 1 && y >= 1);
     let t1 = x;
     let t2 = y;
