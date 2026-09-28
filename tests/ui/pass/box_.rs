@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 fn main() {
     let mut x = Box::new(1_i64);
