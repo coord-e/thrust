@@ -8,6 +8,9 @@ use crate::pretty::PrettyDisplayExt;
 
 use super::{ClauseBuilderExt as _, FunctionParamIdx, PointerKind, RefKind, RefinedType, Type};
 
+#[cfg(test)]
+mod tests;
+
 /// A scope for building clauses.
 ///
 /// The construction of CHC clauses requires knowledge of the current
@@ -60,7 +63,12 @@ where
         T: chc::Var,
         U: chc::Var,
     {
-        relate_type(self, got, expected, Relation::Sub)
+        relate_refined_type(
+            self,
+            &RefinedType::unrefined(got.clone()),
+            &RefinedType::unrefined(expected.clone()),
+            Relation::Sub,
+        )
     }
 
     fn relate_sub_refined_type<T, U>(
@@ -175,12 +183,14 @@ where
 {
     tracing::debug!(got = %got.display(), expected = %expected.display(), ?relation, "relate_refined_type");
 
+    let got = got.clone().normalize_tuple_refinements();
+    let expected = expected.clone().normalize_tuple_refinements();
     let mut clauses = relate_type(scope, &got.ty, &expected.ty, relation);
 
     let cs = scope
         .build_clause()
         .with_value_var(&got.ty)
-        .add_body(got.refinement.clone())
+        .add_body(got.formula())
         .head(expected.refinement.clone());
     clauses.extend(cs);
 
@@ -188,7 +198,7 @@ where
         let cs = scope
             .build_clause()
             .with_value_var(&expected.ty)
-            .add_body(expected.refinement.clone())
+            .add_body(expected.formula())
             .head(got.refinement.clone());
         clauses.extend(cs);
     }

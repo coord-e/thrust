@@ -216,13 +216,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         );
         clauses.extend(cs);
 
-        let cs = builder
-            .with_value_var(&got.ret.ty)
-            .add_body(got.ret.refinement)
-            .head(expected_ret.refinement);
-        clauses.extend(cs);
-
-        clauses.extend(builder.relate_sub_type(&got.ret.ty, &expected_ret.ty));
+        clauses.extend(builder.relate_sub_refined_type(&got.ret, &expected_ret));
         clauses
     }
 
@@ -305,17 +299,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
         }
         for ((param_idx, got_ty), expected_ty) in got_args.iter_enumerated().zip(&expected_args) {
-            // TODO we can use relate_sub_refined_type here when we implemenented builder-aware relate_*
-            let cs = builder
-                .clone()
-                .with_value_var(&got_ty.ty)
-                .add_body(expected_ty.refinement.clone())
-                .head(got_ty.refinement.clone());
-            clauses.extend(cs);
+            clauses.extend(builder.relate_sub_refined_type(expected_ty, got_ty));
             builder
                 .with_mapped_value_var(param_idx)
-                .add_body(expected_ty.refinement.clone());
-            clauses.extend(builder.relate_sub_type(&expected_ty.ty, &got_ty.ty));
+                .add_body(expected_ty.formula());
         }
 
         clauses
@@ -735,12 +722,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         let ret_rty = self.operand_refined_type(Operand::Move(mir::RETURN_PLACE.into()));
 
-        let cs = builder
-            .with_value_var(&expected_fn.ret.ty)
-            .add_body(ret_rty.refinement)
-            .head(expected_fn.ret.refinement.clone());
-        clauses.extend(cs);
-        clauses.extend(builder.relate_sub_type(&ret_rty.ty, &expected_fn.ret.ty));
+        clauses.extend(builder.relate_sub_refined_type(&ret_rty, &expected_fn.ret));
 
         self.ctx.extend_clauses(clauses);
     }

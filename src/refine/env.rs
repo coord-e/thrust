@@ -551,12 +551,12 @@ where
             if let Some(chc_var) = builder.find_mapped_var(var) {
                 origin.add_var_mapping(var, chc_var);
             }
-            let mut instantiator = rty
-                .refinement
+            let formula = rty.formula();
+            let mut instantiator = formula
                 .clone()
                 .map_free_var(|v| builder.mapped_var(v))
                 .instantiate();
-            for (ev, sort) in rty.refinement.existentials() {
+            for (ev, sort) in formula.existentials() {
                 let tv = builder.add_var(sort.clone());
                 origin.add_existential_var_mapping(ev, tv);
                 instantiator.existential(ev, tv);
