@@ -1094,7 +1094,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     let var = arguments
                         .entry(idx)
                         .or_insert_with(|| self.env.immut_bind_tmp(expected_args[idx].clone()));
-                    chc::Term::var((*var).into())
+                    chc::Term::var(*var)
                 });
             let clauses = self.relate_fn_sub_type(func_ty, expected_args, expected_ret.clone());
             self.ctx.extend_clauses(clauses);
