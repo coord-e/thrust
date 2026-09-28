@@ -10,6 +10,15 @@ use rustc_index::IndexVec;
 
 use crate::chc::{self, format_context::FormatContext};
 
+/// A quantifier-bound variable, prefixed with `q$` so it can't capture a clause variable like `v1`.
+struct QuantifiedVar<'a>(&'a str);
+
+impl std::fmt::Display for QuantifiedVar<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "q${}", self.0)
+    }
+}
+
 /// A helper struct to display a list of items.
 #[derive(Debug, Clone)]
 struct List<T> {
@@ -223,7 +232,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.var_sorts, t)
                 )
             }
-            chc::Term::FormulaQuantifiedVar(_, name) => write!(f, "{}", name),
+            chc::Term::FormulaQuantifiedVar(_, name) => write!(f, "{}", QuantifiedVar(name)),
         }
     }
 }
@@ -337,18 +346,22 @@ impl<'ctx, 'a> std::fmt::Display for Formula<'ctx, 'a> {
                 write!(f, "(=> {lhs} {rhs})")
             }
             chc::Formula::Exists(vars, fo) => {
-                let vars =
-                    List::closed(vars.iter().map(|(v, s)| {
-                        List::closed([v.to_string(), self.ctx.fmt_sort(s).to_string()])
-                    }));
+                let vars = List::closed(vars.iter().map(|(v, s)| {
+                    List::closed([
+                        QuantifiedVar(v).to_string(),
+                        self.ctx.fmt_sort(s).to_string(),
+                    ])
+                }));
                 let fo = Formula::new(self.ctx, self.var_sorts, fo);
                 write!(f, "(exists {vars} {fo})")
             }
             chc::Formula::Forall(vars, fo) => {
-                let vars =
-                    List::closed(vars.iter().map(|(v, s)| {
-                        List::closed([v.to_string(), self.ctx.fmt_sort(s).to_string()])
-                    }));
+                let vars = List::closed(vars.iter().map(|(v, s)| {
+                    List::closed([
+                        QuantifiedVar(v).to_string(),
+                        self.ctx.fmt_sort(s).to_string(),
+                    ])
+                }));
                 let fo = Formula::new(self.ctx, self.var_sorts, fo);
                 write!(f, "(forall {vars} {fo})")
             }
