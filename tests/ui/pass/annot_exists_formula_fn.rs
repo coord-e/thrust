@@ -3,8 +3,10 @@
 
 #[thrust::trusted]
 #[thrust::callable]
-#[thrust_macros::ensures(-1000 <= result && result <= 1000)]
 fn rand() -> i32 { unimplemented!() }
+
+const HALF_MIN: i32 = i32::MIN / 2;
+const HALF_MAX: i32 = i32::MAX / 2;
 
 #[thrust::formula_fn]
 fn _thrust_requires_f() -> bool {
@@ -25,7 +27,11 @@ fn f() -> i32 {
     _thrust_ensures_f;
 
     let x = rand();
-    x + x
+    if HALF_MIN <= x && x <= HALF_MAX {
+        x + x
+    } else {
+        0
+    }
 }
 
 fn main() {}

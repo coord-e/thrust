@@ -5,10 +5,12 @@ use thrust_models::exists;
 
 #[thrust::trusted]
 #[thrust::callable]
-#[thrust_macros::ensures(-1000 <= result && result <= 1000)]
 fn rand() -> i64 {
     unimplemented!()
 }
+
+const HALF_MIN: i64 = i64::MIN / 2;
+const HALF_MAX: i64 = i64::MAX / 2;
 
 // Same contract as the `pass` counterpart, but the body returns a negative
 // value when `x > 0`, so the implication `(x > 0) ==> (result > 0)` is
@@ -39,7 +41,11 @@ fn g(x: i64) -> i64 {
 #[thrust_macros::ensures(exists(|y: i64| (1 == 1) ==> (result == 2 * y)))]
 fn k() -> i64 {
     let x = rand();
-    x + x
+    if HALF_MIN <= x && x <= HALF_MAX {
+        x + x
+    } else {
+        0
+    }
 }
 
 fn main() {}

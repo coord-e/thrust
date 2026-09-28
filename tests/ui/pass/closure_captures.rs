@@ -10,7 +10,7 @@ fn main() {
     let n = 5;
     let f = thrust_macros::closure!(
         captures(n: i32),
-        requires(n >= 0 && x > n && x < 1000),
+        requires(x > n && i32::MIN <= x + n && x + n <= i32::MAX),
         ensures(result == x + n),
         |x: i32| -> i32 { x + n },
     );

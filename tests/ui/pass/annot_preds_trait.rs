@@ -36,7 +36,7 @@ impl Double for A {
 
     #[thrust_macros::predicate]
     fn can_double(self) -> bool {
-        -1000 <= self.x && self.x <= 1000
+        i64::MIN <= self.x + self.x && self.x + self.x <= i64::MAX
     }
 
     // Check if this method complies with annotations in

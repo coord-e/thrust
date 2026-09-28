@@ -8,7 +8,7 @@ fn rand() -> i64 { unimplemented!() }
 fn main() {
   let mut x = 5_i64;
   let p = &mut x;
-  while *p < 1000 && rand() == 0 {
+  while *p < i64::MAX && rand() == 0 {
     thrust_macros::invariant!(|p: &mut i64| *p >= 1);
     *p = *p - 1;
   }

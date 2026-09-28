@@ -10,7 +10,7 @@ fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {
 
 fn main() {
     let f = thrust_macros::closure!(
-        requires(x > 0 && x < 1000),
+        requires(x > 0 && x < i32::MAX),
         |x: i32| -> i32 { x + 1 },
     );
     let r = apply(-1, f);

@@ -8,10 +8,12 @@
 #[thrust::trusted]
 fn rand() -> i64 { unimplemented!() }
 
+const HALF_MAX: i64 = i64::MAX / 2;
+
 fn main() {
     let mut x = 1_i64;
     let mut y = 1_i64;
-    while x < 1000 && y < 1000 && rand() == 0 {
+    while x <= HALF_MAX && y <= HALF_MAX && rand() == 0 {
         thrust_macros::invariant!(|x: i64| x >= 1);
         thrust_macros::invariant!(|y: i64| y >= 2);
         let t1 = x;

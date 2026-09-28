@@ -7,7 +7,7 @@ pub enum X<'a, 'b> {
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(-1000 <= result && result <= 1000)]
+#[thrust_macros::ensures(true)]
 fn rand() -> i64 { unimplemented!() }
 
 fn x(i: &mut i64) -> X {
@@ -20,9 +20,11 @@ fn x(i: &mut i64) -> X {
 
 fn main() {
     let mut i = rand();
-    match x(&mut i) {
-        X::A(a) => *a += 1,
-        X::B(b) => *b = -*b,
+    if i64::MIN < i && i < i64::MAX {
+        match x(&mut i) {
+            X::A(a) => *a += 1,
+            X::B(b) => *b = -*b,
+        }
+        assert!(i > 0);
     }
-    assert!(i > 0);
 }

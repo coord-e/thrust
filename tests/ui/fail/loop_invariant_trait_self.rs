@@ -42,7 +42,7 @@ impl Gauge for Counter {
     }
 
     fn update(&mut self) -> i32 {
-        if self.value < 0 || self.value >= 1000 {
+        if self.value < 0 || self.value >= i32::MAX {
             self.value = 0;
         } else {
             self.value -= 1;

@@ -1,7 +1,7 @@
 //@error-in-other-file: Unsat
 
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(-1000 <= result && result <= 1000)]
+#[thrust_macros::ensures(true)]
 #[thrust::trusted]
 fn rand() -> i64 { unimplemented!() }
 
@@ -16,6 +16,8 @@ fn app(f: fn(&mut i64), mut x: i64) -> i64 {
 
 fn main() {
     let i = rand();
-    let x = app(incr, i);
-    assert!(x == i);
+    if i64::MIN <= i && i < i64::MAX {
+        let x = app(incr, i);
+        assert!(x == i);
+    }
 }

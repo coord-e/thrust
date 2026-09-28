@@ -1,7 +1,7 @@
 //@error-in-other-file: Unsat
 
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(0 <= result && result <= 1000)]
+#[thrust_macros::ensures(true)]
 #[thrust::trusted]
 fn rand() -> i64 { unimplemented!() }
 
@@ -15,6 +15,8 @@ fn sum(i: i64) -> i64 {
 
 fn main() {
     let x = rand();
-    let y = sum(x);
-    assert!(y == x + 1);
+    if 0 <= x && x <= i64::MAX {
+        let y = sum(x);
+        assert!(y != x);
+    }
 }

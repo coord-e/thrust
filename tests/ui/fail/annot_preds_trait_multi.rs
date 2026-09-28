@@ -34,7 +34,7 @@ impl Double for A {
 
     #[thrust_macros::predicate]
     fn can_double(self) -> bool {
-        -1000 <= self.x && self.x <= 1000
+        i64::MIN <= self.x + self.x && self.x + self.x <= i64::MAX
     }
 
     fn double(&mut self) {
@@ -62,7 +62,8 @@ impl Double for B {
 
     #[thrust_macros::predicate]
     fn can_double(self) -> bool {
-        -1000 <= self.x && self.x <= 1000 && -1000 <= self.y && self.y <= 1000
+        i64::MIN <= self.x + self.x && self.x + self.x <= i64::MAX
+            && i64::MIN <= self.y + self.y && self.y + self.y <= i64::MAX
     }
 
     fn double(&mut self) {

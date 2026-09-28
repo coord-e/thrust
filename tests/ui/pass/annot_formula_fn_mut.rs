@@ -3,7 +3,7 @@
 #[allow(unused_variables)]
 #[thrust::formula_fn]
 fn _thrust_requires_incr(m: thrust_models::model::Mut<i64>, x: i64) -> bool {
-    -1000 <= *m && *m <= 1000 && -1000 <= x && x <= 1000
+    i64::MIN <= *m + x && *m + x <= i64::MAX
 }
 
 #[allow(unused_variables)]

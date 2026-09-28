@@ -11,7 +11,7 @@
     )
 )")]
 
-#[thrust_macros::requires(-1000 <= x && x <= 1000)]
+#[thrust_macros::requires(i64::MIN <= x + x && x + x <= i64::MAX)]
 #[thrust_macros::ensures(result == 2 * x)]
 fn double(x: i64) -> i64 {
     x + x
