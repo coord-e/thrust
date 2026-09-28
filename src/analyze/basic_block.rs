@@ -1251,7 +1251,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     }
 
     fn drop_locals(&mut self, set: drop_point::DropSet<'tcx>) {
-        let except: Vec<mir::Place<'tcx>> = set.except.into_iter().collect();
+        let except: Vec<mir::Place<'tcx>> = set
+            .except
+            .into_iter()
+            .map(|place| self.elaborate_place(&place))
+            .collect();
         for local in set.drops {
             tracing::info!(?local, ?except, "implicitly dropped");
             self.env.drop_local(local, &except);

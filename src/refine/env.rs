@@ -1121,41 +1121,6 @@ where
         self.path_type(&place.into())
     }
 
-    /// The [`Path`] at which a drop walk reaches `place`: its MIR projection
-    /// with the `own`-box `Deref`s that the type elaboration introduces (for
-    /// mut/reborrowed locals and every tuple field) inserted before each step.
-    fn elaborated_path(&self, place: Place) -> Path {
-        let mut path = Path::Local(place.local);
-        let mut ty = self.local_type(place.local);
-        let mut proj = place.projection.iter();
-        while let Some(elem) = proj.next() {
-            // Peel the `own` boxes the walk would deref before this projection.
-            while ty.ty.is_own() {
-                path = path.deref();
-                ty = ty.deref();
-            }
-            match elem {
-                PlaceElem::Field(idx, _) => {
-                    path = path.tuple_proj(idx.as_usize());
-                    ty = ty.tuple_proj(idx.as_usize());
-                }
-                PlaceElem::Deref => {
-                    path = path.deref();
-                    ty = ty.deref();
-                }
-                PlaceElem::Downcast(_, variant) => {
-                    let Some(PlaceElem::Field(field, _)) = proj.next() else {
-                        panic!("downcast not followed by field");
-                    };
-                    path = Path::Downcast(Box::new(path), variant, field);
-                    ty = ty.downcast(variant, field, &self.enum_defs);
-                }
-                _ => unimplemented!("elaborated_path: {elem:?}"),
-            }
-        }
-        path
-    }
-
     fn dropping_assumption(&mut self, path: &Path, except: &[Path]) -> Assumption {
         let PlaceType {
             ty,
@@ -1236,9 +1201,6 @@ where
 
                     let field_path =
                         Path::Downcast(Box::new(path.clone()), variant_index, field_index.into());
-                    if except.contains(&field_path) {
-                        continue;
-                    }
                     body.push_conj(self.dropping_formula_for_term(
                         existentials,
                         &field_type,
@@ -1263,7 +1225,7 @@ where
         let except: Vec<Path> = except
             .iter()
             .filter(|p| p.local == local)
-            .map(|p| self.elaborated_path(*p))
+            .map(|p| Path::from(*p))
             .collect();
         let assumption = self.dropping_assumption(&Path::Local(local), &except);
         if !assumption.is_top() {

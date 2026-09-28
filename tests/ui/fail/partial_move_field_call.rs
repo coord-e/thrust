@@ -3,7 +3,7 @@
 
 // Regression test for #122: a `&mut`-bearing field moved out of an aggregate
 // into a call must not be re-dropped when the parent is dropped wholesale.
-// `w.0` (an owned `(&mut i32,)`) is moved into `bump`; dropping `w` afterwards
+// `w.0` (an owned `(&mut i64,)`) is moved into `bump`; dropping `w` afterwards
 // used to resolve the moved-out `&mut` prophecy a second time, so this false
 // assertion was wrongly accepted.
 fn bump(p: (&mut i64,)) {
