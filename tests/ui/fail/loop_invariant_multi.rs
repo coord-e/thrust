@@ -1,5 +1,4 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 
 // Both invariants are AND'd. If either is too weak to be inductive, the
 // verification fails — here `y >= 2` does not hold initially.
@@ -12,7 +11,7 @@ fn rand() -> i64 { unimplemented!() }
 fn main() {
     let mut x = 1_i64;
     let mut y = 1_i64;
-    while rand() == 0 {
+    while x < 1000 && y < 1000 && rand() == 0 {
         thrust_macros::invariant!(|x: i64| x >= 1);
         thrust_macros::invariant!(|y: i64| y >= 2);
         let t1 = x;

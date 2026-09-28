@@ -1,9 +1,8 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(true)]
+#[thrust_macros::ensures(-1000 <= result && result <= 1000)]
 fn rand() -> i32 { unimplemented!() }
 
 fn split<'a>((a, b): &'a mut (i32, i32)) -> (&'a mut i32, &'a mut i32) {

@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper THRUST_SOLVER_TIMEOUT_SECS=60
 
 #[thrust_macros::requires(true)]
@@ -43,8 +42,8 @@ impl Gauge for Counter {
     }
 
     fn update(&mut self) -> i32 {
-        if self.value < 0 {
-            self.value *= -1;
+        if self.value < 0 || self.value >= 1000 {
+            self.value = 0;
         } else {
             self.value += 1;
         }

@@ -1,7 +1,7 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 
 #[thrust::callable]
+#[thrust_macros::requires(-1000 <= v && v <= 1000)]
 fn check(v: i32) {
     let incr = |x| {
         x + 1

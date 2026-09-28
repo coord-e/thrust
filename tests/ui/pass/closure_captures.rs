@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(thrust_macros::pre!(f(x)))]
 #[thrust_macros::ensures(thrust_macros::post!(f(x), result))]
@@ -11,7 +10,7 @@ fn main() {
     let n = 5;
     let f = thrust_macros::closure!(
         captures(n: i32),
-        requires(x > n),
+        requires(n >= 0 && x > n && x < 1000),
         ensures(result == x + n),
         |x: i32| -> i32 { x + n },
     );

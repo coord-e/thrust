@@ -1,5 +1,4 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
@@ -11,7 +10,7 @@ struct Counter;
 impl Counter {
   fn run(&self) {
     let mut x = 5_i64;
-    while rand() == 0 {
+    while x < 1000 && rand() == 0 {
       thrust_macros::invariant!(|x: i64| x >= 1);
       x = x - 1;
     }

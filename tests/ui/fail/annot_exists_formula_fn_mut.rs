@@ -1,11 +1,10 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
 #[allow(unused_variables)]
 #[thrust::formula_fn]
 fn _thrust_requires_incr(m: thrust_models::model::Mut<i32>, x: i32) -> bool {
-    x > 0
+    x > 0 && x <= 1000 && -1000 <= *m && *m <= 1000
 }
 
 #[allow(unused_variables)]

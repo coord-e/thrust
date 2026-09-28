@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
@@ -9,7 +8,7 @@ fn rand() -> i64 { unimplemented!() }
 fn main() {
   let mut x = 1_i64;
   let mut y = 1_i64;
-  while rand() == 0 {
+  while x < 1000 && y < 1000 && rand() == 0 {
     thrust_macros::invariant!(|x: i64, y: i64| x >= 1 && y >= 1);
     let t1 = x;
     let t2 = y;

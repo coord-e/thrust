@@ -1,5 +1,5 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -Adead_code -C debug-assertions=off
+//@compile-flags: -Adead_code
 
 // A is represented as Tuple<Int> in SMT-LIB2 format.
 #[derive(PartialEq)]
@@ -17,8 +17,11 @@ trait Double {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool;
 
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool;
+
     // This annotations are applied to all implementors of the `Double` trait.
-    #[thrust_macros::requires(true)]
+    #[thrust_macros::requires(Self::can_double(*self))]
     #[thrust_macros::ensures(Self::is_double(*self, !self))]
     fn double(&mut self);
 }
@@ -29,6 +32,11 @@ impl Double for A {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
         self.x * 3 == doubled.x
+    }
+
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool {
+        -1000 <= self.x && self.x <= 1000
     }
 
     // Check if this method complies with annotations in

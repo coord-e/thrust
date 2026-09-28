@@ -1,5 +1,5 @@
 //@check-pass
-//@compile-flags: -Adead_code -C debug-assertions=off
+//@compile-flags: -Adead_code
 
 #[thrust_macros::context]
 trait Double {
@@ -7,8 +7,11 @@ trait Double {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool;
 
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool;
+
     // This annotations are applied to all implementors of the `Double` trait.
-    #[thrust_macros::requires(true)]
+    #[thrust_macros::requires(Self::can_double(*self))]
     #[thrust_macros::ensures(Self::is_double(*self, !self))]
     fn double(&mut self);
 }
@@ -27,6 +30,11 @@ impl Double for A {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
         self.x * 2 == doubled.x
+    }
+
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool {
+        -1000 <= self.x && self.x <= 1000
     }
 
     fn double(&mut self) {
@@ -49,6 +57,11 @@ impl Double for B {
     #[thrust_macros::predicate]
     fn is_double(self, doubled: Self) -> bool {
         self.x * 2 == doubled.x && self.y * 2 == doubled.y
+    }
+
+    #[thrust_macros::predicate]
+    fn can_double(self) -> bool {
+        -1000 <= self.x && self.x <= 1000 && -1000 <= self.y && self.y <= 1000
     }
 
     fn double(&mut self) {

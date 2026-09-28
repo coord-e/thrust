@@ -1,5 +1,4 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
@@ -16,7 +15,7 @@ impl Counter {
     fn run(self) {
         let mut c = self;
         let mut x = 1_i64;
-        while rand() == 0 {
+        while x < 1000 && rand() == 0 {
             thrust_macros::invariant!(|x: i64, c: Self| x >= 2 && c == c);
             x = x + 1;
             c = Counter(0);

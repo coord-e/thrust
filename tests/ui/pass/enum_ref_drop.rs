@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 pub enum X<'a, 'b> {
     A(&'a mut i64),
@@ -8,7 +7,7 @@ pub enum X<'a, 'b> {
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
-#[thrust_macros::ensures(true)]
+#[thrust_macros::ensures(-1000 <= result && result <= 1000)]
 fn rand() -> i64 { unimplemented!() }
 
 fn x(i: &mut i64) -> X {

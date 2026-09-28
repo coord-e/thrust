@@ -1,9 +1,9 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
 #[thrust::trusted]
 #[thrust::callable]
+#[thrust_macros::ensures(-1000 <= result && result <= 1000)]
 fn rand() -> i32 { unimplemented!() }
 
 #[thrust::formula_fn]
