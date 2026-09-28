@@ -92,11 +92,14 @@ fn int_term_in_range<'tcx, V: Clone>(
 ) -> chc::Term<V> {
     let bits = ty.primitive_size(tcx).bits();
     let (min, end) = if ty.is_signed() {
-        (chc::Term::pow2(bits - 1).neg(), chc::Term::pow2(bits - 1))
+        let half = BigInt::from(1) << (bits - 1);
+        (-half.clone(), half)
     } else {
-        (chc::Term::int(0), chc::Term::pow2(bits))
+        (BigInt::from(0), BigInt::from(1) << bits)
     };
-    term.clone().ge(min).and(term.lt(end))
+    term.clone()
+        .ge(chc::Term::int(min))
+        .and(term.lt(chc::Term::int(end)))
 }
 
 /// Converts the current env state into a `Refinement<FunctionParamIdx>` to be
