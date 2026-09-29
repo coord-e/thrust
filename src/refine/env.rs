@@ -1183,7 +1183,15 @@ where
     }
 
     pub fn drop_local(&mut self, local: Local) {
-        let assumption = self.dropping_assumption(&Path::Local(local));
+        self.drop_path(&Path::Local(local));
+    }
+
+    pub fn drop_place(&mut self, place: Place) {
+        self.drop_path(&place.into());
+    }
+
+    fn drop_path(&mut self, path: &Path) {
+        let assumption = self.dropping_assumption(path);
         if !assumption.is_top() {
             self.assume(assumption);
         }
