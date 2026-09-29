@@ -1,6 +1,7 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off -A unused-variables
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 use thrust_models::model::{Int, Seq};
 use thrust_models::Ghost;

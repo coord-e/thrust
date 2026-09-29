@@ -265,6 +265,10 @@ pub struct Analyzer<'tcx> {
     def_ids: did_cache::DefIdCache<'tcx>,
 
     enum_defs: Rc<RefCell<EnumDefs>>,
+
+    /// Whether integer arithmetic is treated as mathematical, ignoring the wrap-around of the
+    /// actual integer types.
+    integer_wrapping_disabled: bool,
 }
 
 impl<'tcx> crate::refine::TemplateRegistry for Analyzer<'tcx> {
@@ -301,6 +305,10 @@ impl<'tcx> Analyzer<'tcx> {
             basic_blocks,
             def_ids: did_cache::DefIdCache::new(tcx),
             enum_defs,
+            integer_wrapping_disabled: matches!(
+                std::env::var("THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING").as_deref(),
+                Ok("1")
+            ),
         }
     }
 

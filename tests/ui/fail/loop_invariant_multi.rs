@@ -1,5 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 // Both invariants are AND'd. If either is too weak to be inductive, the
 // verification fails — here `y >= 2` does not hold initially.

@@ -1,5 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 mod counter {
     pub fn count_to(n: i64) -> i64 {

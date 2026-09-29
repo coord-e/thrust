@@ -1,5 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 // The declared postcondition `result > x` is weaker than what the body computes, and
 // the caller sees only the declared one.

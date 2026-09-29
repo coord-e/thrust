@@ -1,5 +1,6 @@
 //@check-pass
 //@compile-flags: -Adead_code -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 #[thrust_macros::predicate]
 fn is_double(x: i64, doubled_x: i64) -> bool {

@@ -1,5 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 // A loop invariant refers to a closure parameter via `FnParam<F>`, whose
 // `f.at_entry()` yields `Closure<F>`. Here the invariant relates `acc` to the

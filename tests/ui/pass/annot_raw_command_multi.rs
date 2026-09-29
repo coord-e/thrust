@@ -1,5 +1,6 @@
 //@check-pass
 //@compile-flags: -Adead_code -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 // Insert commands written in SMT-LIB2 format into .smt2 file directly.
 // This feature is intended for debug or experiment purpose.

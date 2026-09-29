@@ -1,5 +1,6 @@
 //@check-pass
 //@compile-flags: -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 #[thrust_macros::requires(n >= 0)]
 #[thrust_macros::ensures(result == value)]

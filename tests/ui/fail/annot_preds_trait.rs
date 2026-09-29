@@ -1,5 +1,6 @@
 //@error-in-other-file: Unsat
 //@compile-flags: -Adead_code -C debug-assertions=off
+//@rustc-env: THRUST_UNSOUNDLY_DISABLE_INTEGER_WRAPPING=1
 
 // A is represented as Tuple<Int> in SMT-LIB2 format.
 #[derive(PartialEq)]

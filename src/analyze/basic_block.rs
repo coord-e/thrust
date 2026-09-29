@@ -547,6 +547,20 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty
     }
 
+    /// The term of an integer operation on operands of `ty` whose mathematical result is `result`,
+    /// which wraps around as `+`, `-` and `*` in MIR do.
+    fn wrapping_int_op(
+        &self,
+        result: chc::Term<PlaceTypeVar>,
+        ty: mir_ty::Ty<'tcx>,
+    ) -> chc::Term<PlaceTypeVar> {
+        if self.ctx.integer_wrapping_disabled {
+            result
+        } else {
+            wrap_int_term(self.tcx, result, ty)
+        }
+    }
+
     /// The type and term of a checked integer operation on operands of `ty` whose mathematical
     /// result is `result`.
     ///
@@ -557,7 +571,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty: mir_ty::Ty<'tcx>,
     ) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>) {
         let overflowed = int_term_in_range(self.tcx, result.clone(), ty).not();
-        let wrapped = wrap_int_term(self.tcx, result, ty);
+        let wrapped = self.wrapping_int_op(result, ty);
         // elaboration: all fields are boxed
         let tuple_ty = rty::TupleType::new(vec![
             rty::PointerType::own(rty::Type::int()).into(),
@@ -597,13 +611,16 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let (_rhs_ty, rhs_term) = builder.subsume(rhs_ty);
                 match (&lhs_ty, op) {
                     (rty::Type::Int, mir::BinOp::Add) => {
-                        builder.build(lhs_ty, lhs_term.add(rhs_term))
+                        let term = self.wrapping_int_op(lhs_term.add(rhs_term), lhs_mir_ty);
+                        builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::Sub) => {
-                        builder.build(lhs_ty, lhs_term.sub(rhs_term))
+                        let term = self.wrapping_int_op(lhs_term.sub(rhs_term), lhs_mir_ty);
+                        builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::Mul) => {
-                        builder.build(lhs_ty, lhs_term.mul(rhs_term))
+                        let term = self.wrapping_int_op(lhs_term.mul(rhs_term), lhs_mir_ty);
+                        builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::AddWithOverflow) => {
                         let (ty, term) = self.checked_int_op(lhs_term.add(rhs_term), lhs_mir_ty);
