@@ -66,7 +66,7 @@ fn term_sorts(
             }
         }
         chc::Term::DatatypeDiscr(_, t) => term_sorts(var_sorts, t, sorts),
-        chc::Term::FormulaQuantifiedVar(_, _) => {}
+        chc::Term::UserQuantifiedVar(_, _) => {}
     }
 }
 
