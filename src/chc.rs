@@ -923,9 +923,6 @@ impl<V> Term<V> {
 
 rustc_index::newtype_index! {
     /// An identifier of a variable bound by `forall`/`exists` in an annotation.
-    ///
-    /// It is unique in a CHC system, so that a formula placed under a quantifier of another
-    /// annotation (as `pre!`/`post!` do) never refers to that quantifier's variable.
     #[debug_format = "q${}"]
     pub struct UserQuantifiedVarId { }
 }
