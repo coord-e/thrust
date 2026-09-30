@@ -731,6 +731,24 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     _ => unimplemented!("aggregate kind: {:?}", kind),
                 }
             }
+            Rvalue::Repeat(operand, count) => {
+                // TODO: Stop embedding knowledge of `<[T; N] as Model>::Ty` in the analyzer
+                let count = count
+                    .try_to_target_usize(self.tcx)
+                    .expect("array repeat count must be a known constant");
+                let mir_elem_ty = operand.ty(&self.body.local_decls, self.tcx);
+                let elem_ty = self.type_builder.build(mir_elem_ty).vacuous();
+                let mut builder = PlaceTypeBuilder::default();
+                let (_, elem_term) = builder.subsume(self.operand_type(operand));
+                let mut seq = chc::Term::seq_empty(elem_ty.to_sort());
+                for _ in 0..count {
+                    seq = seq.seq_concat(elem_term.clone().seq_unit());
+                }
+                builder.build(
+                    rty::Type::Seq(Box::new(rty::RefinedType::unrefined(elem_ty))),
+                    seq,
+                )
+            }
             Rvalue::Cast(
                 mir::CastKind::PointerCoercion(
                     mir_ty::adjustment::PointerCoercion::ReifyFnPointer,
