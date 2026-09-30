@@ -10,6 +10,19 @@ use rustc_index::IndexVec;
 
 use crate::chc::{self, format_context::FormatContext};
 
+/// An integer constant. SMT-LIB2 has no negative numerals.
+struct IntConst<'a>(&'a num_bigint::BigInt);
+
+impl std::fmt::Display for IntConst<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.sign() == num_bigint::Sign::Minus {
+            write!(f, "(- {})", self.0.magnitude())
+        } else {
+            write!(f, "{}", self.0)
+        }
+    }
+}
+
 /// A helper struct to display a list of items.
 #[derive(Debug, Clone)]
 struct List<T> {
@@ -104,7 +117,7 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
         match self.inner {
             chc::Term::Null => write!(f, "null"),
             chc::Term::Var(v) => write!(f, "{}", v),
-            chc::Term::Int(i) => write!(f, "{}", i),
+            chc::Term::Int(i) => write!(f, "{}", IntConst(i)),
             chc::Term::Bool(b) => write!(f, "{}", b),
             chc::Term::String(s) => write!(f, "\"{}\"", s.escape_default()),
             chc::Term::Box(t) => {
@@ -615,7 +628,7 @@ impl<'ctx, 'a> std::fmt::Display for DatatypeDiscrFun<'ctx, 'a> {
                 format!(
                     "(ite ((_ is {ctor}) x) {discr} {acc})",
                     ctor = &ctor.symbol,
-                    discr = ctor.discriminant,
+                    discr = IntConst(&ctor.discriminant),
                 )
             });
         write!(
