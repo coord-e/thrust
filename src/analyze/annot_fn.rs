@@ -627,13 +627,13 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         &self,
         closure: &rustc_hir::Body<'tcx>,
     ) -> (
-        Vec<(String, chc::Sort)>,
+        Vec<(chc::UserQuantifiedVarId, chc::Sort)>,
         chc::Formula<rty::FunctionParamIdx>,
     ) {
         let mut inner_translator = self.clone();
         let mut vars = Vec::new();
         for param in closure.params {
-            let rustc_hir::PatKind::Binding(_, hir_id, ident, None) = param.pat.kind else {
+            let rustc_hir::PatKind::Binding(_, hir_id, _, None) = param.pat.kind else {
                 panic!(
                     "exists/forall closure parameter must be a simple binding: {:?}",
                     param.pat
@@ -641,17 +641,11 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             };
             let param_ty = self.pat_ty(param.pat);
             let sort = self.type_builder.build(param_ty).to_sort();
-            // `pre!`/`post!` place another annotation's formula under this binder without
-            // renaming its binders, so the name must be unique across all annotations.
-            let name = format!(
-                "{}.{}.{}",
-                ident.name,
-                hir_id.owner.def_id.local_def_index.as_u32(),
-                hir_id.local_id.as_u32()
-            );
-            let var_term = chc::Term::FormulaQuantifiedVar(sort.clone(), name.clone());
-            inner_translator.env.insert(hir_id, var_term);
-            vars.push((name, sort));
+            let var = self.analyzer.generate_user_quantified_var();
+            inner_translator
+                .env
+                .insert(hir_id, chc::Term::UserQuantifiedVar(sort.clone(), var));
+            vars.push((var, sort));
         }
         let body_formula = inner_translator.to_formula(closure.value);
         (vars, body_formula)

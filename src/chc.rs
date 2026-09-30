@@ -484,7 +484,7 @@ pub enum Term<V = TermVarIdx> {
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
     DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
     /// Used in [`Formula`] to represent quantified variables appearing in annotations.
-    FormulaQuantifiedVar(Sort, String),
+    UserQuantifiedVar(Sort, UserQuantifiedVarId),
 }
 
 impl<'a, D, V> Pretty<'a, D, termcolor::ColorSpec> for &Term<V>
@@ -556,7 +556,7 @@ where
             Term::DatatypeDiscr(_, t) => allocator
                 .text("discriminant")
                 .append(t.pretty(allocator).parens()),
-            Term::FormulaQuantifiedVar(_, name) => allocator.text(name.clone()),
+            Term::UserQuantifiedVar(_, var) => allocator.as_string(var),
         }
     }
 }
@@ -605,7 +605,7 @@ impl<V> Term<V> {
                 args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
             ),
             Term::DatatypeDiscr(d_sym, t) => Term::DatatypeDiscr(d_sym, Box::new(t.subst_var(f))),
-            Term::FormulaQuantifiedVar(sort, name) => Term::FormulaQuantifiedVar(sort, name),
+            Term::UserQuantifiedVar(sort, var) => Term::UserQuantifiedVar(sort, var),
         }
     }
 
@@ -653,7 +653,7 @@ impl<V> Term<V> {
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
             Term::DatatypeCtor(sort, _, _) => sort.clone().into(),
             Term::DatatypeDiscr(_, _) => Sort::int(),
-            Term::FormulaQuantifiedVar(sort, _) => sort.clone(),
+            Term::UserQuantifiedVar(sort, _) => sort.clone(),
         }
     }
 
@@ -665,7 +665,7 @@ impl<V> Term<V> {
             | Term::Int(_)
             | Term::String(_)
             | Term::ArrayEmpty { .. }
-            | Term::FormulaQuantifiedVar { .. } => Box::new(std::iter::empty()),
+            | Term::UserQuantifiedVar { .. } => Box::new(std::iter::empty()),
             Term::Box(t) => t.fv_impl(),
             Term::Mut(t1, t2) => Box::new(t1.fv_impl().chain(t2.fv_impl())),
             Term::BoxCurrent(t) => t.fv_impl(),
@@ -918,6 +918,21 @@ impl<V> Term<V> {
 
     pub fn not_equal_to(self, other: Self) -> Atom<V> {
         Atom::new(KnownPred::NOT_EQUAL.into(), vec![self, other])
+    }
+}
+
+rustc_index::newtype_index! {
+    /// An identifier of a variable bound by `forall`/`exists` in an annotation.
+    ///
+    /// It is unique in a CHC system, so that a formula placed under a quantifier of another
+    /// annotation (as `pre!`/`post!` do) never refers to that quantifier's variable.
+    #[debug_format = "q${}"]
+    pub struct UserQuantifiedVarId { }
+}
+
+impl std::fmt::Display for UserQuantifiedVarId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "q${}", self.index())
     }
 }
 
@@ -1395,8 +1410,8 @@ pub enum Formula<V = TermVarIdx> {
     And(Vec<Formula<V>>),
     Or(Vec<Formula<V>>),
     Implies(Box<Formula<V>>, Box<Formula<V>>),
-    Exists(Vec<(String, Sort)>, Box<Formula<V>>),
-    Forall(Vec<(String, Sort)>, Box<Formula<V>>),
+    Exists(Vec<(UserQuantifiedVarId, Sort)>, Box<Formula<V>>),
+    Forall(Vec<(UserQuantifiedVarId, Sort)>, Box<Formula<V>>),
 }
 
 impl<V> Default for Formula<V> {
@@ -1447,9 +1462,9 @@ where
                 .group(),
             Formula::Exists(vars, fo) => {
                 let vars = allocator.intersperse(
-                    vars.iter().map(|(name, sort)| {
+                    vars.iter().map(|(var, sort)| {
                         allocator
-                            .text(name.clone())
+                            .as_string(var)
                             .append(allocator.text(":"))
                             .append(allocator.text(" "))
                             .append(sort.pretty(allocator))
@@ -1466,9 +1481,9 @@ where
             }
             Formula::Forall(vars, fo) => {
                 let vars = allocator.intersperse(
-                    vars.iter().map(|(name, sort)| {
+                    vars.iter().map(|(var, sort)| {
                         allocator
-                            .text(name.clone())
+                            .as_string(var)
                             .append(allocator.text(":"))
                             .append(allocator.text(" "))
                             .append(sort.pretty(allocator))
@@ -1570,11 +1585,11 @@ impl<V> Formula<V> {
         Formula::Implies(Box::new(self), Box::new(other))
     }
 
-    pub fn exists(vars: Vec<(String, Sort)>, body: Self) -> Self {
+    pub fn exists(vars: Vec<(UserQuantifiedVarId, Sort)>, body: Self) -> Self {
         Formula::Exists(vars, Box::new(body))
     }
 
-    pub fn forall(vars: Vec<(String, Sort)>, body: Self) -> Self {
+    pub fn forall(vars: Vec<(UserQuantifiedVarId, Sort)>, body: Self) -> Self {
         Formula::Forall(vars, Box::new(body))
     }
 
@@ -2008,6 +2023,7 @@ pub struct System {
     pub user_defined_pred_defs: Vec<UserDefinedPredDef>,
     pub clauses: IndexVec<ClauseId, Clause>,
     pub pred_vars: IndexVec<PredVarId, PredVarDef>,
+    user_quantified_var_count: usize,
 }
 
 impl System {
@@ -2036,6 +2052,12 @@ impl System {
 
     pub fn new_pred_var(&mut self, sig: PredSig, debug_info: DebugInfo) -> PredVarId {
         self.pred_vars.push(PredVarDef { sig, debug_info })
+    }
+
+    pub fn new_user_quantified_var(&mut self) -> UserQuantifiedVarId {
+        let var = UserQuantifiedVarId::from_usize(self.user_quantified_var_count);
+        self.user_quantified_var_count += 1;
+        var
     }
 
     pub fn push_raw_command(&mut self, raw_command: RawCommand) {
