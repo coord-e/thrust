@@ -641,9 +641,17 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             };
             let param_ty = self.pat_ty(param.pat);
             let sort = self.type_builder.build(param_ty).to_sort();
-            let var_term = chc::Term::FormulaQuantifiedVar(sort.clone(), ident.name.to_string());
+            // `pre!`/`post!` place another annotation's formula under this binder without
+            // renaming its binders, so the name must be unique across all annotations.
+            let name = format!(
+                "{}.{}.{}",
+                ident.name,
+                hir_id.owner.def_id.local_def_index.as_u32(),
+                hir_id.local_id.as_u32()
+            );
+            let var_term = chc::Term::FormulaQuantifiedVar(sort.clone(), name.clone());
             inner_translator.env.insert(hir_id, var_term);
-            vars.push((ident.name.to_string(), sort));
+            vars.push((name, sort));
         }
         let body_formula = inner_translator.to_formula(closure.value);
         (vars, body_formula)
