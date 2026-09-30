@@ -266,7 +266,7 @@ pub struct Analyzer<'tcx> {
 
     enum_defs: Rc<RefCell<EnumDefs>>,
 
-    /// Whether integer arithmetic is treated as mathematical, ignoring the wrap-around of the
+    /// Whether integer operations are treated as mathematical, ignoring the wrap-around of the
     /// actual integer types.
     integer_wrapping_disabled: bool,
 }

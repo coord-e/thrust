@@ -547,9 +547,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty
     }
 
-    /// The term of an integer operation on operands of `ty` whose mathematical result is `result`,
-    /// which wraps around as `+`, `-` and `*` in MIR do.
-    fn wrapping_int_op(
+    /// Wraps the mathematical `result` of an integer operation around into the range of its
+    /// integer type `ty`, as integer operations in MIR do.
+    fn wrap_int_result(
         &self,
         result: chc::Term<PlaceTypeVar>,
         ty: mir_ty::Ty<'tcx>,
@@ -571,7 +571,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         ty: mir_ty::Ty<'tcx>,
     ) -> (rty::Type<Var>, chc::Term<PlaceTypeVar>) {
         let overflowed = int_term_in_range(self.tcx, result.clone(), ty).not();
-        let wrapped = self.wrapping_int_op(result, ty);
+        let wrapped = self.wrap_int_result(result, ty);
         // elaboration: all fields are boxed
         let tuple_ty = rty::TupleType::new(vec![
             rty::PointerType::own(rty::Type::int()).into(),
@@ -586,6 +586,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             Rvalue::Use(operand) => self.operand_type(operand),
             Rvalue::CopyForDeref(place) => self.env.place_type(self.elaborate_place(&place)),
             Rvalue::UnaryOp(op, operand) => {
+                let operand_mir_ty = operand.ty(&self.local_decls, self.tcx);
                 let operand_ty = self.operand_type(operand);
 
                 let mut builder = PlaceTypeBuilder::default();
@@ -595,7 +596,8 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                         builder.build(rty::Type::Bool, operand_term.not())
                     }
                     (rty::Type::Int, mir::UnOp::Neg) => {
-                        builder.build(rty::Type::Int, operand_term.neg())
+                        let term = self.wrap_int_result(operand_term.neg(), operand_mir_ty);
+                        builder.build(rty::Type::Int, term)
                     }
                     _ => unimplemented!("ty={}, op={:?}", operand_ty.display(), op),
                 }
@@ -611,15 +613,15 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let (_rhs_ty, rhs_term) = builder.subsume(rhs_ty);
                 match (&lhs_ty, op) {
                     (rty::Type::Int, mir::BinOp::Add) => {
-                        let term = self.wrapping_int_op(lhs_term.add(rhs_term), lhs_mir_ty);
+                        let term = self.wrap_int_result(lhs_term.add(rhs_term), lhs_mir_ty);
                         builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::Sub) => {
-                        let term = self.wrapping_int_op(lhs_term.sub(rhs_term), lhs_mir_ty);
+                        let term = self.wrap_int_result(lhs_term.sub(rhs_term), lhs_mir_ty);
                         builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::Mul) => {
-                        let term = self.wrapping_int_op(lhs_term.mul(rhs_term), lhs_mir_ty);
+                        let term = self.wrap_int_result(lhs_term.mul(rhs_term), lhs_mir_ty);
                         builder.build(lhs_ty, term)
                     }
                     (rty::Type::Int, mir::BinOp::AddWithOverflow) => {
@@ -787,7 +789,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 } else {
                     let mut builder = PlaceTypeBuilder::default();
                     let (_, op_term) = builder.subsume(op_pty);
-                    builder.build(rty::Type::Int, wrap_int_term(self.tcx, op_term, ty))
+                    builder.build(rty::Type::Int, self.wrap_int_result(op_term, ty))
                 }
             }
             Rvalue::Discriminant(place) => {
