@@ -19,7 +19,7 @@ impl std::fmt::Display for QuantifiedVar<'_> {
     }
 }
 
-/// An integer constant, printed as `(- n)` when negative since SMT-LIB2 has no negative numerals.
+/// An integer constant. SMT-LIB2 has no negative numerals.
 struct IntConst<'a>(&'a num_bigint::BigInt);
 
 impl std::fmt::Display for IntConst<'_> {
