@@ -21,9 +21,7 @@ fn unbox_term(term: Term) -> Term {
             args.into_iter().map(unbox_term).collect(),
         ),
         Term::DatatypeDiscr(sym, arg) => Term::DatatypeDiscr(sym, Box::new(unbox_term(*arg))),
-        Term::FormulaQuantifiedVar(sort, name) => {
-            Term::FormulaQuantifiedVar(unbox_sort(sort), name)
-        }
+        Term::UserQuantifiedVar(sort, var) => Term::UserQuantifiedVar(unbox_sort(sort), var),
     }
 }
 
@@ -192,6 +190,7 @@ pub fn unbox(system: System) -> System {
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        user_quantified_var_count,
     } = system;
     let datatypes = datatypes.into_iter().map(unbox_datatype).collect();
     let clauses = clauses.into_iter().map(unbox_clause).collect();
@@ -206,5 +205,6 @@ pub fn unbox(system: System) -> System {
         user_defined_pred_defs,
         clauses,
         pred_vars,
+        user_quantified_var_count,
     }
 }
