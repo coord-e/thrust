@@ -19,6 +19,7 @@ pub use env::{
 };
 
 use crate::chc::{DatatypeSymbol, UserDefinedPred};
+use rustc_hir::definitions::DefPathData;
 use rustc_middle::ty as mir_ty;
 use rustc_span::def_id::DefId;
 
@@ -33,7 +34,18 @@ fn stable_def_id_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> String {
 }
 
 pub fn datatype_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> DatatypeSymbol {
-    DatatypeSymbol::new(tcx.def_path_str(did).replace("::", "."))
+    // The path of an item nested in a function body, impl, or closure is neither unique nor a
+    // valid SMT-LIB symbol.
+    let is_module_item = tcx
+        .def_path(did)
+        .data
+        .iter()
+        .all(|d| matches!(d.data, DefPathData::TypeNs(_)));
+    if is_module_item {
+        DatatypeSymbol::new(tcx.def_path_str(did).replace("::", "."))
+    } else {
+        DatatypeSymbol::new(stable_def_id_symbol(tcx, did))
+    }
 }
 
 pub fn user_defined_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> UserDefinedPred {
