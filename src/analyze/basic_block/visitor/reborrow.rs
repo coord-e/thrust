@@ -30,6 +30,13 @@ impl<'tcx> ReborrowVisitor<'_, 'tcx, '_> {
         tracing::info!(old_place = ?place, ?new_local, "implicitly reborrowed");
         new_local
     }
+
+    fn is_behind_ref(&self, place: mir::Place<'tcx>) -> bool {
+        place.iter_projections().any(|(base, elem)| {
+            elem == mir::PlaceElem::Deref
+                && base.ty(&self.analyzer.local_decls, self.tcx).ty.is_ref()
+        })
+    }
 }
 
 impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 'ctx> {
@@ -58,6 +65,10 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             self.super_assign(place, rvalue, location);
             return;
         }
+
+        // The old value cannot have been moved out from behind a reference, so the
+        // assignment is where it gets dropped.
+        let drops_old_value = self.is_behind_ref(*place);
 
         let inner_place = if place.projection.last() == Some(&mir::PlaceElem::Deref) {
             // *m = *m + 1 => m1 = &mut m; *m1 = *m + 1
@@ -93,6 +104,9 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             .visit_rvalue(rvalue, location);
         *place = self.tcx.mk_place_deref(new_local.into());
         self.super_assign(place, rvalue, location);
+        if drops_old_value {
+            self.analyzer.drop_place(*place);
+        }
     }
 
     fn visit_rvalue(&mut self, rvalue: &mut mir::Rvalue<'tcx>, location: mir::Location) {
