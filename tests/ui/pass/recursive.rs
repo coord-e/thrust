@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
@@ -16,6 +15,8 @@ fn sum(i: i64) -> i64 {
 
 fn main() {
     let x = rand();
-    let y = sum(x);
-    assert!(y == x);
+    if 0 <= x && x <= i64::MAX {
+        let y = sum(x);
+        assert!(y == x);
+    }
 }

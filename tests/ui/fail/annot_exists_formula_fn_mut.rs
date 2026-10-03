@@ -1,11 +1,10 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
 #[allow(unused_variables)]
 #[thrust::formula_fn]
 fn _thrust_requires_incr(m: thrust_models::model::Mut<i32>, x: i32) -> bool {
-    x > 0
+    x >= 0 && i32::MIN <= *m + x && *m + x <= i32::MAX
 }
 
 #[allow(unused_variables)]
@@ -21,10 +20,11 @@ fn incr(m: &mut i32, x: i32) {
     #[thrust::ensures_path]
     _thrust_ensures_incr;
 
-    *m -= x;
+    *m += x;
 }
 
 fn main() {
     let mut a = 0;
     incr(&mut a, 1);
+    assert!(a > 0);
 }

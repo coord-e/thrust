@@ -1,5 +1,4 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 
 // The declared postcondition `result > x` hides the body's exact result, so `r == 4`
 // is not provable. Were the postcondition inferred instead, it would be exact and the
@@ -12,7 +11,7 @@ fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {
 
 fn main() {
     let f = thrust_macros::closure!(
-        requires(x > 0),
+        requires(x > 0 && x < i32::MAX),
         ensures(result > x),
         |x: i32| -> i32 { x + 1 },
     );

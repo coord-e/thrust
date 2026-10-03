@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 // A closure that declares only `requires`; its postcondition stays inferred as a
 // predicate variable, so the caller still learns the body's exact result.
@@ -11,7 +10,7 @@ fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {
 
 fn main() {
     let f = thrust_macros::closure!(
-        requires(x > 0),
+        requires(x > 0 && x < i32::MAX),
         |x: i32| -> i32 { x + 1 },
     );
     let r = apply(3, f);

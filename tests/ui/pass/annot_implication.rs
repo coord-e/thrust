@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 //@rustc-env: THRUST_SOLVER=tests/thrust-pcsat-wrapper
 
 use thrust_models::exists;
@@ -9,6 +8,9 @@ use thrust_models::exists;
 fn rand() -> i64 {
     unimplemented!()
 }
+
+const HALF_MIN: i64 = i64::MIN / 2;
+const HALF_MAX: i64 = i64::MAX / 2;
 
 // Basic implication in a postcondition: when the antecedent holds the
 // consequent must too; otherwise the obligation is vacuous.
@@ -37,7 +39,11 @@ fn g(x: i64) -> i64 {
 #[thrust_macros::ensures(exists(|y: i64| (1 == 1) ==> (result == 2 * y)))]
 fn k() -> i64 {
     let x = rand();
-    x + x
+    if HALF_MIN <= x && x <= HALF_MAX {
+        x + x
+    } else {
+        0
+    }
 }
 
 fn main() {}

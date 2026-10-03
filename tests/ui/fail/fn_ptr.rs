@@ -1,5 +1,4 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
@@ -17,6 +16,8 @@ fn app(f: fn(&mut i64), mut x: i64) -> i64 {
 
 fn main() {
     let i = rand();
-    let x = app(incr, i);
-    assert!(x == i);
+    if i64::MIN <= i && i < i64::MAX {
+        let x = app(incr, i);
+        assert!(x == i);
+    }
 }
