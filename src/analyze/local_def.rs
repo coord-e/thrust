@@ -990,6 +990,37 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn analyze_basic_blocks(&mut self, expected_fn_ty: &rty::RefinedType) {
         let expected_fn_ty = expected_fn_ty.ty.as_function().unwrap();
+        let mut entry = self
+            .ctx
+            .basic_block_ty(self.local_def_id, mir::START_BLOCK)
+            .clone();
+        let mut expected_entry = expected_fn_ty.clone();
+        self.elaborate_mut_params(&mut expected_entry);
+        for idx in entry.as_ref().params.indices().collect::<Vec<_>>() {
+            let argument = match entry.param_kind(idx) {
+                crate::refine::BasicBlockTypeParamKind::Local(local, _) => self
+                    .body
+                    .args_iter()
+                    .position(|arg| arg == local)
+                    .map(rty::FunctionParamIdx::from),
+                crate::refine::BasicBlockTypeParamKind::OuterFnParam(argument) => Some(argument),
+                crate::refine::BasicBlockTypeParamKind::Synthetic => None,
+                crate::refine::BasicBlockTypeParamKind::Captured => unreachable!(),
+            };
+            if let Some(argument) = argument {
+                let ty = expected_entry.params[argument].ty.clone().map_var(|arg| {
+                    entry
+                        .param_of_local(analyze::local_of_function_param(arg))
+                        .unwrap()
+                });
+                entry.set_param_type(idx, ty);
+            }
+        }
+        self.ctx.register_basic_block_ty_with_precondition(
+            self.local_def_id,
+            mir::START_BLOCK,
+            entry,
+        );
         // Reverse postorder guarantees each block that inherits its precondition
         // is visited after the predecessor that lazily materialized its type.
         for (bb, data) in mir::traversal::reverse_postorder(&self.body) {

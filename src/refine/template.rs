@@ -527,6 +527,7 @@ where
         }
         .build();
         BasicBlockType {
+            captured_param_count: 0,
             ty,
             locals,
             outer_fn_param_count: body.arg_count,
