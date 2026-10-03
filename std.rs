@@ -62,16 +62,12 @@ mod thrust_models {
             }
         }
 
-        /// A bit-vector of `WIDTH` bits, read as a two's complement integer when `SIGNED` and as
-        /// an unsigned one otherwise.
-        ///
-        /// Arithmetic wraps around, and the signedness selects the meaning of comparisons, `>>`
-        /// (arithmetic or logical), and [`BitVec::to_int`], as it does for Rust's integer types.
+        /// An SMT-LIB bit-vector of `WIDTH` bits. `SIGNED` selects the signed or unsigned variant
+        /// of the operations that have both.
         #[thrust::def::bit_vec_model]
         pub struct BitVec<const WIDTH: usize, const SIGNED: bool>;
 
         impl<const WIDTH: usize, const SIGNED: bool> BitVec<WIDTH, SIGNED> {
-            /// The bit-vector whose integer reading is `n`, wrapped around into `WIDTH` bits.
             #[allow(dead_code)]
             #[thrust::def::bit_vec_from_int]
             #[thrust::ignored]

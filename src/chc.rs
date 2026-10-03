@@ -90,8 +90,7 @@ impl DatatypeSort {
 pub enum Sort {
     Null,
     Int,
-    /// A bit-vector of the given width.
-    BitVec(u32),
+    BitVec { width: u32 },
     Bool,
     String,
     Param(usize),
@@ -118,7 +117,7 @@ where
         match self {
             Sort::Null => allocator.text("null"),
             Sort::Int => allocator.text("int"),
-            Sort::BitVec(width) => allocator.text(format!("bv{width}")),
+            Sort::BitVec { width } => allocator.text(format!("bv{width}")),
             Sort::Bool => allocator.text("bool"),
             Sort::String => allocator.text("string"),
             Sort::Param(i) => allocator.text("T").append(allocator.as_string(i)),
@@ -190,7 +189,7 @@ impl Sort {
         match self {
             Sort::Null
             | Sort::Int
-            | Sort::BitVec(_)
+            | Sort::BitVec { .. }
             | Sort::Bool
             | Sort::String
             | Sort::Param(_) => {}
@@ -243,7 +242,7 @@ impl Sort {
     }
 
     pub fn bit_vec(width: u32) -> Self {
-        Sort::BitVec(width)
+        Sort::BitVec { width }
     }
 
     pub fn string() -> Self {
@@ -536,8 +535,10 @@ pub enum Term<V = TermVarIdx> {
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
     DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
-    /// An integer wrapped around into a bit-vector of the given width.
-    IntToBitVec(u32, Box<Term<V>>),
+    IntToBitVec {
+        width: u32,
+        term: Box<Term<V>>,
+    },
     /// Used in [`Formula`] to represent quantified variables appearing in annotations.
     UserQuantifiedVar(Sort, UserQuantifiedVarId),
 }
@@ -611,9 +612,9 @@ where
             Term::DatatypeDiscr(_, t) => allocator
                 .text("discriminant")
                 .append(t.pretty(allocator).parens()),
-            Term::IntToBitVec(width, t) => allocator
+            Term::IntToBitVec { width, term } => allocator
                 .text(format!("int_to_bv{width}"))
-                .append(t.pretty(allocator).parens()),
+                .append(term.pretty(allocator).parens()),
             Term::UserQuantifiedVar(_, var) => allocator.as_string(var),
         }
     }
@@ -663,7 +664,10 @@ impl<V> Term<V> {
                 args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
             ),
             Term::DatatypeDiscr(d_sym, t) => Term::DatatypeDiscr(d_sym, Box::new(t.subst_var(f))),
-            Term::IntToBitVec(width, t) => Term::IntToBitVec(width, Box::new(t.subst_var(f))),
+            Term::IntToBitVec { width, term } => Term::IntToBitVec {
+                width,
+                term: Box::new(term.subst_var(f)),
+            },
             Term::UserQuantifiedVar(sort, var) => Term::UserQuantifiedVar(sort, var),
         }
     }
@@ -712,7 +716,7 @@ impl<V> Term<V> {
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
             Term::DatatypeCtor(sort, _, _) => sort.clone().into(),
             Term::DatatypeDiscr(_, _) => Sort::int(),
-            Term::IntToBitVec(width, _) => Sort::bit_vec(*width),
+            Term::IntToBitVec { width, .. } => Sort::bit_vec(*width),
             Term::UserQuantifiedVar(sort, _) => sort.clone(),
         }
     }
@@ -736,7 +740,7 @@ impl<V> Term<V> {
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
-            Term::DatatypeDiscr(_, t) | Term::IntToBitVec(_, t) => t.fv_impl(),
+            Term::DatatypeDiscr(_, t) | Term::IntToBitVec { term: t, .. } => t.fv_impl(),
         }
     }
 
@@ -771,7 +775,7 @@ impl<V> Term<V> {
         match sort {
             Sort::Null => Term::Null,
             Sort::Int => Term::int(0),
-            Sort::BitVec(width) => Term::int(0).int_to_bit_vec(*width),
+            Sort::BitVec { width } => Term::int(0).int_to_bit_vec(*width),
             Sort::Bool => Term::Bool(false),
             Sort::String => Term::String(String::new()),
             Sort::Box(s) => Term::Box(Box::new(Self::default_for(s))),
@@ -970,7 +974,10 @@ impl<V> Term<V> {
     }
 
     pub fn int_to_bit_vec(self, width: u32) -> Self {
-        Term::IntToBitVec(width, Box::new(self))
+        Term::IntToBitVec {
+            width,
+            term: Box::new(self),
+        }
     }
 
     pub fn datatype_discr(d_sym: DatatypeSymbol, t: Term<V>) -> Self {

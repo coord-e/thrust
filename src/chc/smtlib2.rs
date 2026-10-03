@@ -236,12 +236,12 @@ impl<'ctx, 'a> std::fmt::Display for Term<'ctx, 'a> {
                     Term::new(self.ctx, self.var_sorts, t)
                 )
             }
-            chc::Term::IntToBitVec(width, t) => {
+            chc::Term::IntToBitVec { width, term } => {
                 write!(
                     f,
                     "((_ int_to_bv {}) {})",
                     width,
-                    Term::new(self.ctx, self.var_sorts, t)
+                    Term::new(self.ctx, self.var_sorts, term)
                 )
             }
             chc::Term::UserQuantifiedVar(_, var) => write!(f, "{}", var),

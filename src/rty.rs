@@ -925,8 +925,6 @@ impl<T> ArrayType<T> {
     }
 }
 
-/// A bit-vector type, read as a two's complement integer when `signed` and as an unsigned one
-/// otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BitVecType {
     pub width: u32,
@@ -1927,7 +1925,7 @@ fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
     match sort {
         chc::Sort::Null
         | chc::Sort::Int
-        | chc::Sort::BitVec(_)
+        | chc::Sort::BitVec { .. }
         | chc::Sort::Bool
         | chc::Sort::String => {}
         chc::Sort::Param(idx) => {
@@ -2017,7 +2015,7 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
         | chc::Term::MutFinal(t)
         | chc::Term::TupleProj(t, _)
         | chc::Term::DatatypeDiscr(_, t)
-        | chc::Term::IntToBitVec(_, t) => {
+        | chc::Term::IntToBitVec { term: t, .. } => {
             subst_ty_params_in_term(t, subst);
         }
         chc::Term::Mut(t1, t2) => {
