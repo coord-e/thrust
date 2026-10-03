@@ -178,6 +178,11 @@ impl<'tcx> TypeBuilder<'tcx> {
             return Some(rty::Type::int());
         }
 
+        if Some(adt.did()) == self.def_ids.bit_vec_model() {
+            let width = refine::BitVecModel::new(self.tcx, args).width;
+            return Some(rty::Type::BitVec(width));
+        }
+
         if Some(adt.did()) == self.def_ids.mut_model() {
             let elem_ty = self.build(args.type_at(0));
             return Some(rty::PointerType::mut_to(elem_ty).into());
@@ -370,6 +375,11 @@ where
     ) -> Option<rty::Type<S::Var>> {
         if Some(adt.did()) == self.inner.def_ids.int_model() {
             return Some(rty::Type::int());
+        }
+
+        if Some(adt.did()) == self.inner.def_ids.bit_vec_model() {
+            let width = refine::BitVecModel::new(self.inner.tcx, args).width;
+            return Some(rty::Type::BitVec(width));
         }
 
         if Some(adt.did()) == self.inner.def_ids.mut_model() {

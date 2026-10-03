@@ -66,6 +66,30 @@ pub fn int_model_path() -> [Symbol; 3] {
     ]
 }
 
+pub fn bit_vec_model_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("bit_vec_model"),
+    ]
+}
+
+pub fn bit_vec_from_int_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("bit_vec_from_int"),
+    ]
+}
+
+pub fn bit_vec_to_int_path() -> [Symbol; 3] {
+    [
+        Symbol::intern("thrust"),
+        Symbol::intern("def"),
+        Symbol::intern("bit_vec_to_int"),
+    ]
+}
+
 pub fn mut_model_path() -> [Symbol; 3] {
     [
         Symbol::intern("thrust"),

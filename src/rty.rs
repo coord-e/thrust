@@ -929,6 +929,8 @@ impl<T> ArrayType<T> {
 #[derive(Debug, Clone)]
 pub enum Type<T> {
     Int,
+    /// A bit-vector of the given width.
+    BitVec(u32),
     Bool,
     String,
     Never,
@@ -986,6 +988,7 @@ where
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             Type::Int => allocator.text("int"),
+            Type::BitVec(width) => allocator.text(format!("bv{width}")),
             Type::Bool => allocator.text("bool"),
             Type::String => allocator.text("string"),
             Type::Never => allocator.text("!"),
@@ -1120,6 +1123,7 @@ impl<T> Type<T> {
     pub fn to_sort(&self) -> chc::Sort {
         match self {
             Type::Int => chc::Sort::int(),
+            Type::BitVec(width) => chc::Sort::bit_vec(*width),
             Type::Bool => chc::Sort::bool(),
             // TODO: enable string reasoning
             //       currently String sort seems not available in HORN logic of Z3
@@ -1160,6 +1164,7 @@ impl<T> Type<T> {
     {
         match self {
             Type::Int => Type::Int,
+            Type::BitVec(width) => Type::BitVec(width),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1179,6 +1184,7 @@ impl<T> Type<T> {
     {
         match self {
             Type::Int => Type::Int,
+            Type::BitVec(width) => Type::BitVec(width),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1199,6 +1205,7 @@ impl<T> Type<T> {
     pub fn strip_refinement(self) -> Type<Closed> {
         match self {
             Type::Int => Type::Int,
+            Type::BitVec(width) => Type::BitVec(width),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1214,7 +1221,9 @@ impl<T> Type<T> {
 
     pub fn free_ty_params(&self) -> HashSet<TypeParamIdx> {
         match self {
-            Type::Int | Type::Bool | Type::String | Type::Never => Default::default(),
+            Type::Int | Type::BitVec(_) | Type::Bool | Type::String | Type::Never => {
+                Default::default()
+            }
             Type::Param(ty) => std::iter::once(ty.index()).collect(),
             Type::Pointer(ty) => ty.free_ty_params(),
             Type::Function(ty) => ty.free_ty_params(),
@@ -1825,7 +1834,7 @@ impl<FV> RefinedType<FV> {
     {
         self.refinement.subst_ty_params_in_sorts(subst);
         match &mut self.ty {
-            Type::Int | Type::Bool | Type::String | Type::Never => {}
+            Type::Int | Type::BitVec(_) | Type::Bool | Type::String | Type::Never => {}
             Type::Param(ty) => {
                 if let Some(rty) = subst.get(ty.index()) {
                     let RefinedType {
@@ -1861,6 +1870,7 @@ impl<FV> RefinedType<FV> {
     {
         match (self.ty, other.ty) {
             (Type::Int, Type::Int)
+            | (Type::BitVec(_), Type::BitVec(_))
             | (Type::Bool, Type::Bool)
             | (Type::String, Type::String)
             | (Type::Never, Type::Never) => Default::default(),
@@ -1899,7 +1909,11 @@ impl RefinedType<Closed> {
 /// Substitutes type parameters in a sort.
 fn subst_ty_params_in_sort<T>(sort: &mut chc::Sort, subst: &TypeParamSubst<T>) {
     match sort {
-        chc::Sort::Null | chc::Sort::Int | chc::Sort::Bool | chc::Sort::String => {}
+        chc::Sort::Null
+        | chc::Sort::Int
+        | chc::Sort::BitVec(_)
+        | chc::Sort::Bool
+        | chc::Sort::String => {}
         chc::Sort::Param(idx) => {
             let type_param_idx = TypeParamIdx::from_usize(*idx);
             if let Some(rty) = subst.get(type_param_idx) {
@@ -1986,7 +2000,8 @@ fn subst_ty_params_in_term<T, V>(term: &mut chc::Term<V>, subst: &TypeParamSubst
         | chc::Term::MutCurrent(t)
         | chc::Term::MutFinal(t)
         | chc::Term::TupleProj(t, _)
-        | chc::Term::DatatypeDiscr(_, t) => {
+        | chc::Term::DatatypeDiscr(_, t)
+        | chc::Term::IntToBitVec(_, t) => {
             subst_ty_params_in_term(t, subst);
         }
         chc::Term::Mut(t1, t2) => {

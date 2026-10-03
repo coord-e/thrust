@@ -62,6 +62,87 @@ mod thrust_models {
             }
         }
 
+        /// A bit-vector of `WIDTH` bits, read as a two's complement integer when `SIGNED` and as
+        /// an unsigned one otherwise.
+        ///
+        /// Arithmetic wraps around, and the signedness selects the meaning of comparisons, `>>`
+        /// (arithmetic or logical), and [`BitVec::to_int`], as it does for Rust's integer types.
+        #[thrust::def::bit_vec_model]
+        pub struct BitVec<const WIDTH: usize, const SIGNED: bool>;
+
+        impl<const WIDTH: usize, const SIGNED: bool> BitVec<WIDTH, SIGNED> {
+            /// The bit-vector whose integer reading is `n`, wrapped around into `WIDTH` bits.
+            #[allow(dead_code)]
+            #[thrust::def::bit_vec_from_int]
+            #[thrust::ignored]
+            pub fn from_int<U>(_n: U) -> Self where U: super::Model<Ty = Int> {
+                unimplemented!()
+            }
+
+            #[allow(dead_code)]
+            #[thrust::def::bit_vec_to_int]
+            #[thrust::ignored]
+            pub fn to_int(self) -> Int {
+                unimplemented!()
+            }
+        }
+
+        impl<const WIDTH: usize, const SIGNED: bool> PartialEq for BitVec<WIDTH, SIGNED> {
+            #[thrust::ignored]
+            fn eq(&self, _other: &Self) -> bool {
+                unimplemented!()
+            }
+        }
+
+        impl<const WIDTH: usize, const SIGNED: bool> PartialOrd for BitVec<WIDTH, SIGNED> {
+            #[thrust::ignored]
+            fn partial_cmp(&self, _other: &Self) -> Option<std::cmp::Ordering> {
+                unimplemented!()
+            }
+        }
+
+        macro_rules! bit_vec_binary_op {
+            ($Trait:ident, $method:ident) => {
+                impl<const WIDTH: usize, const SIGNED: bool> std::ops::$Trait
+                    for BitVec<WIDTH, SIGNED>
+                {
+                    type Output = Self;
+
+                    #[thrust::ignored]
+                    fn $method(self, _rhs: Self) -> Self::Output {
+                        unimplemented!()
+                    }
+                }
+            };
+        }
+
+        bit_vec_binary_op!(Add, add);
+        bit_vec_binary_op!(Sub, sub);
+        bit_vec_binary_op!(Mul, mul);
+        bit_vec_binary_op!(BitAnd, bitand);
+        bit_vec_binary_op!(BitOr, bitor);
+        bit_vec_binary_op!(BitXor, bitxor);
+        bit_vec_binary_op!(Shl, shl);
+        bit_vec_binary_op!(Shr, shr);
+
+        impl<const WIDTH: usize, const SIGNED: bool> std::ops::Not for BitVec<WIDTH, SIGNED> {
+            type Output = Self;
+
+            #[thrust::ignored]
+            fn not(self) -> Self::Output {
+                unimplemented!()
+            }
+        }
+
+        impl<const WIDTH: usize, const SIGNED: bool> std::ops::Neg for BitVec<WIDTH, SIGNED> {
+            type Output = Self;
+
+            #[thrust::ignored]
+            fn neg(self) -> Self::Output {
+                unimplemented!()
+            }
+        }
+
         #[thrust::def::mut_model]
         pub struct Mut<T: ?Sized>(PhantomData<T>);
 
@@ -274,6 +355,10 @@ mod thrust_models {
 
     impl Model for model::Int {
         type Ty = model::Int;
+    }
+
+    impl<const WIDTH: usize, const SIGNED: bool> Model for model::BitVec<WIDTH, SIGNED> {
+        type Ty = model::BitVec<WIDTH, SIGNED>;
     }
 
     macro_rules! int_model {

@@ -36,6 +36,31 @@ pub fn datatype_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> DatatypeSymbol {
     DatatypeSymbol::new(tcx.def_path_str(did).replace("::", "."))
 }
 
+/// The parameters of a `thrust_models::model::BitVec<WIDTH, SIGNED>` type.
+#[derive(Debug, Clone, Copy)]
+pub struct BitVecModel {
+    pub width: u32,
+    pub signed: bool,
+}
+
+impl BitVecModel {
+    pub fn new<'tcx>(tcx: mir_ty::TyCtxt<'tcx>, args: mir_ty::GenericArgsRef<'tcx>) -> Self {
+        let width = args
+            .const_at(0)
+            .try_to_target_usize(tcx)
+            .expect("BitVec width must be a known constant");
+        let signed = args
+            .const_at(1)
+            .try_to_value()
+            .and_then(|value| value.try_to_bool())
+            .expect("BitVec signedness must be a known constant");
+        BitVecModel {
+            width: width.try_into().unwrap(),
+            signed,
+        }
+    }
+}
+
 pub fn user_defined_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> UserDefinedPred {
     UserDefinedPred::new(stable_def_id_symbol(tcx, did))
 }

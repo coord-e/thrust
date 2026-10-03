@@ -137,6 +137,31 @@ fn add(ma: &mut i32, a: i32) {
 }
 ```
 
+### Bit-vectors
+
+`thrust_models::model::BitVec<WIDTH, SIGNED>` is a model of `WIDTH` bits, read as a two's complement integer when `SIGNED` and as an unsigned one otherwise. Its arithmetic (`+`, `-`, `*`, unary `-`) wraps around, and it supports the bitwise operators (`&`, `|`, `^`, `!`, `<<`, `>>`) and comparisons; the signedness selects the meaning of comparisons and `>>`, as it does for Rust's integer types. `BitVec::from_int(n)` wraps an integer around into a bit-vector, and `b.to_int()` reads one back as an integer.
+
+A type takes it as its model through `thrust_models::Model`, and its operations are specified with `#[thrust::trusted]` functions:
+
+```rust
+use thrust_models::model::BitVec;
+
+struct BitSet64 {
+    bits: u64,
+}
+
+impl thrust_models::Model for BitSet64 {
+    type Ty = BitVec<64, false>;
+}
+
+#[thrust::trusted]
+#[thrust_macros::requires(i < 64)]
+#[thrust_macros::ensures(!set == *set | (BitVec::from_int(1) << BitVec::from_int(i)))]
+fn insert(set: &mut BitSet64, i: usize) {
+    set.bits |= 1 << i;
+}
+```
+
 ### Refinement types
 
 The conditions on `requires`/`ensures` are internally encoded as refinement types of the parameter and return types. You can also specify these refinement types directly. A refinement type is written `{ binder: type | formula }`, where `type` is a Rust type and `formula` constrains the value bound to `binder`. Use `#[thrust_macros::param(name: type)]` for a parameter and `#[thrust_macros::ret(type)]` for the return value:
