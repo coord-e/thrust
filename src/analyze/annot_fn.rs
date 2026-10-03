@@ -8,7 +8,7 @@ use rustc_middle::ty::{self as mir_ty, TyCtxt};
 
 use crate::analyze::{self, did_cache::DefIdCache};
 use crate::chc;
-use crate::refine::{self, TypeBuilder};
+use crate::refine::TypeBuilder;
 use crate::rty;
 
 #[derive(Debug, Clone)]
@@ -394,19 +394,17 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self.tcx.normalize_erasing_regions(typing_env, instantiated)
     }
 
-    /// The parameters of the type of `expr` if it is a `BitVec` model.
-    fn bit_vec_model(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> Option<refine::BitVecModel> {
-        let mir_ty::TyKind::Adt(adt, args) = self.expr_ty(expr).kind() else {
-            return None;
-        };
-        (Some(adt.did()) == self.def_ids.bit_vec_model())
-            .then(|| refine::BitVecModel::new(self.tcx, args))
+    fn bit_vec_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> Option<rty::BitVecType> {
+        match self.type_builder.build(self.expr_ty(expr)) {
+            rty::Type::BitVec(ty) => Some(ty),
+            _ => None,
+        }
     }
 
     fn bit_vec_binary_op(
         &self,
         op: rustc_hir::BinOpKind,
-        model: refine::BitVecModel,
+        ty: rty::BitVecType,
         lhs: &'tcx rustc_hir::Expr<'tcx>,
         rhs: &'tcx rustc_hir::Expr<'tcx>,
     ) -> FormulaOrTerm<rty::FunctionParamIdx> {
@@ -414,7 +412,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
         let lhs = self.to_term(lhs);
         let rhs = self.to_term(rhs);
-        let fun = match (op, model.signed) {
+        let fun = match (op, ty.signed) {
             (BinOpKind::Eq, _) => return FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Eq, rhs),
             (BinOpKind::Ne, _) => return FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Ne, rhs),
             (BinOpKind::Add, _) => chc::Function::BVADD,
@@ -704,8 +702,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
         match hir.kind {
             ExprKind::Binary(op, lhs, rhs) => {
-                if let Some(model) = self.bit_vec_model(lhs) {
-                    return self.bit_vec_binary_op(op.node, model, lhs, rhs);
+                if let Some(ty) = self.bit_vec_ty(lhs) {
+                    return self.bit_vec_binary_op(op.node, ty, lhs, rhs);
                 }
                 match op.node {
                     rustc_hir::BinOpKind::Or => {
@@ -751,7 +749,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             }
             ExprKind::Unary(op, operand) => match op {
                 rustc_hir::UnOp::Neg => {
-                    let is_bit_vec = self.bit_vec_model(operand).is_some();
+                    let is_bit_vec = self.bit_vec_ty(operand).is_some();
                     let operand = self.to_term(operand);
                     if is_bit_vec {
                         FormulaOrTerm::Term(chc::Term::App(chc::Function::BVNEG, vec![operand]))
@@ -909,8 +907,8 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             args.is_empty(),
                             "BitVec::to_int does not take any arguments"
                         );
-                        let model = self.bit_vec_model(receiver).unwrap();
-                        let fun = if model.signed {
+                        let ty = self.bit_vec_ty(receiver).unwrap();
+                        let fun = if ty.signed {
                             chc::Function::SBV_TO_INT
                         } else {
                             chc::Function::UBV_TO_INT
@@ -1027,7 +1025,7 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         }
                         if Some(def_id) == self.def_ids.bit_vec_from_int() {
                             assert_eq!(args.len(), 1, "BitVec::from_int takes exactly 1 argument");
-                            let width = self.bit_vec_model(hir).unwrap().width;
+                            let width = self.bit_vec_ty(hir).unwrap().width;
                             let t = self.to_term(&args[0]);
                             return FormulaOrTerm::Term(t.int_to_bit_vec(width));
                         }

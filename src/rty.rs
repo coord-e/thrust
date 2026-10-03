@@ -925,12 +925,28 @@ impl<T> ArrayType<T> {
     }
 }
 
+/// A bit-vector type, read as a two's complement integer when `signed` and as an unsigned one
+/// otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BitVecType {
+    pub width: u32,
+    pub signed: bool,
+}
+
+impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &BitVecType
+where
+    D: pretty::DocAllocator<'a, termcolor::ColorSpec>,
+{
+    fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
+        allocator.text(format!("BitVec<{}, {}>", self.width, self.signed))
+    }
+}
+
 /// An underlying type of a refinement type.
 #[derive(Debug, Clone)]
 pub enum Type<T> {
     Int,
-    /// A bit-vector of the given width.
-    BitVec(u32),
+    BitVec(BitVecType),
     Bool,
     String,
     Never,
@@ -988,7 +1004,7 @@ where
     fn pretty(self, allocator: &'a D) -> pretty::DocBuilder<'a, D, termcolor::ColorSpec> {
         match self {
             Type::Int => allocator.text("int"),
-            Type::BitVec(width) => allocator.text(format!("bv{width}")),
+            Type::BitVec(ty) => ty.pretty(allocator),
             Type::Bool => allocator.text("bool"),
             Type::String => allocator.text("string"),
             Type::Never => allocator.text("!"),
@@ -1123,7 +1139,7 @@ impl<T> Type<T> {
     pub fn to_sort(&self) -> chc::Sort {
         match self {
             Type::Int => chc::Sort::int(),
-            Type::BitVec(width) => chc::Sort::bit_vec(*width),
+            Type::BitVec(ty) => chc::Sort::bit_vec(ty.width),
             Type::Bool => chc::Sort::bool(),
             // TODO: enable string reasoning
             //       currently String sort seems not available in HORN logic of Z3
@@ -1164,7 +1180,7 @@ impl<T> Type<T> {
     {
         match self {
             Type::Int => Type::Int,
-            Type::BitVec(width) => Type::BitVec(width),
+            Type::BitVec(ty) => Type::BitVec(ty),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1184,7 +1200,7 @@ impl<T> Type<T> {
     {
         match self {
             Type::Int => Type::Int,
-            Type::BitVec(width) => Type::BitVec(width),
+            Type::BitVec(ty) => Type::BitVec(ty),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
@@ -1205,7 +1221,7 @@ impl<T> Type<T> {
     pub fn strip_refinement(self) -> Type<Closed> {
         match self {
             Type::Int => Type::Int,
-            Type::BitVec(width) => Type::BitVec(width),
+            Type::BitVec(ty) => Type::BitVec(ty),
             Type::Bool => Type::Bool,
             Type::String => Type::String,
             Type::Never => Type::Never,
