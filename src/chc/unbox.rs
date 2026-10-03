@@ -21,6 +21,10 @@ fn unbox_term(term: Term) -> Term {
             args.into_iter().map(unbox_term).collect(),
         ),
         Term::DatatypeDiscr(sym, arg) => Term::DatatypeDiscr(sym, Box::new(unbox_term(*arg))),
+        Term::IntToBitVec { width, term } => Term::IntToBitVec {
+            width,
+            term: Box::new(unbox_term(*term)),
+        },
         Term::UserQuantifiedVar(sort, var) => Term::UserQuantifiedVar(unbox_sort(sort), var),
     }
 }
@@ -64,6 +68,7 @@ fn unbox_sort(sort: Sort) -> Sort {
     match sort {
         Sort::Null => Sort::Null,
         Sort::Int => Sort::Int,
+        Sort::BitVec { width } => Sort::BitVec { width },
         Sort::Bool => Sort::Bool,
         Sort::String => Sort::String,
         Sort::Param(i) => Sort::Param(i),

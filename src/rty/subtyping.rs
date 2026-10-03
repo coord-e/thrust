@@ -102,6 +102,7 @@ where
         | (Type::Bool, Type::Bool)
         | (Type::String, Type::String)
         | (Type::Never, Type::Never) => {}
+        (Type::BitVec(got), Type::BitVec(expected)) if got == expected => {}
         (Type::Enum(got), Type::Enum(expected)) if got.symbol() == expected.symbol() => {
             for (got_ty, expected_ty) in got.args.iter().zip(expected.args.iter()) {
                 let cs = relate_refined_type(scope, got_ty, expected_ty, relation);

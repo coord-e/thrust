@@ -65,7 +65,9 @@ fn term_sorts(
                 term_sorts(var_sorts, arg, sorts);
             }
         }
-        chc::Term::DatatypeDiscr(_, t) => term_sorts(var_sorts, t, sorts),
+        chc::Term::DatatypeDiscr(_, t) | chc::Term::IntToBitVec { term: t, .. } => {
+            term_sorts(var_sorts, t, sorts)
+        }
         chc::Term::UserQuantifiedVar(_, _) => {}
     }
 }
@@ -117,6 +119,7 @@ impl<'a> std::fmt::Display for SortSymbol<'a> {
         match self.inner {
             chc::Sort::Null => write!(f, "Null"),
             chc::Sort::Int => write!(f, "Int"),
+            chc::Sort::BitVec { width } => write!(f, "BitVec{}", width),
             chc::Sort::Bool => write!(f, "Bool"),
             chc::Sort::String => write!(f, "String"),
             chc::Sort::Param(i) => write!(f, "T{}", i),
@@ -424,6 +427,7 @@ impl FormatContext {
 
     fn fmt_sort_impl(&self, sort: &chc::Sort) -> Box<dyn std::fmt::Display> {
         match sort {
+            chc::Sort::BitVec { width } => Box::new(format!("(_ BitVec {})", width)),
             chc::Sort::Seq(elem) => Box::new(format!("(Seq {})", self.fmt_sort(elem))),
             chc::Sort::Array(s1, s2) => {
                 let s1 = self.fmt_sort(s1);

@@ -90,6 +90,7 @@ impl DatatypeSort {
 pub enum Sort {
     Null,
     Int,
+    BitVec { width: u32 },
     Bool,
     String,
     Param(usize),
@@ -116,6 +117,7 @@ where
         match self {
             Sort::Null => allocator.text("null"),
             Sort::Int => allocator.text("int"),
+            Sort::BitVec { width } => allocator.text(format!("bv{width}")),
             Sort::Bool => allocator.text("bool"),
             Sort::String => allocator.text("string"),
             Sort::Param(i) => allocator.text("T").append(allocator.as_string(i)),
@@ -185,7 +187,12 @@ impl Sort {
     fn walk_impl<'a, 'b>(&'a self, mut f: Box<dyn FnMut(&'a Sort) + 'b>) {
         f(self);
         match self {
-            Sort::Null | Sort::Int | Sort::Bool | Sort::String | Sort::Param(_) => {}
+            Sort::Null
+            | Sort::Int
+            | Sort::BitVec { .. }
+            | Sort::Bool
+            | Sort::String
+            | Sort::Param(_) => {}
             Sort::Box(s) | Sort::Mut(s) | Sort::Seq(s) => s.walk(Box::new(&mut f)),
             Sort::Tuple(ss) => {
                 for s in ss {
@@ -232,6 +239,10 @@ impl Sort {
 
     pub fn int() -> Self {
         Sort::Int
+    }
+
+    pub fn bit_vec(width: u32) -> Self {
+        Sort::BitVec { width }
     }
 
     pub fn string() -> Self {
@@ -417,6 +428,26 @@ impl Function {
             Self::OR => Sort::bool(),
             Self::NOT => Sort::bool(),
             Self::NEG => Sort::int(),
+            Self::BVADD
+            | Self::BVSUB
+            | Self::BVMUL
+            | Self::BVAND
+            | Self::BVOR
+            | Self::BVXOR
+            | Self::BVSHL
+            | Self::BVLSHR
+            | Self::BVASHR
+            | Self::BVNOT
+            | Self::BVNEG => args.into_iter().next().unwrap(),
+            Self::BVULT
+            | Self::BVULE
+            | Self::BVUGT
+            | Self::BVUGE
+            | Self::BVSLT
+            | Self::BVSLE
+            | Self::BVSGT
+            | Self::BVSGE => Sort::bool(),
+            Self::UBV_TO_INT | Self::SBV_TO_INT => Sort::int(),
             Self::STORE | Self::SEQ_CONCAT | Self::SEQ_EXTRACT | Self::SEQ_STORE => {
                 args.into_iter().next().unwrap()
             }
@@ -452,6 +483,27 @@ impl Function {
     pub const OR: Function = Function::infix("or");
     pub const NOT: Function = Function::new("not");
     pub const NEG: Function = Function::new("-");
+    pub const BVADD: Function = Function::new("bvadd");
+    pub const BVSUB: Function = Function::new("bvsub");
+    pub const BVMUL: Function = Function::new("bvmul");
+    pub const BVAND: Function = Function::new("bvand");
+    pub const BVOR: Function = Function::new("bvor");
+    pub const BVXOR: Function = Function::new("bvxor");
+    pub const BVSHL: Function = Function::new("bvshl");
+    pub const BVLSHR: Function = Function::new("bvlshr");
+    pub const BVASHR: Function = Function::new("bvashr");
+    pub const BVNOT: Function = Function::new("bvnot");
+    pub const BVNEG: Function = Function::new("bvneg");
+    pub const BVULT: Function = Function::new("bvult");
+    pub const BVULE: Function = Function::new("bvule");
+    pub const BVUGT: Function = Function::new("bvugt");
+    pub const BVUGE: Function = Function::new("bvuge");
+    pub const BVSLT: Function = Function::new("bvslt");
+    pub const BVSLE: Function = Function::new("bvsle");
+    pub const BVSGT: Function = Function::new("bvsgt");
+    pub const BVSGE: Function = Function::new("bvsge");
+    pub const UBV_TO_INT: Function = Function::new("ubv_to_int");
+    pub const SBV_TO_INT: Function = Function::new("sbv_to_int");
     pub const STORE: Function = Function::new("store");
     pub const SELECT: Function = Function::new("select");
     pub const SEQ_CONCAT: Function = Function::new("seq.++");
@@ -483,6 +535,10 @@ pub enum Term<V = TermVarIdx> {
     TupleProj(Box<Term<V>>, usize),
     DatatypeCtor(DatatypeSort, DatatypeSymbol, Vec<Term<V>>),
     DatatypeDiscr(DatatypeSymbol, Box<Term<V>>),
+    IntToBitVec {
+        width: u32,
+        term: Box<Term<V>>,
+    },
     /// Used in [`Formula`] to represent quantified variables appearing in annotations.
     UserQuantifiedVar(Sort, UserQuantifiedVarId),
 }
@@ -556,6 +612,9 @@ where
             Term::DatatypeDiscr(_, t) => allocator
                 .text("discriminant")
                 .append(t.pretty(allocator).parens()),
+            Term::IntToBitVec { width, term } => allocator
+                .text(format!("int_to_bv{width}"))
+                .append(term.pretty(allocator).parens()),
             Term::UserQuantifiedVar(_, var) => allocator.as_string(var),
         }
     }
@@ -605,6 +664,10 @@ impl<V> Term<V> {
                 args.into_iter().map(|t| t.subst_var(&mut f)).collect(),
             ),
             Term::DatatypeDiscr(d_sym, t) => Term::DatatypeDiscr(d_sym, Box::new(t.subst_var(f))),
+            Term::IntToBitVec { width, term } => Term::IntToBitVec {
+                width,
+                term: Box::new(term.subst_var(f)),
+            },
             Term::UserQuantifiedVar(sort, var) => Term::UserQuantifiedVar(sort, var),
         }
     }
@@ -653,6 +716,7 @@ impl<V> Term<V> {
             Term::TupleProj(t, i) => t.sort(var_sort).tuple_elem(*i),
             Term::DatatypeCtor(sort, _, _) => sort.clone().into(),
             Term::DatatypeDiscr(_, _) => Sort::int(),
+            Term::IntToBitVec { width, .. } => Sort::bit_vec(*width),
             Term::UserQuantifiedVar(sort, _) => sort.clone(),
         }
     }
@@ -676,7 +740,7 @@ impl<V> Term<V> {
             Term::Tuple(ts) => Box::new(ts.iter().flat_map(|t| t.fv_impl())),
             Term::TupleProj(t, _) => t.fv_impl(),
             Term::DatatypeCtor(_, _, args) => Box::new(args.iter().flat_map(|t| t.fv_impl())),
-            Term::DatatypeDiscr(_, t) => t.fv_impl(),
+            Term::DatatypeDiscr(_, t) | Term::IntToBitVec { term: t, .. } => t.fv_impl(),
         }
     }
 
@@ -711,6 +775,7 @@ impl<V> Term<V> {
         match sort {
             Sort::Null => Term::Null,
             Sort::Int => Term::int(0),
+            Sort::BitVec { width } => Term::int(0).int_to_bit_vec(*width),
             Sort::Bool => Term::Bool(false),
             Sort::String => Term::String(String::new()),
             Sort::Box(s) => Term::Box(Box::new(Self::default_for(s))),
@@ -906,6 +971,13 @@ impl<V> Term<V> {
         args: Vec<Term<V>>,
     ) -> Self {
         Term::DatatypeCtor(DatatypeSort::new(d_sym, d_args), c_sym, args)
+    }
+
+    pub fn int_to_bit_vec(self, width: u32) -> Self {
+        Term::IntToBitVec {
+            width,
+            term: Box::new(self),
+        }
     }
 
     pub fn datatype_discr(d_sym: DatatypeSymbol, t: Term<V>) -> Self {

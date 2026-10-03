@@ -394,6 +394,49 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
         self.tcx.normalize_erasing_regions(typing_env, instantiated)
     }
 
+    fn bit_vec_ty(&self, expr: &'tcx rustc_hir::Expr<'tcx>) -> Option<rty::BitVecType> {
+        match self.type_builder.build(self.expr_ty(expr)) {
+            rty::Type::BitVec(ty) => Some(ty),
+            _ => None,
+        }
+    }
+
+    fn bit_vec_binary_op(
+        &self,
+        op: rustc_hir::BinOpKind,
+        ty: rty::BitVecType,
+        lhs: &'tcx rustc_hir::Expr<'tcx>,
+        rhs: &'tcx rustc_hir::Expr<'tcx>,
+    ) -> FormulaOrTerm<rty::FunctionParamIdx> {
+        use rustc_hir::BinOpKind;
+
+        let lhs = self.to_term(lhs);
+        let rhs = self.to_term(rhs);
+        let fun = match (op, ty.signed) {
+            (BinOpKind::Eq, _) => return FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Eq, rhs),
+            (BinOpKind::Ne, _) => return FormulaOrTerm::BinOp(lhs, AmbiguousBinOp::Ne, rhs),
+            (BinOpKind::Add, _) => chc::Function::BVADD,
+            (BinOpKind::Sub, _) => chc::Function::BVSUB,
+            (BinOpKind::Mul, _) => chc::Function::BVMUL,
+            (BinOpKind::BitAnd, _) => chc::Function::BVAND,
+            (BinOpKind::BitOr, _) => chc::Function::BVOR,
+            (BinOpKind::BitXor, _) => chc::Function::BVXOR,
+            (BinOpKind::Shl, _) => chc::Function::BVSHL,
+            (BinOpKind::Shr, true) => chc::Function::BVASHR,
+            (BinOpKind::Shr, false) => chc::Function::BVLSHR,
+            (BinOpKind::Lt, true) => chc::Function::BVSLT,
+            (BinOpKind::Lt, false) => chc::Function::BVULT,
+            (BinOpKind::Le, true) => chc::Function::BVSLE,
+            (BinOpKind::Le, false) => chc::Function::BVULE,
+            (BinOpKind::Gt, true) => chc::Function::BVSGT,
+            (BinOpKind::Gt, false) => chc::Function::BVUGT,
+            (BinOpKind::Ge, true) => chc::Function::BVSGE,
+            (BinOpKind::Ge, false) => chc::Function::BVUGE,
+            _ => unimplemented!("unsupported BitVec operator in formula: {:?}", op),
+        };
+        FormulaOrTerm::Term(chc::Term::App(fun, vec![lhs, rhs]))
+    }
+
     fn pat_ty(&self, pat: &'tcx rustc_hir::Pat<'tcx>) -> mir_ty::Ty<'tcx> {
         let ty = self.typeck.pat_ty(pat);
         let instantiated = mir_ty::EarlyBinder::bind(ty).instantiate(self.tcx, self.generic_args);
@@ -659,6 +702,9 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
 
         match hir.kind {
             ExprKind::Binary(op, lhs, rhs) => {
+                if let Some(ty) = self.bit_vec_ty(lhs) {
+                    return self.bit_vec_binary_op(op.node, ty, lhs, rhs);
+                }
                 match op.node {
                     rustc_hir::BinOpKind::Or => {
                         let lhs = self.to_formula_or_term(lhs);
@@ -703,8 +749,13 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             }
             ExprKind::Unary(op, operand) => match op {
                 rustc_hir::UnOp::Neg => {
+                    let is_bit_vec = self.bit_vec_ty(operand).is_some();
                     let operand = self.to_term(operand);
-                    FormulaOrTerm::Term(operand.neg())
+                    if is_bit_vec {
+                        FormulaOrTerm::Term(chc::Term::App(chc::Function::BVNEG, vec![operand]))
+                    } else {
+                        FormulaOrTerm::Term(operand.neg())
+                    }
                 }
                 rustc_hir::UnOp::Not => {
                     let operand_ty = self.expr_ty(operand);
@@ -712,6 +763,10 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         Some(adt) if Some(adt.did()) == self.def_ids.mut_model() => {
                             let operand = self.to_term(operand);
                             FormulaOrTerm::Term(operand.mut_final())
+                        }
+                        Some(adt) if Some(adt.did()) == self.def_ids.bit_vec_model() => {
+                            let operand = self.to_term(operand);
+                            FormulaOrTerm::Term(chc::Term::App(chc::Function::BVNOT, vec![operand]))
                         }
                         _ => {
                             let operand = self.to_formula_or_term(operand);
@@ -847,6 +902,20 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                         let t = self.to_term(receiver);
                         return FormulaOrTerm::Term(t);
                     }
+                    if Some(def_id) == self.def_ids.bit_vec_to_int() {
+                        assert!(
+                            args.is_empty(),
+                            "BitVec::to_int does not take any arguments"
+                        );
+                        let ty = self.bit_vec_ty(receiver).unwrap();
+                        let fun = if ty.signed {
+                            chc::Function::SBV_TO_INT
+                        } else {
+                            chc::Function::UBV_TO_INT
+                        };
+                        let t = self.to_term(receiver);
+                        return FormulaOrTerm::Term(chc::Term::App(fun, vec![t]));
+                    }
                     if Some(def_id) == self.def_ids.seq_len() {
                         assert!(args.is_empty(), "Seq::len does not take any arguments");
                         let t = self.to_term(receiver);
@@ -953,6 +1022,12 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
                             assert_eq!(args.len(), 1, "Box::new takes exactly 1 argument");
                             let t = self.to_term(&args[0]);
                             return FormulaOrTerm::Term(chc::Term::box_(t));
+                        }
+                        if Some(def_id) == self.def_ids.bit_vec_from_int() {
+                            assert_eq!(args.len(), 1, "BitVec::from_int takes exactly 1 argument");
+                            let width = self.bit_vec_ty(hir).unwrap().width;
+                            let t = self.to_term(&args[0]);
+                            return FormulaOrTerm::Term(t.int_to_bit_vec(width));
                         }
                         if Some(def_id) == self.def_ids.seq_empty() {
                             assert!(args.is_empty(), "Seq::empty does not take any arguments");
