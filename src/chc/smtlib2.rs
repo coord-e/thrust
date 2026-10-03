@@ -710,21 +710,21 @@ pub struct UserDefinedPredDef<'ctx, 'a> {
     inner: &'a chc::UserDefinedPredDef,
 }
 
-impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<'ctx, 'a> UserDefinedPredDef<'ctx, 'a> {
+    /// `name (params) Bool`, shared by `define-fun` and `define-funs-rec`.
+    fn signature(&self) -> String {
         let params = List::closed(
             self.inner
                 .sig
                 .iter()
                 .map(|(name, sort)| format!("({} {})", name, self.ctx.fmt_sort(sort))),
         );
-        write!(
-            f,
-            "(define-fun {name} {params} Bool ",
-            name = self.inner.symbol,
-        )?;
+        format!("{} {} Bool", self.inner.symbol, params)
+    }
+
+    fn body(&self) -> String {
         match &self.inner.body {
-            chc::UserDefinedPredBody::Raw(body) => write!(f, "{body}")?,
+            chc::UserDefinedPredBody::Raw(body) => body.clone(),
             chc::UserDefinedPredBody::Formula(formula) => {
                 let var_sorts: IndexVec<chc::TermVarIdx, chc::Sort> = self
                     .inner
@@ -732,10 +732,50 @@ impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
                     .iter()
                     .map(|(_, sort)| sort.clone())
                     .collect();
-                write!(f, "{}", Formula::new(self.ctx, &var_sorts, formula))?;
+                Formula::new(self.ctx, &var_sorts, formula).to_string()
             }
         }
-        write!(f, ")")
+    }
+}
+
+impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDef<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(define-fun {} {})", self.signature(), self.body())
+    }
+}
+
+pub struct UserDefinedPredDefGroup<'ctx, 'a> {
+    ctx: &'ctx FormatContext,
+    inner: chc::UserDefinedPredDefGroup<'a>,
+}
+
+impl<'ctx, 'a> std::fmt::Display for UserDefinedPredDefGroup<'ctx, 'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.inner {
+            chc::UserDefinedPredDefGroup::NonRecursive(def) => {
+                write!(f, "{}", UserDefinedPredDef::new(self.ctx, def))
+            }
+            chc::UserDefinedPredDefGroup::Recursive(defs) => {
+                let defs: Vec<_> = defs
+                    .iter()
+                    .map(|def| UserDefinedPredDef::new(self.ctx, def))
+                    .collect();
+                let signatures = defs.iter().map(|def| format!("({})", def.signature()));
+                let bodies = defs.iter().map(|def| def.body());
+                write!(
+                    f,
+                    "(define-funs-rec {} {})",
+                    List::closed(signatures),
+                    List::closed(bodies)
+                )
+            }
+        }
+    }
+}
+
+impl<'ctx, 'a> UserDefinedPredDefGroup<'ctx, 'a> {
+    pub fn new(ctx: &'ctx FormatContext, inner: chc::UserDefinedPredDefGroup<'a>) -> Self {
+        Self { ctx, inner }
     }
 }
 
@@ -766,12 +806,8 @@ impl<'a> std::fmt::Display for System<'a> {
             writeln!(f, "{}\n", RawCommand::new(raw_command))?;
         }
 
-        for user_defined_pred_def in self.inner.user_defined_preds_in_dependency_order() {
-            writeln!(
-                f,
-                "{}\n",
-                UserDefinedPredDef::new(&self.ctx, user_defined_pred_def)
-            )?;
+        for group in self.inner.user_defined_preds_in_dependency_order() {
+            writeln!(f, "{}\n", UserDefinedPredDefGroup::new(&self.ctx, group))?;
         }
 
         writeln!(f)?;

@@ -2095,26 +2095,41 @@ pub struct System {
     user_quantified_var_count: usize,
 }
 
+/// A unit of user-defined predicate definitions emitted together.
+#[derive(Debug, Clone)]
+pub enum UserDefinedPredDefGroup<'a> {
+    /// A predicate that depends only on predicates defined before it.
+    NonRecursive(&'a UserDefinedPredDef),
+    /// Predicates that are (mutually) recursive, or depend on ones that are.
+    Recursive(Vec<&'a UserDefinedPredDef>),
+}
+
+impl UserDefinedPredDef {
+    fn depends_on_any(&self, defs: &[&UserDefinedPredDef]) -> bool {
+        let UserDefinedPredBody::Formula(formula) = &self.body else {
+            return false;
+        };
+        formula.iter_atoms().any(|atom| {
+            let Pred::UserDefined(pred) = &atom.pred else {
+                return false;
+            };
+            defs.iter().any(|def| def.symbol == *pred)
+        })
+    }
+}
+
 impl System {
-    fn user_defined_preds_in_dependency_order(&self) -> Vec<&UserDefinedPredDef> {
+    fn user_defined_preds_in_dependency_order(&self) -> Vec<UserDefinedPredDefGroup<'_>> {
         let mut remaining: Vec<_> = self.user_defined_pred_defs.iter().collect();
         let mut ordered = Vec::with_capacity(remaining.len());
-        while !remaining.is_empty() {
-            let next = remaining
-                .iter()
-                .position(|def| match &def.body {
-                    UserDefinedPredBody::Raw(_) => true,
-                    UserDefinedPredBody::Formula(formula) => formula.iter_atoms().all(|atom| {
-                        let Pred::UserDefined(pred) = &atom.pred else {
-                            return true;
-                        };
-                        !remaining
-                            .iter()
-                            .any(|dependency| dependency.symbol == *pred)
-                    }),
-                })
-                .expect("recursive predicate definitions are not supported");
-            ordered.push(remaining.remove(next));
+        while let Some(next) = remaining
+            .iter()
+            .position(|def| !def.depends_on_any(&remaining))
+        {
+            ordered.push(UserDefinedPredDefGroup::NonRecursive(remaining.remove(next)));
+        }
+        if !remaining.is_empty() {
+            ordered.push(UserDefinedPredDefGroup::Recursive(remaining));
         }
         ordered
     }
