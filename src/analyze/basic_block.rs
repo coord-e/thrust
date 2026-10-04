@@ -1257,6 +1257,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         self.env.drop_local(local);
     }
 
+    fn drop_place(&mut self, place: mir::Place<'tcx>) {
+        self.env.drop_place(place);
+    }
+
     /// Schedules `local` to be implicitly dropped after this block's terminator,
     /// in addition to the liveness-derived drop points.
     fn drop_after_terminator(&mut self, local: Local) {
