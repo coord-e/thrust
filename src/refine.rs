@@ -33,7 +33,7 @@ fn stable_def_id_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> String {
 }
 
 pub fn datatype_symbol(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> DatatypeSymbol {
-    DatatypeSymbol::new(tcx.def_path_str(did).replace("::", "."))
+    DatatypeSymbol::new(stable_def_id_symbol(tcx, did))
 }
 
 pub fn user_defined_pred(tcx: mir_ty::TyCtxt<'_>, did: DefId) -> UserDefinedPred {
