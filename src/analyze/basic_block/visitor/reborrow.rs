@@ -59,7 +59,8 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
             return;
         }
 
-        let inner_place = if place.projection.last() == Some(&mir::PlaceElem::Deref) {
+        let assigns_through_deref = place.projection.last() == Some(&mir::PlaceElem::Deref);
+        let inner_place = if assigns_through_deref {
             // *m = *m + 1 => m1 = &mut m; *m1 = *m + 1
             let mut projection = place.projection.as_ref().to_vec();
             projection.pop();
@@ -74,11 +75,11 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for ReborrowVisitor<'a, 'tcx, 
 
         let ty = inner_place.ty(&self.analyzer.local_decls, self.tcx).ty;
         let (new_local, new_place) = match ty.kind() {
-            mir_ty::TyKind::Ref(_, inner_ty, m) if m.is_mut() => {
+            mir_ty::TyKind::Ref(_, inner_ty, m) if assigns_through_deref && m.is_mut() => {
                 let new_local = self.insert_reborrow(*place, *inner_ty);
                 (new_local, new_local.into())
             }
-            mir_ty::TyKind::Adt(adt, args) if adt.is_box() => {
+            mir_ty::TyKind::Adt(adt, args) if assigns_through_deref && adt.is_box() => {
                 let inner_ty = args.type_at(0);
                 let new_local = self.insert_borrow(*place, inner_ty);
                 (new_local, new_local.into())
