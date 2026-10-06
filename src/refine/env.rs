@@ -77,7 +77,10 @@ struct FlowBindingVariant {
 #[derive(Debug, Clone)]
 enum FlowBinding {
     Mut(TempVarIdx, TempVarIdx),
-    Box(TempVarIdx),
+    Box {
+        current: TempVarIdx,
+        elem: Box<rty::RefinedType<Var>>,
+    },
     Tuple(Vec<TempVarIdx>),
     Enum {
         discr: TempVarIdx,
@@ -90,7 +93,7 @@ impl std::fmt::Display for FlowBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             FlowBinding::Mut(current, final_) => write!(f, "mut <{:?}, {:?}>", current, final_),
-            FlowBinding::Box(current) => write!(f, "box <{:?}>", current),
+            FlowBinding::Box { current, .. } => write!(f, "box <{:?}>", current),
             FlowBinding::Tuple(ts) => {
                 write!(f, "(")?;
                 for (i, t) in ts.iter().enumerate() {
@@ -454,19 +457,15 @@ impl PlaceType {
         builder.build(ty, term)
     }
 
-    pub fn mut_with_proph_term(self, proph: chc::Term<Var>) -> PlaceType {
-        let ty = self.ty.clone();
-        self.mut_with(PlaceType::with_ty_and_term(ty, proph))
-    }
-
-    pub fn mut_with(self, proph: PlaceType) -> PlaceType {
+    fn mut_with(self, prophecy: TempVarIdx, elem: rty::RefinedType<Var>) -> PlaceType {
         let mut builder = PlaceTypeBuilder::default();
-        let (ty1, term1) = builder.subsume(self);
-        let (_ty2, term2) = builder.subsume(proph);
-        // TODO: check ty1 = ty2
-        let ty = rty::PointerType::mut_to(ty1).into();
-        let term = chc::Term::mut_(term1, term2);
-        builder.build(ty, term)
+        let (_, current) = builder.subsume(self);
+        let ty = rty::PointerType {
+            kind: rty::PointerKind::Ref(rty::RefKind::Mut),
+            elem: Box::new(elem),
+        };
+        let term = chc::Term::mut_(current, chc::Term::var(prophecy.into()));
+        builder.build(ty.into(), term)
     }
 
     pub fn immut(self) -> PlaceType {
@@ -551,12 +550,12 @@ where
             if let Some(chc_var) = builder.find_mapped_var(var) {
                 origin.add_var_mapping(var, chc_var);
             }
-            let mut instantiator = rty
-                .refinement
+            let formula = rty.formula();
+            let mut instantiator = formula
                 .clone()
                 .map_free_var(|v| builder.mapped_var(v))
                 .instantiate();
-            for (ev, sort) in rty.refinement.existentials() {
+            for (ev, sort) in formula.existentials() {
                 let tv = builder.add_var(sort.clone());
                 origin.add_existential_var_mapping(ev, tv);
                 instantiator.existential(ev, tv);
@@ -635,13 +634,22 @@ where
         let current = match var {
             Var::Local(local) => {
                 let current = self.temp_vars.next_index();
-                self.flow_locals.insert(local, FlowBinding::Box(current));
+                self.flow_locals.insert(
+                    local,
+                    FlowBinding::Box {
+                        current,
+                        elem: ty.elem.clone(),
+                    },
+                );
                 current
             }
             Var::Temp(temp) => {
                 // next_index must be `temp`
                 let current = self.temp_vars.next_index() + 1;
-                let binding = FlowBinding::Box(current);
+                let binding = FlowBinding::Box {
+                    current,
+                    elem: ty.elem.clone(),
+                };
                 assert_eq!(temp, self.temp_vars.push(TempVarBinding::Flow(binding)));
                 current
             }
@@ -774,7 +782,12 @@ where
                         .equal_to(chc::Term::int(variant_def.discr.clone()))
                         .into(),
                 );
-                self.bind_impl(x.into(), guarded_field_ty.boxed(), depth);
+                let field_pointer = rty::PointerType::own_refined(guarded_field_ty);
+                self.bind_impl(
+                    x.into(),
+                    rty::RefinedType::unrefined(field_pointer.into()),
+                    depth,
+                );
             }
             variants.push(FlowBindingVariant { fields });
         }
@@ -955,14 +968,19 @@ where
         }
     }
 
-    fn var_type(&self, var: Var) -> PlaceType {
+    pub fn var_type(&self, var: Var) -> PlaceType {
         // TODO: should this driven by type as the rule does?
         match self.flow_binding(var) {
-            Some(&FlowBinding::Box(current)) => self.var_type(current.into()).boxed(),
+            Some(FlowBinding::Box { current, elem }) => {
+                let mut builder = PlaceTypeBuilder::default();
+                let (_, term) = builder.subsume(self.var_type((*current).into()));
+                let ty = rty::PointerType::own_refined(*elem.clone());
+                builder.build(ty.into(), term.boxed())
+            }
             Some(&FlowBinding::Mut(current, final_)) => {
                 let current_ty = self.var_type(current.into());
-                let final_ty = self.var_type(final_.into());
-                current_ty.mut_with(final_ty)
+                let elem = self.var(final_.into()).expect("unbound prophecy").clone();
+                current_ty.mut_with(final_, elem)
             }
             Some(FlowBinding::Tuple(vs)) => {
                 let tys = vs.iter().map(|&v| self.var_type(v.into())).collect();
@@ -1014,24 +1032,123 @@ where
         self.var_type(local.into())
     }
 
+    pub fn var_projections<V: chc::Var>(
+        &self,
+        var: Var,
+        term: chc::Term<V>,
+    ) -> HashMap<Var, chc::Term<V>> {
+        let mut projections = HashMap::from([(var, term.clone())]);
+        match self.flow_binding(var) {
+            Some(FlowBinding::Box { current, .. }) => {
+                projections.extend(self.var_projections((*current).into(), term.box_current()));
+            }
+            Some(FlowBinding::Mut(current, final_)) => {
+                projections.insert((*final_).into(), term.clone().mut_final());
+                projections.extend(self.var_projections((*current).into(), term.mut_current()));
+            }
+            Some(FlowBinding::Tuple(fields)) => {
+                for (index, field) in fields.iter().enumerate() {
+                    projections.extend(
+                        self.var_projections((*field).into(), term.clone().tuple_proj(index)),
+                    );
+                }
+            }
+            Some(FlowBinding::Enum { discr, sym, .. }) => {
+                projections.insert(
+                    (*discr).into(),
+                    chc::Term::datatype_discr(sym.clone(), term),
+                );
+            }
+            None => {}
+        }
+        projections
+    }
+
+    /// Reconstructs a flow value using constructors, without existential variables.
+    fn var_term(&self, var: Var) -> chc::Term<Var> {
+        match self.flow_binding(var) {
+            Some(FlowBinding::Box { current, .. }) => self.var_term((*current).into()).boxed(),
+            Some(&FlowBinding::Mut(current, final_)) => {
+                chc::Term::mut_(self.var_term(current.into()), chc::Term::var(final_.into()))
+            }
+            Some(FlowBinding::Tuple(fields)) => chc::Term::tuple(
+                fields
+                    .iter()
+                    .map(|field| self.var_term((*field).into()))
+                    .collect(),
+            ),
+            Some(FlowBinding::Enum {
+                discr,
+                variants,
+                sym,
+            }) => {
+                let def = self.enum_defs.enum_def(sym);
+                let ty = self.var_type(var).ty;
+                let args = ty.as_enum().unwrap().arg_sorts();
+                let mut term = None;
+                for (variant, fields) in def.variants.iter().zip(variants).rev() {
+                    let fields = fields
+                        .fields
+                        .iter()
+                        .map(|field| self.var_term((*field).into()))
+                        .collect();
+                    let value = chc::Term::datatype_ctor(
+                        sym.clone(),
+                        args.clone(),
+                        variant.name.clone(),
+                        fields,
+                    );
+                    term = Some(match term {
+                        None => value,
+                        Some(other) => chc::Term::ite(
+                            chc::Term::var((*discr).into())
+                                .eq(chc::Term::int(variant.discr.clone())),
+                            value,
+                            other,
+                        ),
+                    });
+                }
+                term.expect("borrow through an inhabited enum")
+            }
+            None => self
+                .var_type(var)
+                .term
+                .map_var(|var| var.into_var().unwrap()),
+        }
+    }
+
     fn borrow_var(&mut self, var: Var, prophecy: TempVarIdx) -> PlaceType {
-        match *self.flow_binding(var).expect("borrowing unbound var") {
-            FlowBinding::Box(x) => {
+        match self
+            .flow_binding(var)
+            .expect("borrowing unbound var")
+            .clone()
+        {
+            FlowBinding::Box { current: x, elem } => {
                 let inner_ty = self.var_type(x.into());
-                self.insert_flow_binding(var, FlowBinding::Box(prophecy));
-                inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
+                self.temp_vars[prophecy] = TempVarBinding::Type(*elem.clone());
+                self.insert_flow_binding(
+                    var,
+                    FlowBinding::Box {
+                        current: prophecy,
+                        elem: elem.clone(),
+                    },
+                );
+                inner_ty.mut_with(prophecy, *elem)
             }
             FlowBinding::Mut(x1, x2) => {
                 let inner_ty = self.var_type(x1.into());
+                let elem = self.var(x2.into()).expect("unbound prophecy").clone();
+                self.temp_vars[prophecy] = TempVarBinding::Type(elem.clone());
                 self.insert_flow_binding(var, FlowBinding::Mut(prophecy, x2));
-                inner_ty.mut_with_proph_term(chc::Term::var(prophecy.into()))
+                inner_ty.mut_with(prophecy, elem)
             }
             _ => panic!("invalid borrow"),
         }
     }
 
-    fn locate_place(&self, place: Place<'_>) -> Var {
+    pub fn borrow_place(&mut self, place: Place<'_>, prophecy_var: TempVarIdx) -> PlaceType {
         let mut var = place.local.into();
+        let mut invariants = Vec::new();
 
         let mut it = place.projection.into_iter();
         loop {
@@ -1039,8 +1156,15 @@ where
                 break;
             };
             var = match (elem, self.flow_binding(var).expect("deref unbound var")) {
-                (PlaceElem::Deref, &FlowBinding::Box(x)) => x.into(),
-                (PlaceElem::Deref, &FlowBinding::Mut(x, _)) => x.into(),
+                (PlaceElem::Deref, FlowBinding::Box { current, elem }) => {
+                    invariants.push(((*current).into(), elem.refinement.clone()));
+                    (*current).into()
+                }
+                (PlaceElem::Deref, &FlowBinding::Mut(current, final_)) => {
+                    let elem = self.var(final_.into()).expect("unbound prophecy");
+                    invariants.push((current.into(), elem.refinement.clone()));
+                    current.into()
+                }
                 (PlaceElem::Field(idx, _), FlowBinding::Tuple(xs)) => xs[idx.as_usize()].into(),
                 (PlaceElem::Downcast(_, variant_idx), FlowBinding::Enum { variants, .. }) => {
                     let Some(PlaceElem::Field(field_idx, _)) = it.next() else {
@@ -1052,12 +1176,30 @@ where
             };
         }
 
-        var
-    }
-
-    pub fn borrow_place(&mut self, place: Place<'_>, prophecy_var: TempVarIdx) -> PlaceType {
-        let var = self.locate_place(place);
-        self.borrow_var(var, prophecy_var)
+        let mut borrowed = self.borrow_var(var, prophecy_var);
+        let rty::Type::Pointer(pointer) = &mut borrowed.ty else {
+            unreachable!();
+        };
+        // borrow_var replaces the borrowed value with prophecy_var in the environment.
+        // Reconstruct each parent after that update, then replace prophecy_var with
+        // Value to express the parent's invariant as a refinement of the borrowed pointee.
+        for (parent, refinement) in invariants {
+            if refinement.is_top() {
+                continue;
+            }
+            let term = self.var_term(parent).map_var(rty::RefinedTypeVar::Free);
+            let invariant = refinement
+                .subst_value_var(|| term.clone())
+                .map_var(|var| match var {
+                    rty::RefinedTypeVar::Free(var) if var == prophecy_var.into() => {
+                        rty::RefinedTypeVar::Value
+                    }
+                    var => var,
+                });
+            pointer.elem.refinement.push_conj(invariant);
+        }
+        self.temp_vars[prophecy_var] = TempVarBinding::Type(*pointer.elem.clone());
+        borrowed
     }
 }
 
