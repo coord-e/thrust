@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 #[thrust_macros::requires(true)]
 #[thrust_macros::ensures(true)]
@@ -9,7 +8,7 @@ fn rand() -> i64 { unimplemented!() }
 fn main() {
   let mut x = 1_i64;
   let p = &mut x;
-  while rand() == 0 {
+  while *p < i64::MAX && rand() == 0 {
     thrust_macros::invariant!(|p: &mut i64| *p >= 1);
     *p = *p + 1;
   }

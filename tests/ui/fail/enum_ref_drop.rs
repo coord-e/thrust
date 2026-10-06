@@ -1,5 +1,4 @@
 //@error-in-other-file: Unsat
-//@compile-flags: -C debug-assertions=off
 //@no-rustfix
 
 pub enum X<'a, 'b> {
@@ -22,9 +21,11 @@ fn x(i: &mut i64) -> X {
 
 fn main() {
     let mut i = rand();
-    match x(&mut i) {
-        X::A(a) => *a += 1,
-        X::B(b) => *b = -*b,
+    if i64::MIN < i && i < i64::MAX {
+        match x(&mut i) {
+            X::A(a) => *a += 1,
+            X::B(b) => *b = -*b,
+        }
+        assert!(i > 1);
     }
-    assert!(i > 1);
 }
