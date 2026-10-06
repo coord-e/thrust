@@ -30,6 +30,7 @@ mod basic_block;
 mod crate_;
 mod did_cache;
 mod local_def;
+mod partial_moves;
 mod reconstruct_slice_indexing;
 
 // TODO: organize structure and remove cross dependency between refine
