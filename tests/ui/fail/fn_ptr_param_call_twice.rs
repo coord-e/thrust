@@ -1,0 +1,24 @@
+//@error-in-other-file: Unsat
+//@compile-flags: -C debug-assertions=off
+
+#[thrust_macros::requires(true)]
+#[thrust_macros::ensures(true)]
+#[thrust::trusted]
+fn rand() -> i64 { unimplemented!() }
+
+fn incr(m: &mut i64) {
+    *m += 1;
+}
+
+fn app(f: fn(&mut i64), mut x: i64) -> i64 {
+    f(&mut x);
+    f(&mut x);
+    x
+}
+
+// `x` is incremented twice, so it is `i + 2` rather than `i + 1` here.
+fn main() {
+    let i = rand();
+    let x = app(incr, i);
+    assert!(x == i + 1);
+}
