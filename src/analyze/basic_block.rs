@@ -189,6 +189,7 @@ pub struct Analyzer<'tcx, 'ctx> {
     tcx: TyCtxt<'tcx>,
 
     local_def_id: LocalDefId,
+    generic_args: mir_ty::GenericArgsRef<'tcx>,
     drop_points: DropPoints,
     basic_block: BasicBlock,
     body: Cow<'tcx, Body<'tcx>>,
@@ -223,7 +224,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn basic_block_ty_with_precondition(&self, bb: BasicBlock) -> &BasicBlockType {
         self.ctx
-            .basic_block_ty_with_precondition(self.local_def_id, bb)
+            .basic_block_ty_with_precondition(self.local_def_id, self.generic_args, bb)
     }
 
     fn bind_local(&mut self, local: Local, rty: rty::RefinedType<Var>) {
@@ -927,7 +928,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         bb: BasicBlock,
         outer_fn_param_vars: &HashMap<rty::FunctionParamIdx, Var>,
     ) {
-        let bty = self.ctx.basic_block_ty(self.local_def_id, bb);
+        let bty = self
+            .ctx
+            .basic_block_ty(self.local_def_id, self.generic_args, bb);
 
         let mut capture = PrecondCapture::default();
         for (param_idx, param_rty) in bty.as_ref().params.iter_enumerated() {
@@ -950,8 +953,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         capture.push_env_state(&self.env);
         let precondition = capture.finish(&self.env);
 
-        self.ctx
-            .register_basic_block_precondition(self.local_def_id, bb, precondition);
+        self.ctx.register_basic_block_precondition(
+            self.local_def_id,
+            self.generic_args,
+            bb,
+            precondition,
+        );
     }
 
     fn with_assumptions<F, T>(&mut self, assumptions: Vec<impl Into<Assumption>>, callback: F) -> T
@@ -1713,6 +1720,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     pub fn new(
         ctx: &'ctx mut analyze::Analyzer<'tcx>,
         local_def_id: LocalDefId,
+        generic_args: mir_ty::GenericArgsRef<'tcx>,
         basic_block: BasicBlock,
     ) -> Self {
         let tcx = ctx.tcx;
@@ -1726,6 +1734,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             ctx,
             tcx,
             local_def_id,
+            generic_args,
             drop_points,
             basic_block,
             body,
