@@ -51,6 +51,33 @@ pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
     pred_term.successors().filter(|s| *s == bb).count() > 1
 }
 
+/// Whether `local` is the destination of an assignment anywhere in `body`.
+fn is_assigned<'tcx>(body: &Body<'tcx>, local: Local) -> bool {
+    struct Visitor {
+        local: Local,
+        assigned: bool,
+    }
+    impl<'tcx> mir::visit::Visitor<'tcx> for Visitor {
+        fn visit_local(
+            &mut self,
+            local: Local,
+            ctxt: mir::visit::PlaceContext,
+            _location: mir::Location,
+        ) {
+            if local == self.local && ctxt.is_place_assignment() {
+                self.assigned = true;
+            }
+        }
+    }
+    let mut visitor = Visitor {
+        local,
+        assigned: false,
+    };
+    use mir::visit::Visitor as _;
+    visitor.visit_body(body);
+    visitor.assigned
+}
+
 /// Whether every value of the integer type `inner` is also a value of the integer type `outer`.
 fn int_ty_includes<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -1678,9 +1705,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     // it no longer carries the relationship between a function's entry argument
                     // (`OuterFnParam`) and its current local. The invariant cannot express both
                     // views of the same argument with the current syntax. As an ad-hoc workaround,
-                    // equate them when the local is non-flow, since its representation cannot change.
+                    // equate them when the local is non-flow and never assigned, since it then
+                    // still holds the argument. A non-flow local can be assigned again after being
+                    // moved out.
                     let local = analyze::local_of_function_param(outer_idx);
-                    if !param_ty.to_sort().is_singleton() && self.env.is_non_flow_local(local) {
+                    if !param_ty.to_sort().is_singleton()
+                        && self.env.is_non_flow_local(local)
+                        && !is_assigned(&self.body, local)
+                    {
                         assumption.body.push_conj(
                             chc::Term::var(PlaceTypeVar::Var(var))
                                 .equal_to(self.env.local_type(local).term),
