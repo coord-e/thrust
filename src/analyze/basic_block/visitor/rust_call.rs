@@ -108,6 +108,11 @@ impl<'a, 'tcx, 'ctx> mir::visit::MutVisitor<'tcx> for RustCallVisitor<'a, 'tcx, 
                         let borrowed_closure_local =
                             self.insert_immut_borrow(arg_closure_place, arg_closure_ty);
                         args[0].node = mir::Operand::Copy(borrowed_closure_local.into());
+                        // As in case 3, the closure is no longer consumed by the call, so its
+                        // drop obligation, which `moved_locals` stole, must be restored.
+                        if arg_closure_place.projection.is_empty() {
+                            self.analyzer.drop_after_terminator(arg_closure_place.local);
+                        }
                         tracing::debug!("applied immut-borrow for closure argument");
                     }
                 } else if matches!(
