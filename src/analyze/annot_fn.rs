@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use pretty::{termcolor, Pretty};
+use rustc_hir::pat_util::EnumerateAndAdjustIterator as _;
 use rustc_hir::{def_id::LocalDefId, HirId};
 use rustc_index::IndexVec;
 use rustc_middle::mir;
@@ -377,8 +378,13 @@ impl<'a, 'tcx> AnnotFnTranslator<'a, 'tcx> {
             PatKind::Binding(_, hir_id, _, None) => {
                 self.env.insert(hir_id, param);
             }
-            PatKind::TupleStruct(_, subpats, _) | PatKind::Tuple(subpats, _) => {
-                for (idx, subpat) in subpats.iter().enumerate() {
+            PatKind::TupleStruct(_, subpats, dotdot_pos) | PatKind::Tuple(subpats, dotdot_pos) => {
+                let pat_ty = self.pat_ty(pat);
+                let field_count = match pat_ty.ty_adt_def() {
+                    Some(adt) => adt.non_enum_variant().fields.len(),
+                    None => pat_ty.tuple_fields().len(),
+                };
+                for (idx, subpat) in subpats.iter().enumerate_and_adjust(field_count, dotdot_pos) {
                     let field_term = param.clone().tuple_proj(idx);
                     self.build_env_from_pat(field_term, subpat);
                 }
