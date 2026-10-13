@@ -967,14 +967,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 }
                 bty.set_precondition(inv);
                 self.ctx
-                    .register_basic_block_ty_with_precondition(self.local_def_id, bb, bty);
+                    .register_basic_block_ty_with_precondition(self.instantiation(), bb, bty);
             } else if analyze::basic_block::needs_own_precondition(&self.body, bb) {
                 let bty = self
                     .type_builder
                     .for_template(&mut self.ctx)
                     .build_basic_block(&self.body, live_locals, ret_ty);
                 self.ctx
-                    .register_basic_block_ty_with_precondition(self.local_def_id, bb, bty);
+                    .register_basic_block_ty_with_precondition(self.instantiation(), bb, bty);
             } else {
                 // The block inherits its predecessor's outgoing env state as its
                 // precondition, materialized lazily during the predecessor's
@@ -982,8 +982,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 let bty = self
                     .type_builder
                     .build_basic_block(&self.body, live_locals, ret_ty);
-                self.ctx
-                    .register_basic_block_ty_without_precondition(self.local_def_id, bb, bty);
+                self.ctx.register_basic_block_ty_without_precondition(
+                    self.instantiation(),
+                    bb,
+                    bty,
+                );
             };
         }
     }
@@ -998,11 +1001,11 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             }
             let rty = self
                 .ctx
-                .basic_block_ty_with_precondition(self.local_def_id, bb)
+                .basic_block_ty_with_precondition(self.instantiation(), bb)
                 .clone();
             let drop_points = self.drop_points[&bb].clone();
             self.ctx
-                .basic_block_analyzer(self.local_def_id, bb)
+                .basic_block_analyzer(self.instantiation(), bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
                 .run(&rty, expected_fn_ty);
@@ -1109,7 +1112,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     fn assert_entry(&mut self, expected: &rty::RefinedType) {
         let mut entry_ty = self
             .ctx
-            .basic_block_ty_with_precondition(self.local_def_id, mir::START_BLOCK)
+            .basic_block_ty_with_precondition(self.instantiation(), mir::START_BLOCK)
             .clone();
         tracing::debug!(expected = %expected.display(), entry = %entry_ty.display(), "assert_entry before");
         let mut expected = expected.ty.as_function().cloned().unwrap();
@@ -1145,6 +1148,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     pub fn local_def_id(&self) -> LocalDefId {
         self.local_def_id
+    }
+
+    fn instantiation(&self) -> analyze::LocalDefInstantiation<'tcx> {
+        analyze::LocalDefInstantiation {
+            def_id: self.local_def_id,
+            generic_args: self.generic_args,
+        }
     }
 
     pub fn generic_args(&mut self, generic_args: mir_ty::GenericArgsRef<'tcx>) -> &mut Self {

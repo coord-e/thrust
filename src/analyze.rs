@@ -204,6 +204,15 @@ enum DefTy<'tcx> {
     Deferred(DeferredDefTy<'tcx>),
 }
 
+/// A local definition with its generic parameters instantiated by `generic_args`.
+///
+/// A generic function body is analyzed separately for each instantiation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalDefInstantiation<'tcx> {
+    pub def_id: LocalDefId,
+    pub generic_args: mir_ty::GenericArgsRef<'tcx>,
+}
+
 #[derive(Debug, Clone)]
 struct BasicBlockDef {
     ty: BasicBlockType,
@@ -261,7 +270,7 @@ pub struct Analyzer<'tcx> {
     /// Resulting CHC system.
     system: Rc<RefCell<chc::System>>,
 
-    basic_blocks: HashMap<LocalDefId, HashMap<BasicBlock, BasicBlockDef>>,
+    basic_blocks: HashMap<LocalDefInstantiation<'tcx>, HashMap<BasicBlock, BasicBlockDef>>,
     def_ids: did_cache::DefIdCache<'tcx>,
 
     enum_defs: Rc<RefCell<EnumDefs>>,
@@ -613,12 +622,12 @@ impl<'tcx> Analyzer<'tcx> {
 
     pub fn register_basic_block_ty_with_precondition(
         &mut self,
-        def_id: LocalDefId,
+        instantiation: LocalDefInstantiation<'tcx>,
         bb: BasicBlock,
         rty: BasicBlockType,
     ) {
         self.register_basic_block_def(
-            def_id,
+            instantiation,
             bb,
             BasicBlockDef {
                 ty: rty,
@@ -629,12 +638,12 @@ impl<'tcx> Analyzer<'tcx> {
 
     pub fn register_basic_block_ty_without_precondition(
         &mut self,
-        def_id: LocalDefId,
+        instantiation: LocalDefInstantiation<'tcx>,
         bb: BasicBlock,
         rty: BasicBlockType,
     ) {
         self.register_basic_block_def(
-            def_id,
+            instantiation,
             bb,
             BasicBlockDef {
                 ty: rty,
@@ -643,26 +652,34 @@ impl<'tcx> Analyzer<'tcx> {
         );
     }
 
-    fn register_basic_block_def(&mut self, def_id: LocalDefId, bb: BasicBlock, def: BasicBlockDef) {
+    fn register_basic_block_def(
+        &mut self,
+        instantiation: LocalDefInstantiation<'tcx>,
+        bb: BasicBlock,
+        def: BasicBlockDef,
+    ) {
         tracing::debug!(
-            def_id = ?def_id,
+            ?instantiation,
             ?bb,
             rty = %def.ty.display(),
             has_precondition = def.has_precondition,
             "register_basic_block_def",
         );
-        self.basic_blocks.entry(def_id).or_default().insert(bb, def);
+        self.basic_blocks
+            .entry(instantiation)
+            .or_default()
+            .insert(bb, def);
     }
 
     pub fn register_basic_block_precondition(
         &mut self,
-        def_id: LocalDefId,
+        instantiation: LocalDefInstantiation<'tcx>,
         bb: BasicBlock,
         precondition: rty::Refinement<rty::FunctionParamIdx>,
     ) {
         let bb_def = &mut self
             .basic_blocks
-            .get_mut(&def_id)
+            .get_mut(&instantiation)
             .unwrap()
             .get_mut(&bb)
             .unwrap();
@@ -674,16 +691,20 @@ impl<'tcx> Analyzer<'tcx> {
         bb_def.ty.set_precondition(precondition);
     }
 
-    pub fn basic_block_ty(&self, def_id: LocalDefId, bb: BasicBlock) -> &BasicBlockType {
-        &self.basic_blocks[&def_id][&bb].ty
+    pub fn basic_block_ty(
+        &self,
+        instantiation: LocalDefInstantiation<'tcx>,
+        bb: BasicBlock,
+    ) -> &BasicBlockType {
+        &self.basic_blocks[&instantiation][&bb].ty
     }
 
     pub fn basic_block_ty_with_precondition(
         &self,
-        def_id: LocalDefId,
+        instantiation: LocalDefInstantiation<'tcx>,
         bb: BasicBlock,
     ) -> &BasicBlockType {
-        let def = &self.basic_blocks[&def_id][&bb];
+        let def = &self.basic_blocks[&instantiation][&bb];
         assert!(
             def.has_precondition,
             "basic block does not have precondition"
@@ -723,10 +744,10 @@ impl<'tcx> Analyzer<'tcx> {
 
     pub fn basic_block_analyzer(
         &mut self,
-        local_def_id: LocalDefId,
+        instantiation: LocalDefInstantiation<'tcx>,
         bb: BasicBlock,
     ) -> basic_block::Analyzer<'tcx, '_> {
-        basic_block::Analyzer::new(self, local_def_id, bb)
+        basic_block::Analyzer::new(self, instantiation, bb)
     }
 
     pub fn solve(&mut self) {
