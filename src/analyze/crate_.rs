@@ -203,7 +203,10 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     /// inherited from the parent impl or trait.
     fn constrained_type_params(&self, local_def_id: LocalDefId) -> HashSet<u32> {
         let mut constrained_params = HashSet::new();
-        let predicates = self.tcx.predicates_of(local_def_id).instantiate_identity(self.tcx);
+        let predicates = self
+            .tcx
+            .predicates_of(local_def_id)
+            .instantiate_identity(self.tcx);
         let sized_trait = self.tcx.lang_items().sized_trait().unwrap();
         for clause in predicates.predicates {
             let mir_ty::ClauseKind::Trait(pred) = clause.kind().skip_binder() else {
