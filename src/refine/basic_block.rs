@@ -14,6 +14,7 @@ pub enum BasicBlockTypeParamKind {
     Local(Local, mir_ty::Mutability),
     OuterFnParam(rty::FunctionParamIdx),
     Synthetic,
+    Captured,
 }
 
 impl BasicBlockTypeParamKind {
@@ -44,6 +45,7 @@ pub struct BasicBlockType {
     pub(super) locals: IndexVec<rty::FunctionParamIdx, (Local, mir_ty::Mutability)>,
     // XXX: needs this to disambiguate synthetic unit param from outer fn unit param
     pub(super) outer_fn_param_count: usize,
+    pub(super) captured_param_count: usize,
 }
 
 impl<'a, D> Pretty<'a, D, termcolor::ColorSpec> for &BasicBlockType
@@ -82,7 +84,9 @@ impl AsRef<rty::FunctionType> for BasicBlockType {
 
 impl BasicBlockType {
     pub fn param_kind(&self, idx: rty::FunctionParamIdx) -> BasicBlockTypeParamKind {
-        if let Some((local, mutbl)) = self.locals.get(idx) {
+        if idx.index() >= self.ty.params.len() - self.captured_param_count {
+            BasicBlockTypeParamKind::Captured
+        } else if let Some((local, mutbl)) = self.locals.get(idx) {
             BasicBlockTypeParamKind::Local(*local, *mutbl)
         } else if idx.index() >= self.locals.len() && self.outer_fn_param_count > 0 {
             BasicBlockTypeParamKind::OuterFnParam(rty::FunctionParamIdx::from(
@@ -135,6 +139,21 @@ impl BasicBlockType {
 
     pub fn to_function_ty(&self) -> rty::FunctionType {
         self.ty.clone()
+    }
+
+    pub fn push_captured_param(&mut self, ty: rty::Type<rty::Closed>) -> rty::FunctionParamIdx {
+        self.captured_param_count += 1;
+        self.ty
+            .params
+            .push(rty::RefinedType::unrefined(ty.vacuous()))
+    }
+
+    pub fn set_param_type(
+        &mut self,
+        idx: rty::FunctionParamIdx,
+        ty: rty::Type<rty::FunctionParamIdx>,
+    ) {
+        self.ty.params[idx].ty = ty;
     }
 
     pub fn set_precondition(&mut self, refinement: rty::Refinement<rty::FunctionParamIdx>) {

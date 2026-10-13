@@ -1020,6 +1020,42 @@ where
 }
 
 impl<T> Type<T> {
+    pub fn inherit_pointer_types<U: chc::Var>(
+        &mut self,
+        source: Type<U>,
+        subst: &mut impl FnMut(U) -> chc::Term<T>,
+    ) where
+        T: chc::Var,
+    {
+        match (self, source) {
+            (Type::Pointer(target), Type::Pointer(source)) => {
+                target.elem.refinement = source.elem.refinement.subst_free_var(&mut *subst);
+                target.elem.ty.inherit_pointer_types(source.elem.ty, subst);
+            }
+            (Type::Tuple(target), Type::Tuple(source)) => {
+                for (target, source) in target.elems.iter_mut().zip(source.elems) {
+                    target.ty.inherit_pointer_types(source.ty, subst);
+                }
+            }
+            (Type::Enum(target), Type::Enum(source)) => {
+                for (target, source) in target.args.iter_mut().zip(source.args) {
+                    target.ty.inherit_pointer_types(source.ty, subst);
+                }
+            }
+            (Type::Seq(target), Type::Seq(source)) => {
+                target.ty.inherit_pointer_types(source.ty, subst);
+            }
+            (Type::Array(target), Type::Array(source)) => {
+                target
+                    .index
+                    .ty
+                    .inherit_pointer_types(source.index.ty, subst);
+                target.elem.ty.inherit_pointer_types(source.elem.ty, subst);
+            }
+            _ => {}
+        }
+    }
+
     fn pretty_atom<'a, 'b, D>(
         &'b self,
         allocator: &'a D,
@@ -1746,6 +1782,56 @@ impl<FV> RefinedType<FV> {
 
     pub fn new(ty: Type<FV>, refinement: Refinement<FV>) -> Self {
         RefinedType { ty, refinement }
+    }
+
+    pub fn formula(&self) -> Refinement<FV>
+    where
+        FV: chc::Var,
+    {
+        let mut formula = self.refinement.clone();
+        match &self.ty {
+            Type::Tuple(ty) => {
+                for (index, elem) in ty.elems.iter().enumerate() {
+                    formula.push_conj(elem.formula().subst_value_var(|| {
+                        chc::Term::var(RefinedTypeVar::Value).tuple_proj(index)
+                    }));
+                }
+            }
+            Type::Pointer(ty) => {
+                formula.push_conj(
+                    ty.elem.formula().subst_value_var(|| {
+                        ty.kind.deref_term(chc::Term::var(RefinedTypeVar::Value))
+                    }),
+                );
+                if ty.is_mut() {
+                    formula.push_conj(
+                        ty.elem
+                            .formula()
+                            .subst_value_var(|| chc::Term::var(RefinedTypeVar::Value).mut_final()),
+                    );
+                }
+            }
+            _ => {}
+        }
+        formula
+    }
+
+    pub fn normalize_tuple_refinements(mut self) -> Self
+    where
+        FV: chc::Var,
+    {
+        if let Type::Tuple(ty) = &mut self.ty {
+            for (index, elem) in ty.elems.iter_mut().enumerate() {
+                *elem = elem.clone().normalize_tuple_refinements();
+                let refinement = std::mem::take(&mut elem.refinement);
+                self.refinement.push_conj(
+                    refinement.subst_value_var(|| {
+                        chc::Term::var(RefinedTypeVar::Value).tuple_proj(index)
+                    }),
+                );
+            }
+        }
+        self
     }
 
     pub fn refined_with_term(ty: Type<FV>, term: chc::Term<FV>) -> Self {
