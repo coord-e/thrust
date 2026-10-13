@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use num_bigint::BigInt;
 use rustc_hir::def::DefKind;
+use rustc_index::bit_set::DenseBitSet;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{
     self, BasicBlock, Body, Local, Operand, Rvalue, StatementKind, TerminatorKind,
@@ -51,31 +52,46 @@ pub fn needs_own_precondition(body: &Body<'_>, bb: BasicBlock) -> bool {
     pred_term.successors().filter(|s| *s == bb).count() > 1
 }
 
-/// Whether `local` is the destination of an assignment anywhere in `body`.
-fn is_assigned<'tcx>(body: &Body<'tcx>, local: Local) -> bool {
+/// For each block, the parameters that may have been assigned since the function's entry when
+/// control reaches the block.
+pub fn params_assigned_on_entry(body: &Body<'_>) -> IndexVec<BasicBlock, DenseBitSet<Local>> {
     struct Visitor {
-        local: Local,
-        assigned: bool,
+        arg_count: usize,
+        sites: Vec<(Local, BasicBlock)>,
     }
     impl<'tcx> mir::visit::Visitor<'tcx> for Visitor {
         fn visit_local(
             &mut self,
             local: Local,
             ctxt: mir::visit::PlaceContext,
-            _location: mir::Location,
+            location: mir::Location,
         ) {
-            if local == self.local && ctxt.is_place_assignment() {
-                self.assigned = true;
+            let is_param = (1..=self.arg_count).contains(&local.index());
+            if is_param && ctxt.is_place_assignment() {
+                self.sites.push((local, location.block));
             }
         }
     }
     let mut visitor = Visitor {
-        local,
-        assigned: false,
+        arg_count: body.arg_count,
+        sites: Vec::new(),
     };
     use mir::visit::Visitor as _;
     visitor.visit_body(body);
-    visitor.assigned
+
+    let mut assigned = IndexVec::from_elem_n(
+        DenseBitSet::new_empty(body.local_decls.len()),
+        body.basic_blocks.len(),
+    );
+    for (local, site) in visitor.sites {
+        let mut worklist: Vec<_> = body.basic_blocks[site].terminator().successors().collect();
+        while let Some(bb) = worklist.pop() {
+            if assigned[bb].insert(local) {
+                worklist.extend(body.basic_blocks[bb].terminator().successors());
+            }
+        }
+    }
+    assigned
 }
 
 /// Whether every value of the integer type `inner` is also a value of the integer type `outer`.
@@ -217,6 +233,7 @@ pub struct Analyzer<'tcx, 'ctx> {
 
     local_def_id: LocalDefId,
     drop_points: DropPoints,
+    assigned_params: DenseBitSet<Local>,
     basic_block: BasicBlock,
     body: Cow<'tcx, Body<'tcx>>,
 
@@ -1705,13 +1722,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                     // it no longer carries the relationship between a function's entry argument
                     // (`OuterFnParam`) and its current local. The invariant cannot express both
                     // views of the same argument with the current syntax. As an ad-hoc workaround,
-                    // equate them when the local is non-flow and never assigned, since it then
-                    // still holds the argument. A non-flow local can be assigned again after being
-                    // moved out.
+                    // equate them when the local is non-flow and not assigned on any path to this
+                    // block, since it then still holds the argument. A non-flow local can be
+                    // assigned again after being moved out.
                     let local = analyze::local_of_function_param(outer_idx);
                     if !param_ty.to_sort().is_singleton()
                         && self.env.is_non_flow_local(local)
-                        && !is_assigned(&self.body, local)
+                        && !self.assigned_params.contains(local)
                     {
                         assumption.body.push_conj(
                             chc::Term::var(PlaceTypeVar::Var(var))
@@ -1750,6 +1767,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         let tcx = ctx.tcx;
         let drop_points = DropPoints::default();
         let body = Cow::Borrowed(tcx.optimized_mir(local_def_id.to_def_id()));
+        let assigned_params = DenseBitSet::new_empty(body.local_decls.len());
         let env = ctx.new_env();
         let local_decls = body.local_decls.clone();
         let prophecy_vars = Default::default();
@@ -1759,6 +1777,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             tcx,
             local_def_id,
             drop_points,
+            assigned_params,
             basic_block,
             body,
             type_builder,
@@ -1770,6 +1789,13 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     pub fn drop_points(&mut self, drop_points: DropPoints) -> &mut Self {
         self.drop_points = drop_points;
+        self
+    }
+
+    /// Sets the parameters that may have been assigned since the function's entry when control
+    /// reaches this block.
+    pub fn assigned_params(&mut self, assigned_params: DenseBitSet<Local>) -> &mut Self {
+        self.assigned_params = assigned_params;
         self
     }
 

@@ -990,6 +990,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn analyze_basic_blocks(&mut self, expected_fn_ty: &rty::RefinedType) {
         let expected_fn_ty = expected_fn_ty.ty.as_function().unwrap();
+        let assigned_params = analyze::basic_block::params_assigned_on_entry(&self.body);
         // Reverse postorder guarantees each block that inherits its precondition
         // is visited after the predecessor that lazily materialized its type.
         for (bb, data) in mir::traversal::reverse_postorder(&self.body) {
@@ -1005,6 +1006,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
                 .basic_block_analyzer(self.local_def_id, bb)
                 .body(self.body.clone())
                 .drop_points(drop_points)
+                .assigned_params(assigned_params[bb].clone())
                 .run(&rty, expected_fn_ty);
         }
     }
