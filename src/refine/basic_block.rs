@@ -137,6 +137,15 @@ impl BasicBlockType {
         self.ty.clone()
     }
 
+    /// Replaces the type of the parameter at `idx`, keeping its refinement.
+    pub fn set_param_ty(
+        &mut self,
+        idx: rty::FunctionParamIdx,
+        ty: rty::Type<rty::FunctionParamIdx>,
+    ) {
+        self.ty.params[idx].ty = ty;
+    }
+
     pub fn set_precondition(&mut self, refinement: rty::Refinement<rty::FunctionParamIdx>) {
         let last_param_idx = self.ty.params.last_index().unwrap();
         self.ty.params.raw.last_mut().unwrap().refinement = refinement.map_var(|v| {
