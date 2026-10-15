@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 // The declared postcondition `result > x` is weaker than what the body computes, and
 // the caller sees only the declared one.
@@ -11,7 +10,7 @@ fn apply<F: FnOnce(i32) -> i32>(x: i32, f: F) -> i32 {
 
 fn main() {
     let f = thrust_macros::closure!(
-        requires(x > 0),
+        requires(x > 0 && x < i32::MAX),
         ensures(result > x),
         |x: i32| -> i32 { x + 1 },
     );

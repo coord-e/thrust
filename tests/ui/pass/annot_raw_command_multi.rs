@@ -1,5 +1,5 @@
 //@check-pass
-//@compile-flags: -Adead_code -C debug-assertions=off
+//@compile-flags: -Adead_code
 
 // Insert commands written in SMT-LIB2 format into .smt2 file directly.
 // This feature is intended for debug or experiment purpose.
@@ -19,7 +19,7 @@
     )
 )")]
 
-#[thrust_macros::requires(true)]
+#[thrust_macros::requires(i64::MIN <= x + x && x + x <= i64::MAX)]
 #[thrust_macros::ensures(result == 2 * x)]
 fn double(x: i64) -> i64 {
     x + x

@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 #[thrust::trusted]
 #[thrust_macros::requires(true)]
@@ -14,7 +13,9 @@ fn main() {
     let a = rand();
     let b = rand();
     let mut p = (a, b);
-    let (ma, mb) = split(&mut p);
-    *ma += 1;
-    assert!(p.0 == a + 1);
+    if i32::MIN <= a && a < i32::MAX {
+        let (ma, mb) = split(&mut p);
+        *ma += 1;
+        assert!(p.0 == a + 1);
+    }
 }

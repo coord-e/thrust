@@ -1,5 +1,4 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 pub enum X<'a, 'b> {
     A(&'a mut i64),
@@ -21,9 +20,11 @@ fn x(i: &mut i64) -> X {
 
 fn main() {
     let mut i = rand();
-    match x(&mut i) {
-        X::A(a) => *a += 1,
-        X::B(b) => *b = -*b,
+    if i64::MIN < i && i < i64::MAX {
+        match x(&mut i) {
+            X::A(a) => *a += 1,
+            X::B(b) => *b = -*b,
+        }
+        assert!(i > 0);
     }
-    assert!(i > 0);
 }

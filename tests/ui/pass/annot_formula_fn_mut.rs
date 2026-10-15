@@ -1,10 +1,9 @@
 //@check-pass
-//@compile-flags: -C debug-assertions=off
 
 #[allow(unused_variables)]
 #[thrust::formula_fn]
 fn _thrust_requires_incr(m: thrust_models::model::Mut<i64>, x: i64) -> bool {
-    true
+    i64::MIN <= *m + x && *m + x <= i64::MAX
 }
 
 #[allow(unused_variables)]
