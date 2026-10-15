@@ -1061,12 +1061,22 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Path {
     Local(Local),
     Deref(Box<Path>),
     TupleProj(Box<Path>, usize),
     Downcast(Box<Path>, VariantIdx, FieldIdx),
+}
+
+impl Path {
+    fn deref(self) -> Self {
+        Path::Deref(Box::new(self))
+    }
+
+    fn tuple_proj(self, idx: usize) -> Self {
+        Path::TupleProj(Box::new(self), idx)
+    }
 }
 
 impl<'tcx> From<Place<'tcx>> for Path {
@@ -1111,14 +1121,20 @@ where
         self.path_type(&place.into())
     }
 
-    fn dropping_assumption(&mut self, path: &Path) -> Assumption {
+    fn dropping_assumption(&mut self, path: &Path, except: &[Path]) -> Assumption {
         let PlaceType {
             ty,
             mut existentials,
             term,
             mut formula,
         } = self.path_type(path);
-        formula.push_conj(self.dropping_formula_for_term(&mut existentials, &ty, term));
+        formula.push_conj(self.dropping_formula_for_term(
+            &mut existentials,
+            &ty,
+            term,
+            path,
+            except,
+        ));
         Assumption::new(existentials, formula)
     }
 
@@ -1127,12 +1143,25 @@ where
         existentials: &mut IndexVec<rty::ExistentialVarIdx, chc::Sort>,
         ty: &rty::Type<Var>,
         term: chc::Term<PlaceTypeVar>,
+        path: &Path,
+        except: &[Path],
     ) -> chc::Body<PlaceTypeVar> {
+        // A moved-out sub-place resolves the prophecies it holds at the move
+        // destination; resolving them here as well would contradict.
+        if except.contains(path) {
+            return chc::Body::default();
+        }
         if ty.is_mut() {
             term.clone().mut_final().equal_to(term.mut_current()).into()
         } else if ty.is_own() {
             let inner = &ty.as_pointer().unwrap().elem.ty;
-            self.dropping_formula_for_term(existentials, inner, term.box_current())
+            self.dropping_formula_for_term(
+                existentials,
+                inner,
+                term.box_current(),
+                &path.clone().deref(),
+                except,
+            )
         } else if let Some(tty) = ty.as_tuple() {
             let mut body = chc::Body::default();
             for (i, elem) in tty.elems.iter().enumerate() {
@@ -1140,6 +1169,8 @@ where
                     existentials,
                     &elem.ty,
                     term.clone().tuple_proj(i),
+                    &path.clone().tuple_proj(i),
+                    except,
                 ));
             }
             body
@@ -1150,28 +1181,34 @@ where
             let matcher_pred = chc::MatcherPred::new(ety.symbol.clone(), ety.arg_sorts());
 
             let mut pred_args = vec![];
-            for field_ty in enum_def.field_tys() {
-                let mut field_rty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
-                field_rty.instantiate_ty_params(ety.args.clone());
-                let field_type = field_rty.ty;
+            for (variant_index, variant) in enum_def.variants.iter_enumerated() {
+                for (field_index, field_ty) in variant.field_tys.iter().enumerate() {
+                    let mut field_rty = rty::RefinedType::unrefined(field_ty.clone().vacuous());
+                    field_rty.instantiate_ty_params(ety.args.clone());
+                    let field_type = field_rty.ty;
 
-                let ev = existentials.push(field_type.to_sort());
-                let field_term = chc::Term::var(ev.into());
-                pred_args.push(field_term.clone());
+                    let ev = existentials.push(field_type.to_sort());
+                    let field_term = chc::Term::var(ev.into());
+                    pred_args.push(field_term.clone());
 
-                if let Some(p) = field_type.as_pointer() {
-                    if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
-                        // TODO: we need recursively defined drop_pred for the recursive ADTs!
-                        tracing::warn!("skipping recursive variant");
-                        continue;
+                    if let Some(p) = field_type.as_pointer() {
+                        if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
+                            // TODO: we need recursively defined drop_pred for the recursive ADTs!
+                            tracing::warn!("skipping recursive variant");
+                            continue;
+                        }
                     }
-                }
 
-                body.push_conj(self.dropping_formula_for_term(
-                    existentials,
-                    &field_type,
-                    field_term,
-                ));
+                    let field_path =
+                        Path::Downcast(Box::new(path.clone()), variant_index, field_index.into());
+                    body.push_conj(self.dropping_formula_for_term(
+                        existentials,
+                        &field_type,
+                        field_term,
+                        &field_path.deref(),
+                        except,
+                    ));
+                }
             }
 
             pred_args.push(term);
@@ -1182,8 +1219,15 @@ where
         }
     }
 
-    pub fn drop_local(&mut self, local: Local) {
-        let assumption = self.dropping_assumption(&Path::Local(local));
+    /// Drop `local` whole, except for the sub-places in `except` that were moved
+    /// out of it.
+    pub fn drop_local(&mut self, local: Local, except: &[Place<'_>]) {
+        let except: Vec<Path> = except
+            .iter()
+            .filter(|p| p.local == local)
+            .map(|p| Path::from(*p))
+            .collect();
+        let assumption = self.dropping_assumption(&Path::Local(local), &except);
         if !assumption.is_top() {
             self.assume(assumption);
         }
