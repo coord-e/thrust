@@ -271,6 +271,11 @@ fn collect_sorts(system: &chc::System) -> BTreeSet<chc::Sort> {
         for a in clause.body.iter_atoms() {
             atom_sorts(&clause.vars, a, &mut sorts);
         }
+        let quantified_vars = clause
+            .head
+            .iter_quantified_vars()
+            .chain(clause.body.iter_quantified_vars());
+        sorts.extend(quantified_vars.map(|(_, sort)| sort.clone()));
     }
 
     for sort in sorts.clone() {
