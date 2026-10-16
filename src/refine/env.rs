@@ -1160,7 +1160,7 @@ where
                 pred_args.push(field_term.clone());
 
                 if let Some(p) = field_type.as_pointer() {
-                    if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
+                    if p.elem.ty.to_sort() == ty.to_sort() {
                         // TODO: we need recursively defined drop_pred for the recursive ADTs!
                         tracing::warn!("skipping recursive variant");
                         continue;
