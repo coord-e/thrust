@@ -482,6 +482,48 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
         }
     }
 
+    /// Removes writes to a part of a local (`s.f = v`) that is never read afterwards.
+    ///
+    /// Liveness counts such a write as neither a use nor a definition of the local, so the local
+    /// is already dropped where the write happens, and nothing would drop the written value. With
+    /// the write gone, its operands are dropped where they die instead.
+    fn remove_dead_partial_writes(&mut self) {
+        use rustc_mir_dataflow::Analysis as _;
+
+        loop {
+            let mut results = rustc_mir_dataflow::impls::MaybeLiveLocals
+                .iterate_to_fixpoint(self.tcx, &self.body, None)
+                .into_results_cursor(&self.body);
+            let mut dead_writes = Vec::new();
+            for (block, data) in self.body.basic_blocks.iter_enumerated() {
+                for (statement_index, statement) in data.statements.iter().enumerate() {
+                    let Some((place, _)) = statement.kind.as_assign() else {
+                        continue;
+                    };
+                    if place.projection.is_empty() || place.is_indirect() {
+                        continue;
+                    }
+                    // liveness is a backward analysis: this is the state after the statement
+                    results.seek_before_primary_effect(mir::Location {
+                        block,
+                        statement_index,
+                    });
+                    if !results.get().contains(place.local) {
+                        dead_writes.push((block, statement_index));
+                    }
+                }
+            }
+            if dead_writes.is_empty() {
+                return;
+            }
+            for (block, statement_index) in dead_writes {
+                tracing::debug!(?block, ?statement_index, "removing dead partial write");
+                self.body.basic_blocks.as_mut()[block].statements[statement_index].kind =
+                    mir::StatementKind::Nop;
+            }
+        }
+    }
+
     fn mut_locals(
         &self,
         data: &mir::BasicBlockData<'tcx>,
@@ -1160,6 +1202,7 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
         self.unelaborate_derefs();
         analyze::reconstruct_slice_indexing::reconstruct(self.tcx, &mut self.body);
+        self.remove_dead_partial_writes();
         self.reassign_local_mutabilities();
         self.refine_basic_blocks();
         self.analyze_basic_blocks(expected);
