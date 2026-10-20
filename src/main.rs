@@ -40,6 +40,10 @@ impl Callbacks for CompilerCalls {
                 .push((pass.to_owned(), false));
         }
 
+        // A call inlined by the MIR inliner leaves no `Call` terminator behind, so the
+        // arguments are never checked against the callee's specification.
+        config.opts.unstable_opts.inline_mir = Some(false);
+
         config.override_queries = Some(|_sess, providers| {
             providers.mir_borrowck = thrust::mir_borrowck_skip_formula_fn;
         });
