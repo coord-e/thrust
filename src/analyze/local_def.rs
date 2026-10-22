@@ -415,6 +415,14 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
             return Some((lhs_local, *place));
         }
 
+        // GVN rewrites the deref temp of a `&mut` from `deref_copy` into a plain `copy`.
+        if let mir::Rvalue::Use(mir::Operand::Copy(place)) = &rvalue {
+            let ty = place.ty(&self.body.local_decls, self.tcx).ty;
+            if !place.projection.is_empty() && ty.ref_mutability() == Some(mir::Mutability::Mut) {
+                return Some((lhs_local, *place));
+            }
+        }
+
         let unique_did = self.ctx.def_ids.unique()?;
         let nonnull_did = self.ctx.def_ids.nonnull()?;
 
