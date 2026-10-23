@@ -768,20 +768,44 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     /// Walks up the dominator tree from the marker block to the innermost
     /// enclosing loop header: the first dominator that needs its own
-    /// precondition (in-degree >= 2) and has a back edge.
+    /// precondition (in-degree >= 2) and has a back edge whose natural loop
+    /// contains the marker block.
     fn loop_header_of(body: &Body<'_>, marker_bb: BasicBlock) -> Option<BasicBlock> {
         let doms = body.basic_blocks.dominators();
         let preds = body.basic_blocks.predecessors();
         let mut cur = Some(marker_bb);
         while let Some(bb) = cur {
             if analyze::basic_block::needs_own_precondition(body, bb)
-                && preds[bb].iter().any(|&p| doms.dominates(bb, p))
+                && preds[bb].iter().any(|&p| {
+                    doms.dominates(bb, p) && Self::natural_loop_contains(body, bb, p, marker_bb)
+                })
             {
                 return Some(bb);
             }
             cur = doms.immediate_dominator(bb);
         }
         None
+    }
+
+    /// Whether `bb` belongs to the natural loop of the back edge `latch -> header`:
+    /// the blocks that reach `latch` without passing through `header`, and `header` itself.
+    fn natural_loop_contains(
+        body: &Body<'_>,
+        header: BasicBlock,
+        latch: BasicBlock,
+        bb: BasicBlock,
+    ) -> bool {
+        let preds = body.basic_blocks.predecessors();
+        let mut visited = DenseBitSet::new_empty(body.basic_blocks.len());
+        visited.insert(header);
+        let mut stack = vec![latch];
+        while let Some(cur) = stack.pop() {
+            if !visited.insert(cur) {
+                continue;
+            }
+            stack.extend(preds[cur].iter().copied());
+        }
+        visited.contains(bb)
     }
 
     /// Resolves the live local matching a source variable name at the given
