@@ -232,11 +232,9 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
     // `def_ty_with_args` directly.
     fn precompute_callable_param_contracts(&mut self, sig: &mir_ty::FnSig<'tcx>) {
         for input_ty in sig.inputs() {
-            let inst =
-                mir_ty::EarlyBinder::bind(*input_ty).instantiate(self.tcx, self.generic_args);
             let inst = self
                 .tcx
-                .normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), inst);
+                .normalize_erasing_regions(mir_ty::TypingEnv::fully_monomorphized(), *input_ty);
             let (fn_def_id, fn_args) = match inst.kind() {
                 mir_ty::TyKind::Closure(def_id, args) => {
                     (*def_id, self.tcx.mk_args(args.as_closure().parent_args()))
