@@ -1118,13 +1118,19 @@ where
             term,
             mut formula,
         } = self.path_type(path);
-        formula.push_conj(self.dropping_formula_for_term(&mut existentials, &ty, term));
+        formula.push_conj(self.dropping_formula_for_term(
+            &mut existentials,
+            &mut Vec::new(),
+            &ty,
+            term,
+        ));
         Assumption::new(existentials, formula)
     }
 
     fn dropping_formula_for_term(
         &self,
         existentials: &mut IndexVec<rty::ExistentialVarIdx, chc::Sort>,
+        enclosing_enums: &mut Vec<chc::Sort>,
         ty: &rty::Type<Var>,
         term: chc::Term<PlaceTypeVar>,
     ) -> chc::Body<PlaceTypeVar> {
@@ -1132,18 +1138,27 @@ where
             term.clone().mut_final().equal_to(term.mut_current()).into()
         } else if ty.is_own() {
             let inner = &ty.as_pointer().unwrap().elem.ty;
-            self.dropping_formula_for_term(existentials, inner, term.box_current())
+            self.dropping_formula_for_term(existentials, enclosing_enums, inner, term.box_current())
         } else if let Some(tty) = ty.as_tuple() {
             let mut body = chc::Body::default();
             for (i, elem) in tty.elems.iter().enumerate() {
                 body.push_conj(self.dropping_formula_for_term(
                     existentials,
+                    enclosing_enums,
                     &elem.ty,
                     term.clone().tuple_proj(i),
                 ));
             }
             body
         } else if let Some(ety) = ty.as_enum() {
+            let sort = ty.to_sort();
+            if enclosing_enums.contains(&sort) {
+                // TODO: we need recursively defined drop_pred for the recursive ADTs!
+                tracing::warn!("skipping recursive enum");
+                return chc::Body::default();
+            }
+            enclosing_enums.push(sort);
+
             let mut body = chc::Body::default();
 
             let enum_def = self.enum_defs.enum_def(&ety.symbol);
@@ -1159,16 +1174,9 @@ where
                 let field_term = chc::Term::var(ev.into());
                 pred_args.push(field_term.clone());
 
-                if let Some(p) = field_type.as_pointer() {
-                    if matches!(&p.elem.ty, rty::Type::Enum(e) if e.symbol == ety.symbol) {
-                        // TODO: we need recursively defined drop_pred for the recursive ADTs!
-                        tracing::warn!("skipping recursive variant");
-                        continue;
-                    }
-                }
-
                 body.push_conj(self.dropping_formula_for_term(
                     existentials,
+                    enclosing_enums,
                     &field_type,
                     field_term,
                 ));
@@ -1176,6 +1184,7 @@ where
 
             pred_args.push(term);
             body.push_conj(chc::Atom::new(matcher_pred.into(), pred_args));
+            enclosing_enums.pop();
             body
         } else {
             chc::Body::default()
