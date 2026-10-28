@@ -461,8 +461,12 @@ impl<'tcx, 'ctx> Analyzer<'tcx, 'ctx> {
 
     fn unelaborate_derefs(&mut self) {
         let mut v = analyze::ReplacePlacesVisitor::new(self.tcx);
-        for (block, data) in self.body.basic_blocks.clone().iter_enumerated() {
-            for (idx, _stmt) in data.statements.iter().enumerate() {
+        // A deref temp must be replaced in every block that uses it, and block indices do not
+        // follow dominance: drop elaboration can number a cleanup block before the one that
+        // defines the temp it uses.
+        for block in self.body.basic_blocks.reverse_postorder().to_vec() {
+            let statement_count = self.body.basic_blocks[block].statements.len();
+            for idx in 0..statement_count {
                 let stmt =
                     &mut self.body.basic_blocks.as_mut().as_mut_slice()[block].statements[idx];
                 v.visit_statement(stmt);
